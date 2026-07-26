@@ -12,7 +12,9 @@
     "vender": "zepp",
     "description": "hello world application"
   },
-  "permissions": [],
+  "permissions": [
+    "device:os.mic"
+  ],
   "runtime": {
     "apiVersion": {
       "compatible": "4.0",
@@ -27,6 +29,9 @@
           "pages": [
             "page/index"
           ]
+        },
+        "app-side": {
+          "path": "app-side/index"
         }
       },
       "platforms": [
