@@ -1,7 +1,7 @@
 {
-  "name": "hello-world",
-  "version": "1.0.0",
-  "description": "Zepp OS Mini Program: Hello World",
+  "name": "pigeondrop",
+  "version": "0.1.0",
+  "description": "Zepp OS Mini Program: PigeonDrop — record and send voice messages from your watch",
   "main": "app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

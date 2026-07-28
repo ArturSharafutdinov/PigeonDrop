@@ -1,3 +1,7 @@
+// Main screen of the app. Lets the user record a voice message with the
+// watch's hardware "shortcut" button, sends every finished recording to the
+// paired phone, and gives quick access to the full recordings list.
+
 import { createWidget, widget, align, prop, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
 import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos/interaction'
@@ -8,14 +12,17 @@ import { newRecordingPath, listRecordings, pruneOldRecordings } from '../utils/r
 
 Page({
   state: {
-    recording: false,
-    currentFile: null,
-    recorder: null,
-    player: null,
-    statusText: null,
+    recording: false, // true while the Recorder is actively capturing audio
+    currentFile: null, // data:// path of the recording currently in progress
+    recorder: null, // active Recorder instance, or null when idle
+    player: null, // lazily created Player instance, reused across plays (see getPlayer)
+    statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
   },
 
   build() {
+    // Big status label in the upper half of the screen. Height is capped at
+    // 230px (not the full 480px screen) to leave room for the button below -
+    // see the "list" button's placement note for why.
     this.state.statusText = createWidget(widget.TEXT, {
       x: px(0),
       y: px(70),
@@ -29,6 +36,10 @@ Page({
       text_style: text_style.WRAP,
     })
 
+    // Navigates to the full recordings list. Placed low on the screen; on a
+    // round display a wide rectangle placed too close to the top/bottom edge
+    // gets its corners clipped by the bezel, so this button is kept
+    // comfortably within the circle instead of spanning the full width.
     createWidget(widget.BUTTON, {
       x: px(100),
       y: px(350),
@@ -44,6 +55,11 @@ Page({
       },
     })
 
+    // The watch only exposes one physical "shortcut" button, so it's
+    // overloaded with two gestures: a click toggles recording, a long press
+    // replays the most recent message. Returning true tells the system we
+    // handled the key ourselves and it shouldn't fall back to its default
+    // action (e.g. opening the workout menu).
     onKey({
       callback: (key, keyEvent) => {
         if (key !== KEY_SHORTCUT) return false
@@ -63,6 +79,7 @@ Page({
     })
   },
 
+  // Default instructions shown whenever nothing else is going on.
   idleText() {
     return 'Клик — записать\nДолгое нажатие —\nвоспроизвести последнюю'
   },
@@ -75,6 +92,7 @@ Page({
     }
   },
 
+  // Starts capturing audio into a brand new, uniquely named file.
   startRecording() {
     const filePath = newRecordingPath()
     const recorder = create(id.RECORDER)
@@ -87,6 +105,8 @@ Page({
     this.updateStatus('Идёт запись...\nНажмите ещё раз\nчтобы остановить')
   },
 
+  // Stops the current recording, enforces the storage limit (config.js),
+  // and immediately kicks off sending the file to the phone.
   stopRecording() {
     this.state.recorder.stop()
     this.state.recorder = null
@@ -96,6 +116,10 @@ Page({
     this.sendRecording(this.state.currentFile)
   },
 
+  // Hands the recording off to the paired phone over BLE. The phone-side
+  // counterpart (app-side/index.js) is what actually receives it - this
+  // only tracks whether the transfer itself succeeded from the watch's
+  // point of view.
   sendRecording(filePath) {
     const transferFile = new TransferFile()
     const outbox = transferFile.getOutbox()
@@ -111,6 +135,8 @@ Page({
     })
   },
 
+  // Long-press shortcut: replay whatever was recorded most recently, without
+  // having to open the full list.
   playLatestRecording() {
     if (this.state.recording) return
 
@@ -123,6 +149,12 @@ Page({
     this.playFile(recordings[0].filePath)
   },
 
+  // Lazily creates a single Player instance and reuses it for every playback
+  // on this page. Creating a new Player per play used to fail with
+  // "cannot read property 'addEventListener' of undefined" on the second
+  // call - the hardware only allows one Player alive at a time, and the
+  // previous one wasn't released yet. Reusing the same instance and just
+  // re-pointing it at a new file (setSource + prepare) avoids that entirely.
   getPlayer() {
     if (!this.state.player) {
       const player = create(id.PLAYER)
@@ -146,6 +178,7 @@ Page({
     return this.state.player
   },
 
+  // Points the shared Player at a given file and starts the prepare/play flow.
   playFile(filePath) {
     this.updateStatus('Воспроизведение...')
     const player = this.getPlayer()
