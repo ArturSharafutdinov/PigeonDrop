@@ -2,35 +2,46 @@ import { createWidget, widget, align, prop, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
 import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos/interaction'
 import { create, id, codec } from '@zos/media'
-import { statSync } from '@zos/fs'
+import { push } from '@zos/router'
 import TransferFile from '@zos/ble/TransferFile'
-
-const RECORD_FILE_NAME = 'voice.opus'
-const RECORD_FILE = `data://${RECORD_FILE_NAME}`
+import { newRecordingPath, listRecordings, pruneOldRecordings } from '../utils/recordings'
 
 Page({
   state: {
     recording: false,
-    hasRecording: false,
+    currentFile: null,
     recorder: null,
     player: null,
     statusText: null,
   },
 
   build() {
-    this.state.hasRecording = !!statSync({ path: RECORD_FILE_NAME })
-
     this.state.statusText = createWidget(widget.TEXT, {
       x: px(0),
-      y: px(0),
+      y: px(70),
       w: px(480),
-      h: px(480),
+      h: px(230),
       text: this.idleText(),
-      text_size: px(30),
+      text_size: px(28),
       color: 0xffffff,
       align_h: align.CENTER_H,
       align_v: align.CENTER_V,
       text_style: text_style.WRAP,
+    })
+
+    createWidget(widget.BUTTON, {
+      x: px(100),
+      y: px(350),
+      w: px(280),
+      h: px(70),
+      radius: px(16),
+      normal_color: 0x2f2f2f,
+      press_color: 0x4a4a4a,
+      text: 'Список записей',
+      text_size: px(24),
+      click_func: () => {
+        push({ url: 'page/list' })
+      },
     })
 
     onKey({
@@ -43,7 +54,7 @@ Page({
         }
 
         if (keyEvent === KEY_EVENT_LONG_PRESS) {
-          this.playRecording()
+          this.playLatestRecording()
           return true
         }
 
@@ -53,9 +64,7 @@ Page({
   },
 
   idleText() {
-    return this.state.hasRecording
-      ? 'Клик — записать\nДолгое нажатие —\nвоспроизвести'
-      : 'Нажмите кнопку\nчтобы начать запись'
+    return 'Клик — записать\nДолгое нажатие —\nвоспроизвести последнюю'
   },
 
   toggleRecording() {
@@ -67,11 +76,13 @@ Page({
   },
 
   startRecording() {
+    const filePath = newRecordingPath()
     const recorder = create(id.RECORDER)
-    recorder.setFormat(codec.OPUS, { target_file: RECORD_FILE })
+    recorder.setFormat(codec.OPUS, { target_file: filePath })
     recorder.start()
 
     this.state.recorder = recorder
+    this.state.currentFile = filePath
     this.state.recording = true
     this.updateStatus('Идёт запись...\nНажмите ещё раз\nчтобы остановить')
   },
@@ -80,15 +91,15 @@ Page({
     this.state.recorder.stop()
     this.state.recorder = null
     this.state.recording = false
-    this.state.hasRecording = true
+    pruneOldRecordings()
     this.updateStatus('Отправка...')
-    this.sendRecording()
+    this.sendRecording(this.state.currentFile)
   },
 
-  sendRecording() {
+  sendRecording(filePath) {
     const transferFile = new TransferFile()
     const outbox = transferFile.getOutbox()
-    const fileObject = outbox.enqueueFile(RECORD_FILE)
+    const fileObject = outbox.enqueueFile(filePath)
     this.state.fileObject = fileObject
 
     fileObject.on('change', (event) => {
@@ -100,29 +111,45 @@ Page({
     })
   },
 
-  playRecording() {
-    if (this.state.recording || !this.state.hasRecording) {
+  playLatestRecording() {
+    if (this.state.recording) return
+
+    const recordings = listRecordings()
+    if (recordings.length === 0) {
+      this.updateStatus('Нет записей для\nвоспроизведения')
       return
     }
 
-    const player = create(id.PLAYER)
-    this.state.player = player
+    this.playFile(recordings[0].filePath)
+  },
 
-    player.addEventListener(player.event.PREPARE, (result) => {
-      if (result) {
-        player.start()
-      } else {
-        this.updateStatus('Ошибка чтения\nзаписи\n\n' + this.idleText())
-      }
-    })
+  getPlayer() {
+    if (!this.state.player) {
+      const player = create(id.PLAYER)
 
-    player.addEventListener(player.event.COMPLETE, () => {
-      player.stop()
-      this.updateStatus(this.idleText())
-    })
+      player.addEventListener(player.event.PREPARE, (result) => {
+        if (result) {
+          player.start()
+        } else {
+          this.updateStatus('Ошибка чтения\nзаписи\n\n' + this.idleText())
+        }
+      })
 
+      player.addEventListener(player.event.COMPLETE, () => {
+        player.stop()
+        this.updateStatus(this.idleText())
+      })
+
+      this.state.player = player
+    }
+
+    return this.state.player
+  },
+
+  playFile(filePath) {
     this.updateStatus('Воспроизведение...')
-    player.setSource(player.source.FILE, { file: RECORD_FILE })
+    const player = this.getPlayer()
+    player.setSource(player.source.FILE, { file: filePath })
     player.prepare()
   },
 
