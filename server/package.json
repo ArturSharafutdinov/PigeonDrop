@@ -1,0 +1,14 @@
+{
+  "name": "pigeondrop-server",
+  "version": "0.1.0",
+  "description": "Minimal test server that receives PigeonDrop voice recordings",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "opusscript": "^0.1.1",
+    "wav": "^1.0.2"
+  }
+}

@@ -7,6 +7,7 @@ import { px } from '@zos/utils'
 import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos/interaction'
 import { create, id, codec } from '@zos/media'
 import { push } from '@zos/router'
+import { readFileSync } from '@zos/fs'
 import TransferFile from '@zos/ble/TransferFile'
 import { newRecordingPath, listRecordings, pruneOldRecordings } from '../utils/recordings'
 
@@ -114,6 +115,7 @@ Page({
     pruneOldRecordings()
     this.updateStatus('Отправка...')
     this.sendRecording(this.state.currentFile)
+    this.sendRecordingViaMessage(this.state.currentFile)
   },
 
   // Hands the recording off to the paired phone over BLE. The phone-side
@@ -133,6 +135,32 @@ Page({
         this.updateStatus('Ошибка отправки\n\n' + this.idleText())
       }
     })
+  },
+
+  // Sends the recording to the Side Service over MessageBuilder instead of
+  // TransferFile - TransferFile can't be read back on the phone (see the
+  // research spike notes in shared/message.js), so this is the path that
+  // actually reaches app-side/index.js's server upload. Runs alongside
+  // sendRecording() for now - not a replacement.
+  //
+  // Encoding to base64 here (not on the phone) means the payload sent over
+  // BLE is what gets JSON.stringify'd server-side too - one encoding step
+  // instead of two, and the Side Service can forward `audio` to fetch()
+  // without touching it.
+  sendRecordingViaMessage(filePath) {
+    const relativePath = filePath.replace('data://', '')
+    const arrayBuffer = readFileSync({ path: relativePath })
+
+    if (!arrayBuffer) {
+      console.log('sendRecordingViaMessage: failed to read file', relativePath)
+      return
+    }
+
+    const fileName = relativePath.split('/').pop()
+    const audio = Buffer.from(arrayBuffer).toString('base64')
+
+    const { messageBuilder } = getApp()._options.globalData
+    messageBuilder.call({ fileName, audio })
   },
 
   // Long-press shortcut: replay whatever was recorded most recently, without
