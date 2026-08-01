@@ -10,6 +10,7 @@ import { push } from '@zos/router'
 import { readFileSync } from '@zos/fs'
 import TransferFile from '@zos/ble/TransferFile'
 import { newRecordingPath, listRecordings, pruneOldRecordings } from '../utils/recordings'
+import { getServerUrl } from '../utils/account'
 
 Page({
   state: {
@@ -21,20 +22,41 @@ Page({
   },
 
   build() {
-    // Big status label in the upper half of the screen. Height is capped at
-    // 230px (not the full 480px screen) to leave room for the button below -
-    // see the "list" button's placement note for why.
+    // Status label in the upper part of the screen. Shrunk from the original
+    // 230px tall to make room for the extra "Настройки" button below - see
+    // the "list" button's placement note for the round-display safe-zone
+    // reasoning that governs every button placement on this page.
     this.state.statusText = createWidget(widget.TEXT, {
       x: px(0),
-      y: px(70),
+      y: px(10),
       w: px(480),
-      h: px(230),
+      h: px(250),
       text: this.idleText(),
       text_size: px(28),
       color: 0xffffff,
       align_h: align.CENTER_H,
       align_v: align.CENTER_V,
       text_style: text_style.WRAP,
+    })
+
+    // Navigates to the server-configuration page (QR code + sync - see
+    // page/settings.js). Stacked above "Список записей" rather than beside
+    // it - side-by-side placement leaves much tighter margins near the
+    // bezel, while stacking lets this reuse the same proven-safe width/x as
+    // the button below it.
+    createWidget(widget.BUTTON, {
+      x: px(100),
+      y: px(270),
+      w: px(280),
+      h: px(65),
+      radius: px(16),
+      normal_color: 0x2f2f2f,
+      press_color: 0x4a4a4a,
+      text: 'Настройки',
+      text_size: px(24),
+      click_func: () => {
+        push({ url: 'page/settings' })
+      },
     })
 
     // Navigates to the full recordings list. Placed low on the screen; on a
@@ -158,9 +180,13 @@ Page({
 
     const fileName = relativePath.split('/').pop()
     const audio = Buffer.from(arrayBuffer).toString('base64')
+    // null until the user has synced an account at least once (see
+    // page/settings.js) - the Side Service falls back to config.js's
+    // bootstrap SERVER_URL in that case (see app-side/index.js).
+    const serverUrl = getServerUrl()
 
     const { messageBuilder } = getApp()._options.globalData
-    messageBuilder.call({ fileName, audio })
+    messageBuilder.call({ fileName, audio, serverUrl })
   },
 
   // Long-press shortcut: replay whatever was recorded most recently, without

@@ -43,14 +43,18 @@ AppSideService({
     // 'call' fires for fire-and-forget sends (MessageBuilder#call on the
     // device side). fullPayload.payload arrives as a reassembled Buffer -
     // complete, regardless of how many BLE chunks it took to get here -
-    // buf2Json decodes it back into the { fileName, audio } object the
-    // watch sent.
+    // buf2Json decodes it back into the { fileName, audio, serverUrl }
+    // object the watch sent.
     messageBuilder.on('call', (fullPayload) => {
-      const { fileName, audio } = messageBuilder.buf2Json(fullPayload.payload)
+      const { fileName, audio, serverUrl } = messageBuilder.buf2Json(fullPayload.payload)
       console.log('recording received:', fileName, audio.length)
 
+      // serverUrl comes from the watch's last successful sync (see
+      // utils/account.js on the device side) - it's null until the user has
+      // configured and synced an account at least once, in which case
+      // SERVER_URL (the bootstrap/account server from config.js) is used.
       fetch({
-        url: SERVER_URL + '/messages',
+        url: (serverUrl || SERVER_URL) + '/messages',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileName, audio }),
@@ -69,6 +73,43 @@ AppSideService({
           console.log('upload failed:', fileName, err)
           messageBuilder.call({ uploadOk: false, fileName: fileName, error: String(err) })
         })
+    })
+
+    // 'request' is MessageBuilder's other channel - unlike 'call' (fire and
+    // forget), a request expects a response() back to the watch, which is
+    // exactly what account registration and sync need. Both page/settings.js
+    // calls (registerAccount, sync) land here, distinguished by `type`.
+    messageBuilder.on('request', ({ request, response }) => {
+      const { type, code } = messageBuilder.buf2Json(request.payload)
+      console.log('account request:', type, code)
+
+      const respondWithError = (err) => {
+        console.log('account request failed:', type, err)
+        response({ data: { ok: false, error: String(err) } })
+      }
+
+      if (type === 'registerAccount') {
+        fetch({
+          url: SERVER_URL + '/accounts',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        })
+          .then((res) => {
+            const data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body
+            response({ data })
+          })
+          .catch(respondWithError)
+      } else if (type === 'sync') {
+        fetch({ url: SERVER_URL + '/accounts/' + encodeURIComponent(code), method: 'GET' })
+          .then((res) => {
+            const data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body
+            response({ data })
+          })
+          .catch(respondWithError)
+      } else {
+        respondWithError('unknown request type: ' + type)
+      }
     })
   },
 

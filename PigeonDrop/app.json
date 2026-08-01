@@ -28,7 +28,9 @@
         "page": {
           "pages": [
             "page/index",
-            "page/list"
+            "page/list",
+            "page/settings",
+            "page/qrcode"
           ]
         },
         "app-side": {
