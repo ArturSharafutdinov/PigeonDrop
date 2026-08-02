@@ -8,7 +8,6 @@ import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos
 import { create, id, codec } from '@zos/media'
 import { push } from '@zos/router'
 import { readFileSync } from '@zos/fs'
-import TransferFile from '@zos/ble/TransferFile'
 import { newRecordingPath, listRecordings, pruneOldRecordings } from '../utils/recordings'
 import { getServerUrl } from '../utils/account'
 
@@ -135,35 +134,22 @@ Page({
     this.state.recorder = null
     this.state.recording = false
     pruneOldRecordings()
-    this.updateStatus('Отправка...')
-    this.sendRecording(this.state.currentFile)
     this.sendRecordingViaMessage(this.state.currentFile)
+    // Optimistic confirmation - MessageBuilder#call is fire-and-forget, so
+    // this doesn't wait for the phone to actually finish uploading. The real
+    // upload result (success/failure, from the server) still comes back via
+    // app.js's messageBuilder.on('call', ...) listener, visible in the
+    // device log - there's no UI-visible round trip to this page for it.
+    this.updateStatus('Отправлено\n\n' + this.idleText())
   },
 
-  // Hands the recording off to the paired phone over BLE. The phone-side
-  // counterpart (app-side/index.js) is what actually receives it - this
-  // only tracks whether the transfer itself succeeded from the watch's
-  // point of view.
-  sendRecording(filePath) {
-    const transferFile = new TransferFile()
-    const outbox = transferFile.getOutbox()
-    const fileObject = outbox.enqueueFile(filePath)
-    this.state.fileObject = fileObject
-
-    fileObject.on('change', (event) => {
-      if (event.data.readyState === 'transferred') {
-        this.updateStatus('Отправлено!\n\n' + this.idleText())
-      } else if (event.data.readyState === 'error') {
-        this.updateStatus('Ошибка отправки\n\n' + this.idleText())
-      }
-    })
-  },
-
-  // Sends the recording to the Side Service over MessageBuilder instead of
-  // TransferFile - TransferFile can't be read back on the phone (see the
-  // research spike notes in shared/message.js), so this is the path that
-  // actually reaches app-side/index.js's server upload. Runs alongside
-  // sendRecording() for now - not a replacement.
+  // Sends the recording to the Side Service over MessageBuilder, which
+  // relays it to the server (see app-side/index.js). This used to run
+  // alongside a parallel @zos/ble/TransferFile send, kept around while it
+  // was unclear whether TransferFile would end up useful for something -
+  // that's been decided against (its FileObject on the Side Service only
+  // exposes metadata, never the actual bytes, so it never did anything
+  // beyond silently filling up phone storage) and it's been removed.
   //
   // Encoding to base64 here (not on the phone) means the payload sent over
   // BLE is what gets JSON.stringify'd server-side too - one encoding step

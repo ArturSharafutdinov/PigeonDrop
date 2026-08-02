@@ -1,41 +1,20 @@
 // Side Service: the phone-side counterpart of the watch app. It runs inside
 // the Zepp App itself (not on the watch), has no UI, and is what actually
 // receives the recordings the watch sends over BLE.
-//
-// `transferFile` is a global provided by the Side Service runtime - unlike
-// the watch side (which imports TransferFile from '@zos/ble/TransferFile'),
-// that module path doesn't resolve here, so no import is needed or possible.
 
 import { MessageBuilder } from '../shared/message-side'
 import { SERVER_URL } from '../config'
 
-// TransferFile gets a copy of the recording onto the phone, but its
-// FileObject only exposes metadata (fileName/filePath/fileSize) - there's no
-// documented way to read the actual bytes back out of it here. MessageBuilder
-// sends the recording (already base64-encoded, see page/index.js) directly
-// over its own BLE channel instead, so it arrives as a plain JSON payload
-// that can be forwarded straight to fetch(). Runs alongside the existing
-// TransferFile flow for now, not replacing it.
+// Recordings arrive over MessageBuilder's own BLE channel (already
+// base64-encoded, see page/index.js) as a plain JSON payload that can be
+// forwarded straight to fetch(). This used to run alongside a parallel
+// @zos/ble/TransferFile receive path (global `transferFile`), removed after
+// it was decided its FileObject - only exposing metadata, never the actual
+// bytes - never did anything beyond silently filling up phone storage.
 const messageBuilder = new MessageBuilder()
 
 AppSideService({
   onInit() {
-    const inbox = transferFile.getInbox()
-
-    // Fires whenever the watch starts sending us a new file.
-    inbox.on('NEWFILE', () => {
-      const fileObject = inbox.getNextFile()
-
-      // Fires again once that specific transfer finishes (or fails).
-      fileObject.on('change', (event) => {
-        if (event.data.readyState === 'transferred') {
-          console.log('voice message received:', fileObject.fileName, fileObject.filePath)
-        } else if (event.data.readyState === 'error') {
-          console.log('voice message transfer error')
-        }
-      })
-    })
-
     messageBuilder.listen(() => {
       console.log('messageBuilder listening')
     })
