@@ -8,12 +8,17 @@
 //   PUT  /accounts/:code    - set an account's serverUrl, { customServerUrl }
 //   GET  /setup             - serves public/setup.html (the QR-code target)
 //
-// For /messages: the watch's own fileName is only used for logging - saved
-// files are named after the date/time the SERVER received them (not when the
-// watch recorded them), since that's what actually matters when browsing
-// uploads/ by hand. Decodes the base64 payload, saves it, and converts it to
-// a .wav right away (see convert-to-wav.js) so a received recording can be
-// played back immediately, without a separate manual step.
+// For /messages: saved files are named after the date/time the SERVER
+// received them (not when the watch recorded them), since that's what
+// actually matters when browsing uploads/ by hand - but the watch's fileName
+// is also the idempotency key (see uploads-store.js): the watch's own
+// upload-success ack can get lost over the same unreliable BLE channel it
+// arrived on, causing it to resend a recording that already made it to the
+// server - a repeat POST with a fileName already seen returns the original
+// result instead of saving a duplicate. Decodes the base64 payload, saves
+// it, and converts it to a .wav right away (see convert-to-wav.js) so a
+// received recording can be played back immediately, without a separate
+// manual step.
 //
 // For /accounts: see accounts-store.js and ARCHITECTURE.md - this lets a
 // user configure a custom upload server from their phone (scan a QR shown on
@@ -24,6 +29,8 @@ const fs = require('fs')
 const path = require('path')
 const { opus2wav } = require('./convert-to-wav')
 const accountsStore = require('./accounts-store')
+const uploadsStore = require('./uploads-store')
+const { log } = require('./logger')
 
 const PORT = process.env.PORT || 3000
 const UPLOADS_DIR = path.join(__dirname, 'uploads')
@@ -39,6 +46,21 @@ const DEFAULT_SERVER_URL = process.env.DEFAULT_SERVER_URL || 'http://localhost:'
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR)
 }
+
+// Last-resort safety net: this is a prototype server that should stay up
+// for the watch/phone to keep retrying against, even if something in a
+// request handler goes wrong in a way the per-request try/catch below
+// doesn't cover (e.g. an error surfacing on a later event-loop tick, after
+// the handler that triggered it has already returned - see the fix to
+// opus2wav in convert-to-wav.js for a concrete example of that shape of bug).
+// Logging and continuing is the right call for a single local test server;
+// it would not be for a real multi-user production service.
+process.on('uncaughtException', (err) => {
+  log('uncaughtException (server kept running):', err)
+})
+process.on('unhandledRejection', (err) => {
+  log('unhandledRejection (server kept running):', err)
+})
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -98,26 +120,46 @@ async function handleUploadMessage(req, res) {
     return
   }
 
+  const alreadyProcessed = uploadsStore.getProcessed(fileName)
+  if (alreadyProcessed) {
+    log('duplicate upload for', fileName, '- returning original result')
+    sendJson(res, 200, { ok: true, ...alreadyProcessed })
+    return
+  }
+
+  // Defensive re-create, not just a startup-time check - cheap insurance
+  // against whatever intermittently made uploads/ unavailable and crashed
+  // the process before opus2wav's completion was actually awaited (see below).
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR)
+  }
+
   const audioBuffer = Buffer.from(audio, 'base64')
   const savedName = receivedAtFileName() + '.opus'
   const savePath = path.join(UPLOADS_DIR, savedName)
   fs.writeFileSync(savePath, audioBuffer)
-  console.log('saved', savedName, '(from watch:', fileName + ')', '-', audioBuffer.length, 'bytes')
+  log('saved', savedName, '(from watch:', fileName + ')', '-', audioBuffer.length, 'bytes')
 
   let wavFile = null
   try {
     const wavPath = savePath.replace(/\.opus$/, '.wav')
-    opus2wav(savePath, wavPath)
+    // Awaited - opus2wav's write is asynchronous (wav.FileWriter opens the
+    // file on its own event-loop tick), so without awaiting this, a failure
+    // surfaces later as an unhandled stream 'error' event instead of landing
+    // in this catch block - which is exactly what was crashing the process.
+    await opus2wav(savePath, wavPath)
     wavFile = path.basename(wavPath)
-    console.log('converted to', wavFile)
+    log('converted to', wavFile)
   } catch (err) {
     // Recording itself is safely saved either way - conversion failing
     // (e.g. a file that isn't actually in the expected packet format)
     // shouldn't fail the whole upload.
-    console.log('conversion failed for', savedName, '-', err.message)
+    log('conversion failed for', savedName, '-', err.message)
   }
 
-  sendJson(res, 200, { ok: true, bytesReceived: audioBuffer.length, savedAs: savedName, wavFile })
+  const result = { bytesReceived: audioBuffer.length, savedAs: savedName, wavFile }
+  uploadsStore.markProcessed(fileName, result)
+  sendJson(res, 200, { ok: true, ...result })
 }
 
 // Creates (or, if it already exists, just returns) an account for the given
@@ -189,7 +231,7 @@ function handleSetupPage(req, res) {
 }
 
 const server = http.createServer(async (req, res) => {
-  console.log(req.method, req.url)
+  log(req.method, req.url)
 
   const { pathname } = new URL(req.url, 'http://localhost')
   const accountMatch = pathname.match(/^\/accounts\/([^/]+)$/)
@@ -209,11 +251,11 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 404, { ok: false, error: 'not found' })
     }
   } catch (err) {
-    console.log('unhandled error handling', req.method, req.url, '-', err.message)
+    log('unhandled error handling', req.method, req.url, '-', err.message)
     sendJson(res, 500, { ok: false, error: 'internal error' })
   }
 })
 
 server.listen(PORT, () => {
-  console.log(`PigeonDrop test server listening on http://localhost:${PORT}`)
+  log(`PigeonDrop test server listening on http://localhost:${PORT}`)
 })

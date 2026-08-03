@@ -7,9 +7,8 @@ import { px } from '@zos/utils'
 import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos/interaction'
 import { create, id, codec } from '@zos/media'
 import { push } from '@zos/router'
-import { readFileSync } from '@zos/fs'
-import { newRecordingPath, listRecordings, pruneOldRecordings } from '../utils/recordings'
-import { getServerUrl } from '../utils/account'
+import { newRecordingPath, listRecordings } from '../utils/recordings'
+import { pruneRecordings, retryPendingUploads, isUploaded } from '../utils/uploadQueue'
 
 Page({
   state: {
@@ -99,6 +98,11 @@ Page({
         return false
       },
     })
+
+    // App-open retry trigger for the upload queue - catches anything that
+    // was still pending from a previous session (e.g. the watch was out of
+    // BLE range or the server was down when it was recorded).
+    retryPendingUploads()
   },
 
   // Default instructions shown whenever nothing else is going on.
@@ -127,52 +131,25 @@ Page({
     this.updateStatus('Идёт запись...\nНажмите ещё раз\nчтобы остановить')
   },
 
-  // Stops the current recording, enforces the storage limit (config.js),
-  // and immediately kicks off sending the file to the phone.
+  // Stops the current recording, enforces the storage caps (config.js), and
+  // kicks off a retry sweep of the upload queue - which now includes this
+  // recording as well as any older ones still waiting (utils/uploadQueue.js).
   stopRecording() {
     this.state.recorder.stop()
     this.state.recorder = null
     this.state.recording = false
-    pruneOldRecordings()
-    this.sendRecordingViaMessage(this.state.currentFile)
-    // Optimistic confirmation - MessageBuilder#call is fire-and-forget, so
-    // this doesn't wait for the phone to actually finish uploading. The real
-    // upload result (success/failure, from the server) still comes back via
-    // app.js's messageBuilder.on('call', ...) listener, visible in the
-    // device log - there's no UI-visible round trip to this page for it.
-    this.updateStatus('Отправлено\n\n' + this.idleText())
-  },
+    pruneRecordings()
+    retryPendingUploads()
 
-  // Sends the recording to the Side Service over MessageBuilder, which
-  // relays it to the server (see app-side/index.js). This used to run
-  // alongside a parallel @zos/ble/TransferFile send, kept around while it
-  // was unclear whether TransferFile would end up useful for something -
-  // that's been decided against (its FileObject on the Side Service only
-  // exposes metadata, never the actual bytes, so it never did anything
-  // beyond silently filling up phone storage) and it's been removed.
-  //
-  // Encoding to base64 here (not on the phone) means the payload sent over
-  // BLE is what gets JSON.stringify'd server-side too - one encoding step
-  // instead of two, and the Side Service can forward `audio` to fetch()
-  // without touching it.
-  sendRecordingViaMessage(filePath) {
-    const relativePath = filePath.replace('data://', '')
-    const arrayBuffer = readFileSync({ path: relativePath })
-
-    if (!arrayBuffer) {
-      console.log('sendRecordingViaMessage: failed to read file', relativePath)
-      return
-    }
-
-    const fileName = relativePath.split('/').pop()
-    const audio = Buffer.from(arrayBuffer).toString('base64')
-    // null until the user has synced an account at least once (see
-    // page/settings.js) - the Side Service falls back to config.js's
-    // bootstrap SERVER_URL in that case (see app-side/index.js).
-    const serverUrl = getServerUrl()
-
-    const { messageBuilder } = getApp()._options.globalData
-    messageBuilder.call({ fileName, audio, serverUrl })
+    // Optimistic status - MessageBuilder#call is fire-and-forget, so this
+    // doesn't wait for the phone to actually finish uploading. The real
+    // upload result (success/failure, from the server) comes back later via
+    // app.js's messageBuilder.on('call', ...) listener, which is also what
+    // marks a recording as uploaded - so pendingCount here reflects whatever
+    // was still true just before this sweep kicked off.
+    const pendingCount = listRecordings().filter((item) => !isUploaded(item.fileName)).length
+    const status = pendingCount > 0 ? 'Отправка...\nВ очереди: ' + pendingCount : 'Отправлено\n\n' + this.idleText()
+    this.updateStatus(status)
   },
 
   // Long-press shortcut: replay whatever was recorded most recently, without

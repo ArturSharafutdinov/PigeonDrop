@@ -6,6 +6,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { log } = require('./logger')
 
 const DATA_DIR = path.join(__dirname, 'data')
 const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json')
@@ -17,7 +18,7 @@ function readAll() {
     return JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8'))
   } catch (err) {
     // A corrupt file shouldn't take down the whole server - treat it as empty.
-    console.log('accounts-store: failed to parse accounts.json -', err.message)
+    log('accounts-store: failed to parse accounts.json -', err.message)
     return {}
   }
 }

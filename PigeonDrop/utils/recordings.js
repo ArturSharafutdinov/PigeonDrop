@@ -2,8 +2,7 @@
 // Both page/index.js (recording) and page/list.js (playback) rely on this
 // module so the file naming/storage scheme only needs to live in one place.
 
-import { readdirSync, mkdirSync, rmSync } from '@zos/fs'
-import { MAX_RECORDINGS } from '../config'
+import { readdirSync, mkdirSync } from '@zos/fs'
 
 // Sub-folder inside the Mini Program's private /data directory where all
 // recordings live, e.g. data://voice_messages/voice_1785056400000.opus
@@ -95,16 +94,4 @@ export function listRecordings() {
     .sort(function (a, b) {
       return b.timestamp - a.timestamp // newest first
     })
-}
-
-// Enforces the MAX_RECORDINGS limit from config.js. Called right after a new
-// recording is saved: anything past the limit (i.e. the oldest recordings)
-// gets deleted so the watch's storage never grows unbounded.
-export function pruneOldRecordings() {
-  const recordings = listRecordings()
-  const excess = recordings.slice(MAX_RECORDINGS)
-
-  excess.forEach(function (item) {
-    rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
-  })
 }
