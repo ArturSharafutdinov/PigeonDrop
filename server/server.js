@@ -31,9 +31,12 @@ const { opus2wav } = require('./convert-to-wav')
 const accountsStore = require('./accounts-store')
 const uploadsStore = require('./uploads-store')
 const { log } = require('./logger')
+const { STORAGE_DIR } = require('./storage')
 
 const PORT = process.env.PORT || 3000
-const UPLOADS_DIR = path.join(__dirname, 'uploads')
+const UPLOADS_DIR = path.join(STORAGE_DIR, 'uploads')
+// public/ is served source code, not persistent state - stays relative to
+// the app's own directory regardless of where STORAGE_DIR points.
 const PUBLIC_DIR = path.join(__dirname, 'public')
 
 // This server doubles as both the recording-upload target and the account
@@ -131,7 +134,7 @@ async function handleUploadMessage(req, res) {
   // against whatever intermittently made uploads/ unavailable and crashed
   // the process before opus2wav's completion was actually awaited (see below).
   if (!fs.existsSync(UPLOADS_DIR)) {
-    fs.mkdirSync(UPLOADS_DIR)
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
   }
 
   const audioBuffer = Buffer.from(audio, 'base64')

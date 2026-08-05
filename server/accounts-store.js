@@ -7,8 +7,9 @@
 const fs = require('fs')
 const path = require('path')
 const { log } = require('./logger')
+const { STORAGE_DIR } = require('./storage')
 
-const DATA_DIR = path.join(__dirname, 'data')
+const DATA_DIR = path.join(STORAGE_DIR, 'data')
 const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json')
 
 function readAll() {
@@ -24,7 +25,7 @@ function readAll() {
 }
 
 function writeAll(accounts) {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR)
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
   fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2))
 }
 

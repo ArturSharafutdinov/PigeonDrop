@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Three independent Node/JS projects living side by side, connected only by the runtime data flow described below (no shared package.json, no monorepo tooling):
 
 - **`PigeonDrop/`** — the Zepp OS 4.0 Mini Program itself (device app + Side Service). This is the core deliverable.
-- **`server/`** — a minimal standalone Node.js HTTP server used as a local test target for uploads from the phone. Not production infrastructure.
+- **`server/`** — a minimal standalone Node.js HTTP server used as a local test target for uploads from the phone. Not production infrastructure. Deployable to Railway (see `server/DEPLOY.md`) as a stopgap before the planned Go rewrite.
 - **`ARCHITECTURE.md`** (root) — up-to-date narrative overview of the whole system: data flow, per-file responsibilities, and the reasoning behind non-obvious design decisions (custom `.opus` framing, round-display safe zone, the account/QR config flow, etc). **Read this first** before making non-trivial changes — it captures "why" context that isn't in code comments.
 - **`API_SPEC.md`** (root) — the HTTP contract for `server/`'s endpoints (`/messages`, `/accounts/*`, `/setup`). This is the source of truth for the planned server rewrite (Node prototype → Go) — the watch and Side Service only depend on this contract, not on the Node implementation, so a Go backend just needs to satisfy this doc.
 - **`todo.md`** (root) — draft technical proposal for the not-yet-implemented persistent phone-side upload queue. Reference this before implementing that feature rather than redesigning from scratch.
@@ -54,6 +54,8 @@ node convert-to-wav.js <input.opus> [output.wav]
 Standalone CLI for the opus→wav converter also used internally by `server.js` after each upload.
 
 To expose the local server to the watch/phone over the internet, an ngrok tunnel is used; the resulting URL must be manually placed in **both** `PigeonDrop/config.js`'s `SERVER_URL`/`WEB_APP_BASE_URL` and `server/server.js`'s `DEFAULT_SERVER_URL` (pass it as an env var: `DEFAULT_SERVER_URL=https://... npm start`) — the server needs to know its own public address to resolve accounts' default `serverUrl` correctly. Never enter or manage the ngrok authtoken yourself — that's the user's action (`ngrok config add-authtoken <token>`).
+
+For a persistent public deployment instead of ngrok, see `server/DEPLOY.md` (Railway). `STORAGE_DIR` env var controls where `data/` and `uploads/` live (defaults to next to `server.js` for local dev) — must point at a mounted persistent volume when deployed, or state is lost on every redeploy.
 
 ## Architecture
 

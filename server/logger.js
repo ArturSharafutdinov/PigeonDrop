@@ -6,8 +6,9 @@
 
 const fs = require('fs')
 const path = require('path')
+const { STORAGE_DIR } = require('./storage')
 
-const LOG_FILE = path.join(__dirname, 'server.log')
+const LOG_FILE = path.join(STORAGE_DIR, 'server.log')
 
 function formatArg(arg) {
   if (typeof arg === 'string') return arg
