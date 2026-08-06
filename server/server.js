@@ -7,6 +7,14 @@
 //   GET  /accounts/:code    - read an account's resolved serverUrl
 //   PUT  /accounts/:code    - set an account's serverUrl, { customServerUrl }
 //   GET  /setup             - serves public/setup.html (the QR-code target)
+//   GET  /uploads           - HTML listing of saved recordings, newest first
+//   GET  /uploads/:name     - download/play a single saved .opus or .wav
+//
+// /uploads[/:name] are manual-access-only - the watch/phone never call them,
+// they exist so a human can actually listen to what landed on a deployed
+// server (e.g. Railway) without shelling in. No auth, same as everything
+// else in this prototype - anyone with the URL and a filename can fetch a
+// recording, which matters once this isn't just localhost anymore.
 //
 // For /messages: saved files are named after the date/time the SERVER
 // received them (not when the watch recorded them), since that's what
@@ -233,11 +241,64 @@ function handleSetupPage(req, res) {
   res.end(fs.readFileSync(filePath, 'utf8'))
 }
 
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+// Filenames are receivedAtFileName()-based (see handleUploadMessage), which
+// sorts chronologically as plain strings - no need to parse dates, a
+// reverse alphabetical sort is already newest-first.
+function handleListUploads(req, res) {
+  const files = fs
+    .readdirSync(UPLOADS_DIR)
+    .filter((name) => name.endsWith('.wav') || name.endsWith('.opus'))
+    .sort()
+    .reverse()
+
+  const rows = files
+    .map((name) => `<li><a href="/uploads/${encodeURIComponent(name)}">${escapeHtml(name)}</a></li>`)
+    .join('\n')
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>PigeonDrop uploads</title></head>
+<body>
+<h1>Uploads (${files.length})</h1>
+<ul>${rows || '<li>(empty)</li>'}</ul>
+</body>
+</html>`
+
+  res.writeHead(200, { 'Content-Type': 'text/html' })
+  res.end(html)
+}
+
+const UPLOAD_CONTENT_TYPES = { '.wav': 'audio/wav', '.opus': 'application/octet-stream' }
+
+function handleDownloadUpload(req, res, fileName) {
+  // Reject anything that isn't a plain filename within UPLOADS_DIR itself -
+  // no path traversal via '..' or a nested path.
+  if (fileName.includes('/') || fileName.includes('..')) {
+    sendJson(res, 400, { ok: false, error: 'invalid filename' })
+    return
+  }
+
+  const filePath = path.join(UPLOADS_DIR, fileName)
+  if (!fs.existsSync(filePath)) {
+    sendJson(res, 404, { ok: false, error: 'file not found' })
+    return
+  }
+
+  const contentType = UPLOAD_CONTENT_TYPES[path.extname(fileName)] || 'application/octet-stream'
+  res.writeHead(200, { 'Content-Type': contentType })
+  res.end(fs.readFileSync(filePath))
+}
+
 const server = http.createServer(async (req, res) => {
   log(req.method, req.url)
 
   const { pathname } = new URL(req.url, 'http://localhost')
   const accountMatch = pathname.match(/^\/accounts\/([^/]+)$/)
+  const uploadFileMatch = pathname.match(/^\/uploads\/([^/]+)$/)
 
   try {
     if (req.method === 'POST' && pathname === '/messages') {
@@ -250,6 +311,10 @@ const server = http.createServer(async (req, res) => {
       await handleUpdateAccount(req, res, decodeURIComponent(accountMatch[1]))
     } else if (req.method === 'GET' && pathname === '/setup') {
       handleSetupPage(req, res)
+    } else if (req.method === 'GET' && pathname === '/uploads') {
+      handleListUploads(req, res)
+    } else if (req.method === 'GET' && uploadFileMatch) {
+      handleDownloadUpload(req, res, decodeURIComponent(uploadFileMatch[1]))
     } else {
       sendJson(res, 404, { ok: false, error: 'not found' })
     }
