@@ -18,6 +18,8 @@ Three independent Node/JS projects living side by side, connected only by the ru
 
 Run from `PigeonDrop/`. Uses the Zepp OS `zeus` CLI (installed globally: `@zeppos/zeus-cli`).
 
+**First-time setup**: `PigeonDrop/config.js` is gitignored (not tracked) — it holds the real server URL, which shouldn't end up in the repo. Copy `config.example.js` to `config.js` and fill in your own `SERVER_URL`/`WEB_APP_BASE_URL` before building. This is a plain JS module read at build time by Rollup, not a `.env` file — the watch has no runtime `process.env` to read one from.
+
 ```bash
 zeus dev
 ```
