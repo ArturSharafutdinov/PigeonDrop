@@ -67,7 +67,7 @@ Port `server/convert-to-wav.js` to `backend/internal/audio/`:
 
 ## M1 — Go parity port (JSON stores, no auth)
 
-- [ ] Complete
+- [ ] Complete — **broken down into 16 ordered tasks in [backend/M1_TASKS.md](backend/M1_TASKS.md)**
 
 Reimplement every endpoint in `API_SPEC.md` exactly: `POST /messages` (idempotent by `fileName`), `POST /accounts`, `GET|PUT /accounts/{code}`, `GET /setup`, `GET /uploads`, `GET /uploads/{name}`. **The watch app is not modified and must keep working untouched** — that's the acceptance test.
 
