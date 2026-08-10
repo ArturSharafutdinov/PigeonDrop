@@ -2,9 +2,15 @@
 // NOT a standard Ogg/Opus container, so ffmpeg/afplay can't open it directly)
 // into a normal .wav file that any player can open.
 //
-// Format, per Zepp's own docs (docs.zepp.com/docs/guides/faq/opus-to-mp3):
-// each packet is [4-byte big-endian length][8-byte header][payload], repeated
-// back to back. Sample rate 16000 Hz, mono, 16-bit PCM.
+// Format: each packet is [8-byte header][payload], repeated back to back,
+// where the header's first 4 bytes are the payload length, big-endian (the
+// remaining 4 are unidentified and skipped). Sample rate 16000 Hz, mono,
+// 16-bit PCM. Payloads are SILK wideband, 20 ms per packet.
+//
+// NOTE: Zepp's own docs (docs.zepp.com/docs/guides/faq/opus-to-mp3) describe
+// this as [4-byte length][8-byte header] - a 12-byte prefix. That is wrong:
+// parsing real recordings that way overruns the file on the second packet.
+// The 8-byte total below is what actually works, verified across recordings.
 //
 // Used both as a CLI (`node convert-to-wav.js <input.opus> [output.wav]`) and
 // as a module (server.js calls opus2wav directly after saving an upload).
