@@ -6,7 +6,7 @@ import (
 )
 
 // Known-good values for testdata/test.opus, established by parsing the same
-// file with the original Node implementation (server/convert-to-wav.js).
+// file with the original Node implementation (pigeondrop/convert-to-wav.js).
 const (
 	fixturePackets = 236
 	fixtureBytes   = 12492

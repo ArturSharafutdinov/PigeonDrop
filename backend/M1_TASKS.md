@@ -124,7 +124,7 @@ Everything except conversion: parse the body, require `fileName` and `audio`, ch
 **Test:** happy path returns `bytesReceived`/`savedAs`; **replaying the same `fileName` returns an identical response and creates no second file** — the `API_SPEC.md` idempotency invariant; missing fields → 400; invalid base64 → 400.
 **Manual:**
 ```bash
-curl -s -X POST localhost:8080/messages -H 'Content-Type: application/json' -d "{\"fileName\":\"voice_test.opus\",\"audio\":\"$(base64 -i ../server/uploads/2026-08-05_15-52-28-383.opus | tr -d '\n')\"}"
+curl -s -X POST localhost:8080/messages -H 'Content-Type: application/json' -d "{\"fileName\":\"voice_test.opus\",\"audio\":\"$(base64 -i ../pigeondrop/uploads/2026-08-05_15-52-28-383.opus | tr -d '\n')\"}"
 ```
 Run it twice — the second response must be identical to the first.
 

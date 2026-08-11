@@ -10,7 +10,7 @@ import (
 )
 
 // Reference values for testdata/test.opus, produced by the original Node
-// implementation (server/convert-to-wav.js, which wraps libopus via
+// implementation (pigeondrop/convert-to-wav.js, which wraps libopus via
 // opusscript). testdata/test.wav is that exact output, kept as a golden file.
 //
 // 236 packets x 20ms x 16kHz = 75520 samples = 4.72s.

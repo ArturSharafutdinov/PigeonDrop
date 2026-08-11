@@ -34,7 +34,7 @@ func OpusToWAV(opusData []byte) ([]byte, error) {
 
 // ConvertToWav reads a watch .opus recording from inputPath and writes the
 // converted .wav to outputPath. It mirrors the CLI behaviour of the original
-// Node implementation (server/convert-to-wav.js).
+// Node implementation (pigeondrop/convert-to-wav.js).
 func ConvertToWav(inputPath, outputPath string) error {
 	// %w wraps the underlying error rather than discarding it, so the message
 	// keeps the real cause ("no such file", "permission denied") and callers
