@@ -10,15 +10,17 @@ import (
 // TODO: создание папки storage
 // TODO: полноценный логгер (.log в папке storage)
 
-func main() {
+func init() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+}
 
+func main() {
 	c, err := config.Load()
 	if err != nil {
-		logger.Error("error while loading config", slog.Any("error", err))
+		slog.Error("error while loading config", slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	logger.Info("config created", slog.Any("config", c))
+	slog.Info("config created", slog.Any("config", c))
 }

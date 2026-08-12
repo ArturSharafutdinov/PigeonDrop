@@ -1,0 +1,20 @@
+{
+ "k9p2q1r-zz88yy": {
+  "code": "k9p2q1r-zz88yy",
+  "customServerUrl": null,
+  "createdAt": "2026-08-11T07:48:47.223Z",
+  "updatedAt": "2026-08-11T07:48:47.223Z"
+ },
+ "m0x1y2z-ab12cd": {
+  "code": "m0x1y2z-ab12cd",
+  "customServerUrl": "https://my-own.example.com",
+  "createdAt": "2026-08-11T07:48:47.221Z",
+  "updatedAt": "2026-08-11T07:48:47.222Z"
+ },
+ "test_code": {
+  "code": "test_code",
+  "customServerUrl": "http://localhost:123",
+  "createdAt": "2026-08-11 16:12:06.07587 +0200 CEST m=+0.002588376",
+  "updatedAt": "2026-08-11 16:12:06.075804 +0200 CEST m=+0.002523251"
+ }
+}
