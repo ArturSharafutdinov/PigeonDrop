@@ -1,26 +1,47 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
 
 	"github.com/asharafutdinov/pigeondrop/internal/config"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// TODO: создание папки storage
-// TODO: полноценный логгер (.log в папке storage)
-
-func init() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
-}
-
 func main() {
-	c, err := config.Load()
-	if err != nil {
-		slog.Error("error while loading config", slog.Any("error", err))
+	if err := run(); err != nil {
+		slog.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
 
-	slog.Info("config created", slog.Any("config", c))
+func run() error {
+	c, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, c.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		return err
+	}
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+
+	select {
+	case <-stop:
+		return nil
+
+	}
+
+	return nil
 }

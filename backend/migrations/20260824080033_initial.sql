@@ -1,0 +1,13 @@
+-- +goose Up
+CREATE TABLE ACCOUNT(
+    ID BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    EMAIL TEXT NOT NULL,
+    PASSWORD
+
+    CONSTRAINT account_email_unique UNIQUE(EMAIL),
+    CONSTRAINT account_email_format CHECK(EMAIL LIKE '%_@%.__%')
+);
+
+-- +goose Down
+SELECT 'down SQL query';
+DROP TABLE ACCOUNT;
