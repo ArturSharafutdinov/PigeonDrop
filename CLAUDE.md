@@ -7,11 +7,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Three independent Node/JS projects living side by side, connected only by the runtime data flow described below (no shared package.json, no monorepo tooling):
 
 - **`PigeonDrop/`** — the Zepp OS 4.0 Mini Program itself (device app + Side Service). This is the core deliverable.
-- **`server/`** — a minimal standalone Node.js HTTP server used as a local test target for uploads from the phone. Not production infrastructure. Deployable to Railway (see `server/DEPLOY.md`) as a stopgap before the planned Go rewrite.
+- **`server/`** — a minimal standalone Node.js HTTP server that receives uploads from the phone. A prototype, not production infrastructure (no auth, JSON-file storage); deployed to Railway — see `server/DEPLOY.md`.
 - **`ARCHITECTURE.md`** (root) — up-to-date narrative overview of the whole system: data flow, per-file responsibilities, and the reasoning behind non-obvious design decisions (custom `.opus` framing, round-display safe zone, the account/QR config flow, etc). **Read this first** before making non-trivial changes — it captures "why" context that isn't in code comments.
-- **`API_SPEC.md`** (root) — the HTTP contract for `server/`'s endpoints (`/messages`, `/accounts/*`, `/setup`). This is the source of truth for the planned server rewrite (Node prototype → Go) — the watch and Side Service only depend on this contract, not on the Node implementation, so a Go backend just needs to satisfy this doc.
-- **`ROADMAP.md`** (root) — the sequenced plan for rewriting `server/` in Go (by hand, as a Go learning exercise) and then adding multi-user auth, per-user encrypted storage, and a separate Vue 3 frontend. Records design decisions already settled (opaque bearer tokens over JWT, stdlib-first, envelope encryption) so they don't get re-litigated, and gates all new functionality behind feature parity. **Check this before starting backend work** — and update it as milestones land.
+- **`API_SPEC.md`** (root) — the HTTP contract for `server/`'s endpoints (`/messages`, `/accounts/*`, `/setup`, `/uploads`). The watch and Side Service depend only on this contract, not on the Node implementation — any server change must keep it intact.
 - **`todo.md`** (root) — the original draft proposal for a persistent *phone-side* upload queue. Historical: the queue was ultimately built on the **watch** instead (`PigeonDrop/utils/uploadQueue.js`), because the Side Service turned out to have no reliable persistent storage or lifecycle — see `ARCHITECTURE.md` §2.2 for the reasoning. Kept for context, not as a spec.
+
+## Language
+
+Talk to the user in Russian. User-facing docs (`ARCHITECTURE.md`, `API_SPEC.md`, `server/DEPLOY.md`) are written in Russian; this file and other Claude-only files stay in English.
+
+## Git
+
+Commit your own work: after finishing a task or a meaningful part of one, without waiting to be asked. Messages are in English, short (imperative subject line, optionally one line of detail) and say what was done. Stage only the files that belong to the change - the index may hold unrelated pre-existing entries. Do not push unless asked.
 
 ## Commands
 
