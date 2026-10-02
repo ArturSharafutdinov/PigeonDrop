@@ -19,8 +19,10 @@ export const MAX_PENDING_RECORDINGS = 50
 // (Zepp OS would otherwise close the app ~10 s after the display sleeps and the
 // recording would be lost), so this limit bounds how long a recording left
 // running by mistake can hold the screen on and drain the battery. When it is
-// reached the recording is stopped and sent automatically.
-export const MAX_RECORDING_SECONDS = 600
+// reached the recording is stopped and sent automatically. 60 s is the product
+// limit for now: it keeps a recording near 160 KB, which is what the chunked
+// upload and the phone-side Ogg packing were sized and tested around.
+export const MAX_RECORDING_SECONDS = 60
 
 // Bootstrap server address (see /server in the repo root, or server/DEPLOY.md
 // for a real deployment). This is also where the account/config server lives
