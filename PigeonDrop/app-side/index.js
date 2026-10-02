@@ -1,16 +1,16 @@
 // Side Service: the phone-side counterpart of the watch app. It runs inside
 // the Zepp App itself (not on the watch), has no UI, and is what actually
-// receives the recordings the watch sends over BLE.
+// receives the recordings the watch sends over BLE and forwards them to the
+// server.
 
 import { MessageBuilder } from '../shared/message-side'
 import { SERVER_URL } from '../config'
+import { handleUploadChunk } from './uploads'
 
-// Recordings arrive over MessageBuilder's own BLE channel (already
-// base64-encoded, see page/index.js) as a plain JSON payload that can be
-// forwarded straight to fetch(). This used to run alongside a parallel
-// @zos/ble/TransferFile receive path (global `transferFile`), removed after
-// it was decided its FileObject - only exposing metadata, never the actual
-// bytes - never did anything beyond silently filling up phone storage.
+// This used to run alongside a parallel @zos/ble/TransferFile receive path
+// (global `transferFile`), removed after it was decided its FileObject - only
+// exposing metadata, never the actual bytes - never did anything beyond
+// silently filling up phone storage.
 const messageBuilder = new MessageBuilder()
 
 AppSideService({
@@ -19,53 +19,34 @@ AppSideService({
       console.log('messageBuilder listening')
     })
 
-    // 'call' fires for fire-and-forget sends (MessageBuilder#call on the
-    // device side). fullPayload.payload arrives as a reassembled Buffer -
-    // complete, regardless of how many BLE chunks it took to get here -
-    // buf2Json decodes it back into the { fileName, audio, serverUrl }
-    // object the watch sent.
-    messageBuilder.on('call', (fullPayload) => {
-      const { fileName, audio, serverUrl } = messageBuilder.buf2Json(fullPayload.payload)
-      console.log('recording received:', fileName, audio.length)
-
-      // serverUrl comes from the watch's last successful sync (see
-      // utils/account.js on the device side) - it's null until the user has
-      // configured and synced an account at least once, in which case
-      // SERVER_URL (the bootstrap/account server from config.js) is used.
-      fetch({
-        url: (serverUrl || SERVER_URL) + '/messages',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName, audio }),
-      })
-        .then((res) => {
-          const data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body
-          console.log('upload ok:', fileName, JSON.stringify(data))
-
-          // Reports the result back to the watch - see the matching listener
-          // in app.js for why (Side Service logs aren't visible anywhere on
-          // the phone side, so this is the only way to actually see this
-          // worked).
-          messageBuilder.call({ uploadOk: true, fileName: fileName, bytesReceived: data.bytesReceived })
-        })
-        .catch((err) => {
-          console.log('upload failed:', fileName, err)
-          messageBuilder.call({ uploadOk: false, fileName: fileName, error: String(err) })
-        })
-    })
-
-    // 'request' is MessageBuilder's other channel - unlike 'call' (fire and
-    // forget), a request expects a response() back to the watch, which is
-    // exactly what account registration and sync need. Both page/settings.js
-    // calls (registerAccount, sync) land here, distinguished by `type`.
+    // 'request' is MessageBuilder's request/response channel: the watch sends a
+    // request() and waits for the response() sent from here. Everything the
+    // watch asks of the phone goes through it, distinguished by `type`:
+    //   uploadChunk     - one numbered piece of a recording (see ./uploads.js).
+    //                     Recordings used to be sent as ONE fire-and-forget
+    //                     call(); that overran BLE for anything beyond a few
+    //                     seconds of audio, so the reply to each chunk is now
+    //                     the flow control, and the reply to the last chunk
+    //                     carries the server's result.
+    //   registerAccount - page/settings.js
+    //   sync            - page/settings.js
     messageBuilder.on('request', ({ request, response }) => {
-      const { type, code } = messageBuilder.buf2Json(request.payload)
-      console.log('account request:', type, code)
+      const payload = messageBuilder.buf2Json(request.payload)
+      const { type, code } = payload
 
       const respondWithError = (err) => {
-        console.log('account request failed:', type, err)
+        console.log('request failed:', type, err)
         response({ data: { ok: false, error: String(err) } })
       }
+
+      if (type === 'uploadChunk') {
+        handleUploadChunk(payload, SERVER_URL)
+          .then((data) => response({ data }))
+          .catch(respondWithError)
+        return
+      }
+
+      console.log('account request:', type, code)
 
       if (type === 'registerAccount') {
         fetch({

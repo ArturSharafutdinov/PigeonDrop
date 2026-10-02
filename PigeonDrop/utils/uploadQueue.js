@@ -1,34 +1,42 @@
 // Persistent upload queue: tracks which recordings have actually made it to
 // the server, retries the ones that haven't, and enforces two separate
-// storage caps (see config.js). This exists because MessageBuilder's call()
-// gives no delivery guarantee at all - it can fail completely silently if
-// the watch isn't BLE-connected to the phone, and there's no built-in retry
-// or reconnect-triggered resend anywhere in shared/message.js. The Side
-// Service can't be trusted to hold this state itself either: its process
-// lifetime is undocumented and it has no confirmed persistent storage
+// storage caps (see config.js). This exists because BLE delivery is unreliable:
+// the phone can be out of range, the Side Service can be restarted, the server
+// can be down. The Side Service can't be trusted to hold this state itself - its
+// process lifetime is undocumented and it has no confirmed persistent storage
 // beyond a small settingsStorage key-value store - so the watch (which has
-// proven @zos/fs storage) is the only source of truth, and the Side Service
-// stays exactly what it already was: a stateless relay that tries a fetch()
-// per item and reports back.
+// proven @zos/fs storage) is the only source of truth.
+//
+// Sending: a recording is NOT sent as one message. A 60 s recording is ~160 KB
+// (~212 KB as base64); pushed as a single MessageBuilder call() it became ~60 BLE
+// packets queued in one synchronous loop, which overran the BLE send queue and
+// failed silently. It is sent instead as numbered chunks of CHUNK_BYTES with
+// request(), one at a time: the phone's reply to each chunk is the flow control,
+// the reply to the last chunk carries the server's answer, and only that reply
+// marks the recording uploaded. See app-side/uploads.js for the phone half.
 //
 // Depends one-way on ./recordings (not the other way around) so there's no
 // circular import between "what recordings exist" and "which are uploaded".
 
-import { readFileSync, writeFileSync, rmSync } from '@zos/fs'
+import { readFileSync, writeFileSync, rmSync, openSync, readSync, closeSync, statSync, O_RDONLY } from '@zos/fs'
 import { RECORDINGS_DIR, listRecordings } from './recordings'
 import { getServerUrl } from './account'
 import { MAX_RECORDINGS, MAX_PENDING_RECORDINGS } from '../config'
 
 const UPLOADS_INDEX_FILE = 'uploads.json'
 
-// Pacing between sequential retries in retryPendingUploads() - MessageBuilder
-// has no queue/backpressure of its own, so sending several call()s back to
-// back risks interleaving their BLE chunk sequences on the one shared
-// channel. This value is an untested guess, not a documented safe number -
-// tune it against a real device with several pending recordings queued up.
-const RETRY_PACING_MS = 300
+// Raw file bytes per chunk. MUST stay a multiple of 3: every chunk is then
+// base64-encoded on its own without '=' padding, so the phone can join the
+// strings into the base64 of the whole file without decoding anything.
+const CHUNK_BYTES = 15 * 1024
+const CHUNK_TIMEOUT_MS = 60 * 1000
+const CHUNK_RETRIES = 2 // extra attempts per chunk before the recording is given up on
+const CHUNK_RETRY_DELAY_MS = 1000
+const RETRY_PACING_MS = 300 // pause between two recordings in one sweep
 
 let sweepInFlight = false
+let activeRecording = null // file name of the recording still being written, if any
+let stateListener = null
 
 function readIndex() {
   const raw = readFileSync({ path: UPLOADS_INDEX_FILE, options: { encoding: 'utf8' } })
@@ -48,9 +56,9 @@ function writeIndex(index) {
   writeFileSync({ path: UPLOADS_INDEX_FILE, data: JSON.stringify(index), options: { encoding: 'utf8' } })
 }
 
-// A recording not present here is, by definition, still pending - so there's
-// nothing to separately track for "pending", and nothing to clean up beyond
-// forgetUpload() below once a file is actually deleted.
+// A recording not present in the index is, by definition, still pending - so
+// there's nothing to separately track for "pending", and nothing to clean up
+// beyond forgetUpload() below once a file is actually deleted.
 export function isUploaded(fileName) {
   return readIndex().uploaded.indexOf(fileName) !== -1
 }
@@ -64,7 +72,7 @@ export function markUploaded(fileName) {
 }
 
 // Keeps uploads.json from growing forever with entries for files that no
-// longer exist - called whenever pruneRecordings() deletes a file.
+// longer exist - called whenever a file is actually deleted.
 function forgetUpload(fileName) {
   const index = readIndex()
   const pos = index.uploaded.indexOf(fileName)
@@ -74,80 +82,202 @@ function forgetUpload(fileName) {
   }
 }
 
-// Replaces the old pruneOldRecordings (utils/recordings.js) now that the
-// prune policy depends on upload status, which recordings.js deliberately
-// doesn't know about. Two independent caps: MAX_RECORDINGS bounds the
-// already-uploaded history kept for on-watch browsing, MAX_PENDING_RECORDINGS
-// is a hard ceiling on not-yet-uploaded recordings so storage can't fill up
-// completely if the server is unreachable for a long time - a recording is
-// never deleted just for being old while it's still waiting to reach the
-// server, only once that second cap is actually exceeded.
-export function pruneRecordings() {
-  const recordings = listRecordings()
-  const uploaded = recordings.filter((item) => isUploaded(item.fileName))
-  const pending = recordings.filter((item) => !isUploaded(item.fileName))
-
-  const excess = uploaded.slice(MAX_RECORDINGS).concat(pending.slice(MAX_PENDING_RECORDINGS))
-
-  excess.forEach((item) => {
-    rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
-    forgetUpload(item.fileName)
-  })
+// Tells the queue which recording is still being written. Such a file is a
+// half-finished recording: the retry sweep must neither upload it (it would be
+// marked uploaded while incomplete) nor let pruning delete it. Pass null when
+// the recording has ended.
+export function setActiveRecording(fileName) {
+  activeRecording = fileName
 }
 
-// Sends one recording to the Side Service over MessageBuilder - the same
-// logic that used to live in page/index.js#sendRecordingViaMessage, moved
-// here so both a fresh recording and the retry sweep below can share it.
-// Fire-and-forget: this gives no delivery guarantee (see the module header),
-// the real confirmation arrives later via app.js's ack listener calling
-// markUploaded().
-export function uploadRecording(item) {
-  const relativePath = item.filePath.replace('data://', '')
-  const arrayBuffer = readFileSync({ path: relativePath })
+// Recordings still waiting for the server, newest first. Reads the upload index
+// once, not once per file.
+export function pendingRecordings() {
+  const uploaded = readIndex().uploaded
+  return listRecordings().filter((item) => item.fileName !== activeRecording && uploaded.indexOf(item.fileName) === -1)
+}
 
-  if (!arrayBuffer) {
-    console.log('uploadRecording: failed to read file', relativePath)
-    return
+// One listener at most (the main page). Receives:
+//   { state: 'sending', index, count, chunk, total }  recording `index` of `count`, chunk `chunk` of `total`
+//   { state: 'done', pending }                        the sweep finished
+//   { state: 'error', message, pending }              the sweep stopped on a failure
+// Pass null to unsubscribe.
+export function onUploadState(callback) {
+  stateListener = callback
+}
+
+function emit(state) {
+  if (!stateListener) return
+  try {
+    stateListener(state)
+  } catch (e) {
+    // A UI problem must never break uploading.
+    console.log('upload state listener failed:', e)
   }
+}
 
-  const audio = Buffer.from(arrayBuffer).toString('base64')
-  // null until the user has synced an account at least once - the Side
-  // Service falls back to config.js's bootstrap SERVER_URL in that case.
-  const serverUrl = getServerUrl()
+// Two independent caps: MAX_RECORDINGS bounds the already-uploaded history kept
+// for on-watch browsing, MAX_PENDING_RECORDINGS is a hard ceiling on not-yet-
+// uploaded recordings so storage can't fill up completely if the server is
+// unreachable for a long time - a recording is never deleted just for being old
+// while it's still waiting to reach the server, only once that second cap is
+// actually exceeded. A recording still being written is never touched.
+export function pruneRecordings() {
+  const uploaded = readIndex().uploaded
+  const recordings = listRecordings().filter((item) => item.fileName !== activeRecording)
+  const done = recordings.filter((item) => uploaded.indexOf(item.fileName) !== -1)
+  const waiting = recordings.filter((item) => uploaded.indexOf(item.fileName) === -1)
 
-  const { messageBuilder } = getApp()._options.globalData
-  messageBuilder.call({ fileName: item.fileName, audio, serverUrl })
+  done
+    .slice(MAX_RECORDINGS)
+    .concat(waiting.slice(MAX_PENDING_RECORDINGS))
+    .forEach((item) => {
+      rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
+      forgetUpload(item.fileName)
+    })
 }
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-// Retries every not-yet-uploaded recording, oldest first, one at a time -
-// not all at once, since MessageBuilder has no queue/backpressure of its own
-// (see RETRY_PACING_MS above). sweepInFlight stops the three retry triggers
-// (new recording, BLE reconnect, app open) from starting a second, competing
-// sweep if two of them fire close together.
+// Reads chunk `index` of the file and returns it base64-encoded. Reads only that
+// slice (not the whole file), so memory stays flat however long the recording is.
+function readChunk(fd, index, size) {
+  const expected = Math.min(CHUNK_BYTES, size - index * CHUNK_BYTES)
+  const buffer = new ArrayBuffer(CHUNK_BYTES)
+  const bytesRead = readSync({ fd, buffer, options: { offset: 0, length: CHUNK_BYTES, position: index * CHUNK_BYTES } })
+
+  // A short read anywhere but the end would put '=' padding mid-stream and
+  // corrupt the joined base64, so it is an error rather than something to send.
+  if (bytesRead !== expected) {
+    throw new Error('read ' + bytesRead + ' of ' + expected + ' bytes at chunk ' + index)
+  }
+  return Buffer.from(buffer.slice(0, bytesRead)).toString('base64')
+}
+
+// One chunk, retried a couple of times on transport errors (timeout, BLE blip).
+function requestChunk(messageBuilder, message, retriesLeft) {
+  return messageBuilder.request(message, { timeout: CHUNK_TIMEOUT_MS }).catch((err) => {
+    if (retriesLeft <= 0) throw err
+    return delay(CHUNK_RETRY_DELAY_MS).then(() => requestChunk(messageBuilder, message, retriesLeft - 1))
+  })
+}
+
+// Sends one recording chunk by chunk. Resolves with the phone's final reply, or
+// { skip: true } for an empty/missing file (nothing to send). Rejects on failure;
+// the error has .restart = true if the phone lost its partial copy of the upload.
+function sendRecording(item, onChunk) {
+  const { messageBuilder } = getApp()._options.globalData
+  const path = item.filePath.replace('data://', '')
+
+  const info = statSync({ path })
+  if (!info || !info.size) return Promise.resolve({ skip: true })
+
+  const size = info.size
+  const total = Math.ceil(size / CHUNK_BYTES)
+  const serverUrl = getServerUrl() // null until an account has been synced; the phone then uses its default
+  const uploadId = String(Date.now()) // identifies this attempt, so a stale partial upload is never mixed in
+
+  const fd = openSync({ path, flag: O_RDONLY })
+  if (typeof fd !== 'number' || fd < 0) return Promise.reject(new Error('cannot open file'))
+
+  const sendFrom = (index) => {
+    let message
+    try {
+      message = { type: 'uploadChunk', fileName: item.fileName, uploadId, index, total, data: readChunk(fd, index, size), serverUrl }
+    } catch (err) {
+      return Promise.reject(err)
+    }
+    onChunk(index, total)
+
+    return requestChunk(messageBuilder, message, CHUNK_RETRIES).then((reply) => {
+      if (!reply || reply.ok !== true) {
+        const err = new Error((reply && reply.error) || 'phone rejected the chunk')
+        err.restart = !!(reply && reply.restart)
+        throw err
+      }
+      if (index < total - 1) return sendFrom(index + 1)
+      if (reply.done !== true) throw new Error('server did not confirm')
+      return reply
+    })
+  }
+
+  const release = () => closeSync(fd)
+  return sendFrom(0).then(
+    (reply) => {
+      release()
+      return reply
+    },
+    (err) => {
+      release()
+      throw err
+    },
+  )
+}
+
+// A phone that lost its partial copy (Side Service restarted) answers 'restart':
+// start that recording over once, from chunk 0, under a new upload id.
+function sendWithRestart(item, onChunk, restartsLeft) {
+  return sendRecording(item, onChunk).catch((err) => {
+    if (err && err.restart && restartsLeft > 0) return sendWithRestart(item, onChunk, restartsLeft - 1)
+    throw err
+  })
+}
+
+function shortReason(err) {
+  const text = String((err && err.message) || err)
+  return text.length > 44 ? text.slice(0, 44) + '...' : text
+}
+
+// Sends every not-yet-uploaded recording, oldest first, strictly one at a time
+// and one chunk at a time. sweepInFlight stops the three retry triggers (new
+// recording, BLE reconnect, app open) from starting a second, competing sweep.
+// The first failure stops the sweep: if the phone or server is unreachable,
+// hammering every other pending recording at it would only waste battery - the
+// next trigger tries again.
 export function retryPendingUploads() {
   if (sweepInFlight) return
 
-  const pending = listRecordings()
-    .filter((item) => !isUploaded(item.fileName))
-    .sort((a, b) => a.timestamp - b.timestamp)
-
+  const pending = pendingRecordings().sort((a, b) => a.timestamp - b.timestamp)
   if (pending.length === 0) return
 
   sweepInFlight = true
 
-  pending
-    .reduce((chain, item) => chain.then(() => uploadRecording(item)).then(() => delay(RETRY_PACING_MS)), Promise.resolve())
+  const sendFrom = (i) => {
+    if (i >= pending.length) return Promise.resolve()
+    const item = pending[i]
+    if (item.fileName === activeRecording) return sendFrom(i + 1)
+
+    return sendWithRestart(
+      item,
+      (chunk, total) => emit({ state: 'sending', index: i + 1, count: pending.length, chunk: chunk + 1, total }),
+      1,
+    ).then((reply) => {
+      if (reply && reply.skip) {
+        // Empty file (a recording aborted before any audio) - it can't be sent or played.
+        rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
+        forgetUpload(item.fileName)
+      } else {
+        markUploaded(item.fileName)
+      }
+      return delay(RETRY_PACING_MS).then(() => sendFrom(i + 1))
+    })
+  }
+
+  sendFrom(0)
     .then(() => {
       sweepInFlight = false
+      emit({ state: 'done', pending: pendingRecordings().length })
+      // A recording finished while this sweep was running wasn't in its snapshot,
+      // so give those (and only those) their own pass. Anything that was in the
+      // snapshot is never retried here, so a failed index write can't loop forever.
+      const sent = pending.map((item) => item.fileName)
+      if (pendingRecordings().some((item) => sent.indexOf(item.fileName) === -1)) retryPendingUploads()
     })
     .catch((err) => {
-      // Should be unreachable - uploadRecording() doesn't itself throw - but
-      // guard against a stuck sweepInFlight flag if something unexpected does.
-      console.log('retryPendingUploads: sweep failed', err)
       sweepInFlight = false
+      console.log('retryPendingUploads: sweep stopped:', err)
+      emit({ state: 'error', message: shortReason(err), pending: pendingRecordings().length })
     })
 }

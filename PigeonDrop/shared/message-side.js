@@ -18,7 +18,11 @@ function initLogger() {
       : { log() {}, warn() {}, debug() {}, error() {} }
 }
 
-const DEBUG = true
+// Patched: the upstream sample ships with this set to true. With it on, sendBin()
+// builds a hex dump of every BLE packet (and request() logs the whole payload)
+// just for the log - for a multi-hundred-KB recording that is megabytes of
+// throw-away strings, and it made sending (and the whole app) crawl or crash.
+const DEBUG = false
 
 export const MESSAGE_SIZE = 3600
 export const MESSAGE_HEADER = 16

@@ -7,7 +7,7 @@
 import { MessageBuilder } from './shared/message'
 import { getPackageInfo } from '@zos/app'
 import * as ble from '@zos/ble'
-import { markUploaded, retryPendingUploads } from './utils/uploadQueue'
+import { retryPendingUploads } from './utils/uploadQueue'
 
 App({
   globalData: {
@@ -22,23 +22,6 @@ App({
 
     this.globalData.messageBuilder = messageBuilder
     messageBuilder.connect()
-
-    // The Side Service's own console.log isn't visible through the Zepp
-    // App's JS App Log (that screen only shows the watch's logs), so it
-    // reports upload results back over the same connection instead - this
-    // is also how the upload queue (utils/uploadQueue.js) finds out a
-    // recording actually made it to the server, since it has no other way
-    // to observe that.
-    messageBuilder.on('call', (fullPayload) => {
-      // payload always arrives as a raw Buffer - buf2Json decodes it back
-      // into the object the Side Service actually sent.
-      const data = messageBuilder.buf2Json(fullPayload.payload)
-      console.log('phone confirmed:', JSON.stringify(data))
-
-      if (data.uploadOk && data.fileName) {
-        markUploaded(data.fileName)
-      }
-    })
 
     // One of the three retry triggers for the upload queue: BLE reconnecting
     // means the phone is reachable again, so anything still pending gets

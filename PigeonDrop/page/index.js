@@ -16,7 +16,13 @@ import {
   resetPalmScreenOff,
 } from '@zos/display'
 import { newRecordingPath, listRecordings } from '../utils/recordings'
-import { pruneRecordings, retryPendingUploads, isUploaded } from '../utils/uploadQueue'
+import {
+  pruneRecordings,
+  retryPendingUploads,
+  pendingRecordings,
+  setActiveRecording,
+  onUploadState,
+} from '../utils/uploadQueue'
 import { MAX_RECORDING_SECONDS } from '../config'
 
 // How long the screen is kept awake after the recording limit, so the result
@@ -123,10 +129,17 @@ Page({
       },
     })
 
+    // Shows upload progress and failures on the status label, so a recording
+    // that doesn't reach the server is visible on the watch instead of failing
+    // silently (Side Service logs can't be seen from here).
+    onUploadState((state) => this.showUploadState(state))
+
     // App-open retry trigger for the upload queue - catches anything that
     // was still pending from a previous session (e.g. the watch was out of
-    // BLE range or the server was down when it was recorded).
-    retryPendingUploads()
+    // BLE range or the server was down when it was recorded). Deferred a moment
+    // so the screen is drawn first: the first chunk is read and encoded
+    // synchronously, and starting it inside build() delayed the whole page.
+    setTimeout(() => retryPendingUploads(), 600)
   },
 
   // Default instructions shown whenever nothing else is going on.
@@ -148,6 +161,10 @@ Page({
     this.keepScreenOn()
 
     const filePath = newRecordingPath()
+    // Tell the upload queue this file is still being written, so a retry
+    // sweep (e.g. triggered by a BLE reconnect mid-recording) can't upload or
+    // prune a half-finished recording.
+    setActiveRecording(filePath.split('/').pop())
     const recorder = create(id.RECORDER)
     recorder.setFormat(codec.OPUS, { target_file: filePath })
     recorder.start()
@@ -170,6 +187,7 @@ Page({
     this.state.recorder = null
     this.state.recording = false
     this.releaseScreen()
+    setActiveRecording(null)
     pruneRecordings()
     retryPendingUploads()
 
@@ -179,7 +197,7 @@ Page({
     // app.js's messageBuilder.on('call', ...) listener, which is also what
     // marks a recording as uploaded - so pendingCount here reflects whatever
     // was still true just before this sweep kicked off.
-    const pendingCount = listRecordings().filter((item) => !isUploaded(item.fileName)).length
+    const pendingCount = pendingRecordings().length
     const sending = 'Отправка...\nВ очереди: ' + pendingCount
     let status
     if (limitReached) {
@@ -251,6 +269,7 @@ Page({
   // file is closed properly instead of left half-written; it is picked up and
   // sent by the app-open retry in build() the next time the app starts.
   onDestroy() {
+    onUploadState(null)
     this.stopStopwatch()
     if (this.state.recording && this.state.recorder) {
       try {
@@ -261,6 +280,21 @@ Page({
       this.state.recorder = null
       this.state.recording = false
       this.releaseScreen()
+      setActiveRecording(null)
+    }
+  },
+
+  // Reflects the upload queue on the status label (see onUploadState). Ignored
+  // while recording, so a background upload can never overwrite the stopwatch.
+  showUploadState(state) {
+    if (this.state.recording) return
+
+    if (state.state === 'sending') {
+      this.updateStatus('Отправка ' + state.index + ' из ' + state.count + '\nчасть ' + state.chunk + ' из ' + state.total)
+    } else if (state.state === 'done') {
+      this.updateStatus(state.pending > 0 ? 'В очереди: ' + state.pending : 'Отправлено\n\n' + this.idleText())
+    } else if (state.state === 'error') {
+      this.updateStatus('Не удалось отправить\n' + state.message + '\nВ очереди: ' + state.pending)
     }
   },
 
