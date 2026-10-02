@@ -1,0 +1,171 @@
+// Main page (page/index.js): recording, stopwatch, screen hold while recording and while uploading.
+
+import * as stubs from './stubs/main-page.mjs'
+import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+let opts, tickFn = null, cleared = 0, now = 1_000_000
+globalThis.Page = (o) => { opts = o }
+globalThis.setInterval = (fn) => { tickFn = fn; return 7 }
+globalThis.clearInterval = () => { cleared++; tickFn = null }
+// Active timeouts only: clearTimeout removes them, so "firing everything left" is what the device would do.
+let timeouts = [], nextTimeoutId = 100
+globalThis.setTimeout = (fn, ms) => { const id = nextTimeoutId++; timeouts.push({ id, fn, ms }); return id }
+globalThis.clearTimeout = (id) => { timeouts = timeouts.filter((t) => t.id !== id) }
+const fireTimeouts = (ms) => { const due = timeouts.filter((t) => t.ms === ms); timeouts = timeouts.filter((t) => t.ms !== ms); due.forEach((t) => t.fn()) }
+Date.now = () => now
+const S = stubPath('main-page.mjs')
+const PAGE = generate('page/index.js', {
+  '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S, '@zos/display': S,
+  '../utils/recordings': S, '../utils/uploadQueue': S, '../config': S,
+})
+await import(fileUrl(PAGE))
+const mk = () => Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) })
+const ok = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL ') + msg); if (!cond) process.exitCode = 1 }
+const last = () => stubs.texts[stubs.texts.length - 1]
+const reset = () => { stubs.log.length = 0; stubs.texts.length = 0; cleared = 0 }
+const released = () => stubs.log.includes('resetPageBrightTime') && stubs.log.includes('resetDropWristScreenOff') && stubs.log.includes('resetPalmScreenOff')
+const heldFor = (ms) => stubs.log.includes('setPageBrightTime ' + (ms + 5000)) && stubs.log.includes('pauseDropWristScreenOff ' + ms) && stubs.log.includes('pausePalmScreenOff ' + ms)
+const UPLOAD = 60000
+const holdTimers = () => timeouts.filter((t) => t.ms === UPLOAD).length
+
+console.log('--- 1. normal recording: screen held, stopwatch counts, stop starts the upload hold ---')
+let page = mk(); page.build(); reset(); timeouts.length = 0
+page.toggleRecording()
+ok(heldFor(5000), 'recording holds the screen for the limit (5 s) + slack -> ' + stubs.log.slice(0, 4).join(' | '))
+ok(stubs.log.indexOf('recorder.start') > stubs.log.indexOf('pausePalmScreenOff 5000'), 'screen held BEFORE recorder.start (no gap)')
+ok(last() === 'Идёт запись\n00:00\nНажмите ещё раз,\nчтобы остановить', 'initial text shows 00:00 -> ' + JSON.stringify(last()))
+now += 1000; tickFn(); ok(last().includes('\n00:01\n'), 'after 1 s shows 00:01')
+now += 2400; tickFn(); ok(last().includes('\n00:03\n'), 'after 3.4 s shows 00:03 (wall clock, floored)')
+reset()
+page.toggleRecording()
+ok(stubs.log.includes('recorder.stop'), 'stop: recorder stopped')
+ok(heldFor(UPLOAD), 'stop: screen re-held for the upload (60 s) -> ' + stubs.log.filter((l) => /Bright|Off/.test(l)).join(' | '))
+ok(holdTimers() === 1, 'a single 60 s timer will end the hold')
+ok(stubs.log.lastIndexOf('resetPageBrightTime') < stubs.log.lastIndexOf('setPageBrightTime 65000'), 'the hold is re-armed (reset, then set), not left half-released')
+ok(cleared === 1 && tickFn === null, 'stopwatch interval cleared')
+ok(stubs.log.indexOf('pruneRecordings') > stubs.log.indexOf('recorder.stop') && stubs.log.includes('retryPendingUploads'), 'stop still prunes and kicks the upload queue')
+ok(last().startsWith('Отправка...'), 'status after stop -> ' + JSON.stringify(last()))
+
+console.log('--- 2. recording limit auto-stops, sends, and holds the screen for the upload ---')
+page = mk(); page.build(); reset(); timeouts.length = 0; now = 2_000_000
+page.toggleRecording()
+for (let i = 1; i <= 4; i++) { now += 1000; tickFn() }
+ok(page.state.recording === true && last().includes('\n00:04\n'), 'still recording at 4 s')
+reset(); now += 1000; tickFn()
+ok(page.state.recording === false && stubs.log.includes('recorder.stop') && stubs.log.includes('retryPendingUploads'), 'limit reached at 5 s: recording stopped and queued for upload')
+ok(last().startsWith('Лимит записи\nдостигнут'), 'user told why -> ' + JSON.stringify(last()))
+ok(heldFor(UPLOAD) && timeouts.length === 1 && cleared === 1, 'auto-stop also holds the screen for the upload; stopwatch cleared')
+
+console.log('--- 3. page destroyed: mid-recording and mid-upload ---')
+page = mk(); page.build(); reset(); timeouts.length = 0; now = 3_000_000
+page.toggleRecording(); reset()
+page.onDestroy()
+ok(stubs.log.includes('recorder.stop') && released() && cleared === 1, 'onDestroy mid-recording stops recorder, releases screen, clears timer')
+reset(); page.onDestroy(); ok(JSON.stringify(stubs.log) === '["onUploadState null"]' && cleared === 0, 'onDestroy while idle only unsubscribes from upload state -> ' + JSON.stringify(stubs.log))
+page = mk(); page.build(); page.toggleRecording(); page.toggleRecording(); reset()
+ok(page.state.uploadHoldTimer !== null, 'upload hold active before destroy')
+page.onDestroy()
+ok(released() && page.state.uploadHoldTimer === null && holdTimers() === 0, 'onDestroy mid-upload releases the screen and clears the 60 s timer')
+
+console.log('--- 4. display call fails: recording still starts, failure is logged ---')
+page = mk(); page.build(); reset(); stubs.setDisplayResult(-1)
+const logged = []; const orig = console.log; console.log = (...a) => logged.push(a.join(' '))
+page.toggleRecording(); console.log = orig
+ok(page.state.recording === true, 'recording started despite display error')
+ok(logged.filter((l) => l.startsWith('display call failed')).length === 3, 'all three failures logged -> ' + logged.filter((l) => l.startsWith('display')).join(' | '))
+stubs.setDisplayResult(0)
+
+console.log('--- 6. upload queue integration ---')
+page = mk(); reset(); timeouts.length = 0; page.build()
+ok(stubs.log.includes('onUploadState set'), 'build subscribes to upload state')
+ok(!stubs.log.includes('retryPendingUploads') && timeouts.length === 1 && timeouts[0].ms === 600, 'app-open sweep is DEFERRED (600 ms), not run inside build()')
+ok(page.state.uploadHoldTimer === null && !stubs.log.some((l) => /Bright|Off/.test(l)), 'build() itself holds nothing; the hold starts with the first chunk (see section 8)')
+timeouts[0].fn(); ok(stubs.log.includes('retryPendingUploads'), '...and does run when the timer fires')
+reset(); now = 6_000_000; page.toggleRecording()
+ok(stubs.log.includes('setActive voice_1.opus'), 'start: queue told which file is being written -> ' + stubs.log.find((l) => l.startsWith('setActive')))
+ok(stubs.log.indexOf('setActive voice_1.opus') < stubs.log.indexOf('recorder.start'), '...before the recorder starts')
+const before = stubs.texts.length; stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 3, total: 11 })
+ok(stubs.texts.length === before, 'upload status is IGNORED while recording (never overwrites the stopwatch)')
+reset(); page.toggleRecording()
+ok(stubs.log.indexOf('setActive null') > stubs.log.indexOf('recorder.stop') && stubs.log.indexOf('setActive null') < stubs.log.indexOf('pruneRecordings'), 'stop: active file cleared after the recorder stops and BEFORE pruning/sweep')
+reset(); stubs.listener({ state: 'sending', index: 2, count: 3, chunk: 4, total: 11 })
+ok(last() === 'Отправка 2 из 3\nчасть 4 из 11', 'sending -> ' + JSON.stringify(last()))
+stubs.listener({ state: 'done', pending: 2 }); ok(last() === 'В очереди: 2', 'done with leftovers -> ' + JSON.stringify(last()))
+stubs.listener({ state: 'done', pending: 0 }); ok(last().startsWith('Отправлено'), 'done -> ' + JSON.stringify(last().split('\n')[0]))
+stubs.listener({ state: 'error', message: 'Timed out in 60000ms.', pending: 3 })
+ok(last() === 'Не удалось отправить\nTimed out in 60000ms.\nВ очереди: 3', 'error shown, not silent -> ' + JSON.stringify(last()))
+reset(); page.toggleRecording(); reset(); page.onDestroy()
+ok(stubs.log.includes('onUploadState null') && stubs.log.includes('setActive null') && stubs.log.includes('recorder.stop'), 'onDestroy unsubscribes, closes the recording and clears the active file')
+
+console.log('--- 7. screen hold while the recording is being sent ---')
+// 7a. success: held through sending and leftovers, released when everything is sent
+page = mk(); page.build(); page.toggleRecording(); page.toggleRecording(); reset()
+stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 1, total: 12 })
+stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 12, total: 12 })
+ok(!released(), '7a: still held while chunks are being sent')
+stubs.listener({ state: 'done', pending: 1 })
+ok(!released() && page.state.uploadHoldTimer !== null, '7a: still held when "done" leaves something in the queue')
+stubs.listener({ state: 'done', pending: 0 })
+ok(released() && page.state.uploadHoldTimer === null && holdTimers() === 0, '7a: released as soon as everything is sent; the 60 s timer is gone')
+ok(last().startsWith('Отправлено'), '7a: "Отправлено" is what the user sees -> ' + JSON.stringify(last().split('\n')[0]))
+// 7b. failure: the reason stays readable until the 60 s window ends
+page = mk(); page.build(); page.toggleRecording(); page.toggleRecording(); reset()
+stubs.listener({ state: 'error', message: 'Timed out', pending: 1 })
+ok(!released() && page.state.uploadHoldTimer !== null, '7b: screen stays on after an error so the reason can be read')
+fireTimeouts(UPLOAD)
+ok(released() && page.state.uploadHoldTimer === null, '7b: ...and is released when the 60 s window ends')
+// 7c. nothing sent for 60 s (e.g. phone unreachable, no events at all): the cap still releases the screen
+page = mk(); page.build(); page.toggleRecording(); page.toggleRecording(); reset()
+fireTimeouts(UPLOAD)
+ok(released(), '7c: hard 60 s cap releases the screen even if no upload event ever arrives')
+// 7d. new recording during the hold: the hold timer must not release the screen mid-recording
+page = mk(); page.build(); page.toggleRecording(); page.toggleRecording()
+reset(); page.toggleRecording()
+ok(page.state.uploadHoldTimer === null && holdTimers() === 0, '7d: starting a recording cancels the pending upload-hold timer')
+ok(heldFor(5000), '7d: recording hold replaces the upload hold -> ' + stubs.log.filter((l) => /Bright|Off/.test(l)).join(' | '))
+reset(); fireTimeouts(UPLOAD); stubs.listener({ state: 'done', pending: 0 })
+ok(!released() && page.state.recording === true, '7d: late upload events during the new recording never release the screen')
+// 7e. nothing to send after stop: no hold is kept
+stubs.setPending(0)
+page = mk(); page.build(); reset(); page.toggleRecording(); page.toggleRecording()
+ok(released() && page.state.uploadHoldTimer === null && holdTimers() === 0, '7e: empty queue after stop -> screen released immediately, no timer left')
+ok(last().startsWith('Отправлено'), '7e: status -> ' + JSON.stringify(last().split('\n')[0]))
+stubs.setPending(1)
+// 7f. recording started and stopped repeatedly: never more than one timer outstanding
+page = mk(); page.build(); timeouts.length = 0
+for (let i = 0; i < 4; i++) { page.toggleRecording(); page.toggleRecording() }
+ok(holdTimers() === 1, '7f: after 4 quick record/stop cycles exactly one hold timer is outstanding -> ' + holdTimers())
+
+console.log('--- 8. older queued recordings (app open / reconnect) hold the screen while they are sent ---')
+now = 9_000_000
+// 8a. sweep at app open: first chunk starts a hold, progress renews it, done releases it
+page = mk(); page.build(); reset(); timeouts.length = 0
+stubs.listener({ state: 'sending', index: 1, count: 2, chunk: 1, total: 11 })
+ok(heldFor(UPLOAD) && holdTimers() === 1, '8a: first chunk of an old recording starts a 60 s hold -> ' + stubs.log.filter((l) => /Bright|Off/.test(l)).join(' | '))
+reset(); now += 10_000; stubs.listener({ state: 'sending', index: 1, count: 2, chunk: 2, total: 11 })
+ok(!stubs.log.some((l) => /Bright|Off|reset/.test(l)) && holdTimers() === 1, '8a: a chunk 10 s later does not re-arm the display (50 s still left)')
+reset(); now += 25_000; stubs.listener({ state: 'sending', index: 1, count: 2, chunk: 3, total: 11 })
+ok(heldFor(UPLOAD) && holdTimers() === 1, '8a: with under half the window left, progress renews it - and only one timer exists -> timers ' + holdTimers())
+reset(); stubs.listener({ state: 'sending', index: 2, count: 2, chunk: 11, total: 11 })
+ok(!released(), '8a: still held while the second old recording is sent')
+stubs.listener({ state: 'done', pending: 0 })
+ok(released() && holdTimers() === 0 && page.state.uploadHoldTimer === null, '8a: released as soon as the old recordings are all sent')
+// 8b. a long queue is not cut off at 60 s because progress keeps renewing the window
+page = mk(); page.build(); reset(); timeouts.length = 0; now = 10_000_000
+let renewals = 0
+for (let s = 0; s <= 300; s += 5) { const before = stubs.log.filter((l) => l === 'setPageBrightTime 65000').length; stubs.listener({ state: 'sending', index: 1, count: 9, chunk: 1, total: 11 }); if (stubs.log.filter((l) => l === 'setPageBrightTime 65000').length > before) renewals++; now += 5_000 }
+ok(renewals >= 8 && renewals <= 12 && holdTimers() === 1, '8b: 5 minutes of steady progress -> ' + renewals + ' renewals (about one per 30 s), never a gap, one timer')
+// 8c. progress stops (phone unreachable): the hold runs out on its own
+reset(); fireTimeouts(UPLOAD)
+ok(released() && page.state.uploadHoldTimer === null, '8c: no further chunks -> the 60 s window ends and the screen is released')
+// 8d. error: reason stays readable until the window ends; a retry that makes progress holds again
+page = mk(); page.build(); reset(); timeouts.length = 0
+stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 1, total: 4 }); reset(); stubs.listener({ state: 'error', message: 'Timed out', pending: 1 })
+ok(!released() && last().startsWith('Не удалось отправить'), '8d: after an error the screen stays on and the reason is shown')
+now += 40_000; reset(); stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 1, total: 4 })
+ok(heldFor(UPLOAD) && holdTimers() === 1, '8d: a retry that starts sending renews the hold (one timer)')
+// 8e. a recording takes the screen over from an upload hold, and uploads during it never touch the hold
+page = mk(); page.build(); timeouts.length = 0; stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 1, total: 4 })
+reset(); page.toggleRecording()
+ok(heldFor(5000) && holdTimers() === 0, '8e: recording replaces the upload hold and cancels its timer')
+reset(); stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 2, total: 4 })
+ok(holdTimers() === 0 && !stubs.log.some((l) => /Bright|Off/.test(l)), '8e: sweep progress during a recording changes nothing about the screen')

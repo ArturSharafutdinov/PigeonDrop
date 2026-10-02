@@ -4,7 +4,7 @@
   "description": "Zepp OS Mini Program: PigeonDrop — record and send voice messages from your watch",
   "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test \"test/*.test.mjs\""
   },
   "author": "",
   "license": "ISC",
