@@ -25,8 +25,11 @@ import {
 } from '../utils/uploadQueue'
 import { MAX_RECORDING_SECONDS } from '../config'
 
-// How long the screen is kept awake after a recording stops, so it can be sent
-// to the server before the display sleeps and the Mini Program is closed.
+// How long the screen is kept awake for an upload, so it can be sent to the
+// server before the display sleeps and the Mini Program is closed. It is a
+// window, not a total: it is renewed for as long as chunks keep being sent (see
+// extendUploadHold), so a long queue is not cut off, while a stalled upload still
+// lets the screen go dark once nothing has moved for this long.
 const UPLOAD_SCREEN_HOLD_MS = 60 * 1000
 
 // Extra time on the page-brightness timeout beyond a hold: the stopwatch ticks
@@ -51,7 +54,8 @@ Page({
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
     startedAt: null, // Date.now() when the current recording began (drives the stopwatch)
     ticker: null, // setInterval id of the once-a-second stopwatch refresh, or null when idle
-    uploadHoldTimer: null, // setTimeout id that ends the screen hold after a recording, or null when no hold is active
+    uploadHoldTimer: null, // setTimeout id that ends the upload screen hold, or null when no hold is active
+    uploadHoldUntil: 0, // Date.now() at which the current upload hold runs out
   },
 
   build() {
@@ -237,13 +241,25 @@ Page({
     resetPalmScreenOff()
   },
 
-  // After a recording stops, the screen stays on while it is being sent - for
-  // at most UPLOAD_SCREEN_HOLD_MS. The hold ends early once everything is sent
-  // (showUploadState) and is replaced if a new recording starts (startRecording).
+  // The screen stays on while recordings are being sent - after a recording
+  // stops, and also for older ones still queued (sent when the app opens or the
+  // phone reconnects), which used to be cut off when the screen went dark. Each
+  // hold lasts UPLOAD_SCREEN_HOLD_MS and is renewed by upload progress
+  // (extendUploadHold). It ends early once everything is sent (showUploadState)
+  // and is replaced if a new recording starts (startRecording).
   holdScreenForUpload() {
     this.cancelUploadHold()
     this.keepScreenOn(UPLOAD_SCREEN_HOLD_MS)
+    this.state.uploadHoldUntil = Date.now() + UPLOAD_SCREEN_HOLD_MS
     this.state.uploadHoldTimer = setTimeout(() => this.endUploadHold(), UPLOAD_SCREEN_HOLD_MS)
+  },
+
+  // Called for every chunk sent. Starts a hold if none is active, and renews it
+  // once less than half of it is left - not on every chunk, which would mean
+  // re-arming the display three times a second for no benefit.
+  extendUploadHold() {
+    if (this.state.uploadHoldTimer !== null && this.state.uploadHoldUntil - Date.now() > UPLOAD_SCREEN_HOLD_MS / 2) return
+    this.holdScreenForUpload()
   },
 
   endUploadHold() {
@@ -322,6 +338,7 @@ Page({
     if (this.state.recording) return
 
     if (state.state === 'sending') {
+      this.extendUploadHold()
       this.updateStatus('Отправка ' + state.index + ' из ' + state.count + '\nчасть ' + state.chunk + ' из ' + state.total)
     } else if (state.state === 'done') {
       this.updateStatus(state.pending > 0 ? 'В очереди: ' + state.pending : 'Отправлено\n\n' + this.idleText())
