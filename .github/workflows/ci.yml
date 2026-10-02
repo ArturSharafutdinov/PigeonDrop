@@ -1,0 +1,158 @@
+name: CI/CD
+
+# Checks run on every push to main and on every pull request. Only a push to
+# main that touches server/, or a manual run ("Run workflow", which always
+# deploys), can deploy, and only the server is deployed: the watch app is
+# published through Zepp, not from here. The deploy job needs the three
+# Coolify secrets described in server/DEPLOY.md; without them it just says so
+# and finishes, so this workflow is safe to push before Coolify is set up.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server tests and image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: server
+      - name: Run tests
+        run: npm test
+        working-directory: server
+      # Catches a broken Dockerfile or lockfile before Coolify tries to build it.
+      - name: Build the Docker image
+        run: docker build --tag pigeondrop-server server
+
+  watch-app:
+    name: Watch app tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The tests load the app's real source with the Zepp OS modules stubbed, so nothing needs installing.
+      - name: Run tests
+        run: npm test
+        working-directory: PigeonDrop
+
+  watch-build:
+    name: Watch app build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install the Zepp OS CLI
+        run: npm install --global @zeppos/zeus-cli@1.9.3
+      # config.js is gitignored (it holds the real server URL); the example is enough to compile.
+      - name: Build the app
+        run: |
+          cp config.example.js config.js
+          zeus build < /dev/null
+          ls dist
+        working-directory: PigeonDrop
+
+  deploy:
+    name: Deploy to Coolify
+    needs: server
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pushes that only touch the watch app or the docs must not restart the server.
+      - name: Check whether the server changed
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # When the previous commit is unknown (first push, force push) deploy to be safe.
+          deploy=true
+          if [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            git diff --quiet "$BEFORE" "$GITHUB_SHA" -- server && deploy=false
+          fi
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+          echo "Deploy the server: $deploy"
+
+      - name: Deploy and wait for Coolify
+        if: steps.changed.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ -z "$COOLIFY_URL" ] || [ -z "$COOLIFY_TOKEN" ] || [ -z "$COOLIFY_APP_UUID" ]; then
+            echo "::warning::The Coolify secrets are not set, so nothing was deployed (see server/DEPLOY.md)"
+            exit 0
+          fi
+
+          base="${COOLIFY_URL%/}"
+          auth="Authorization: Bearer $COOLIFY_TOKEN"
+          trigger() {
+            curl -sS -o response.json -w '%{http_code}' -X "$1" -H "$auth" -H 'Accept: application/json' \
+              "$base/api/v1/deploy?uuid=$COOLIFY_APP_UUID&force=false"
+          }
+
+          code=$(trigger POST)
+          # Older Coolify versions only accept GET on this route.
+          if [ "$code" = 405 ]; then code=$(trigger GET); fi
+          if [ "$code" != 200 ]; then
+            echo "::error::Coolify answered HTTP $code"
+            cat response.json
+            exit 1
+          fi
+
+          deployment=$(jq -r '.deployments[0].deployment_uuid // empty' response.json)
+          if [ -z "$deployment" ]; then
+            echo "::error::Coolify did not return a deployment id"
+            cat response.json
+            exit 1
+          fi
+          echo "Deployment $deployment queued"
+
+          # Up to 15 minutes. A failed deployment fails this job, so a broken release is visible.
+          for attempt in $(seq 1 90); do
+            status=$(curl -sS -H "$auth" "$base/api/v1/deployments/$deployment" | jq -r '.status // "unknown"' || echo unknown)
+            echo "[$attempt] $status"
+            case "$status" in
+              finished)
+                echo "Deployed."
+                exit 0
+                ;;
+              failed | error | cancelled*)
+                echo "::error::The deployment ended as '$status' - see its log in Coolify"
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "::warning::The deployment had not finished after 15 minutes - check Coolify"

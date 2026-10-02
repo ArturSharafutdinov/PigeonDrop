@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Three independent Node/JS projects living side by side, connected only by the runtime data flow described below (no shared package.json, no monorepo tooling):
 
 - **`PigeonDrop/`** — the Zepp OS 4.0 Mini Program itself (device app + Side Service). This is the core deliverable.
-- **`server/`** — a minimal standalone Node.js HTTP server that receives uploads from the phone. A prototype, not production infrastructure (no auth, JSON-file storage); run locally and exposed to the phone through an ngrok tunnel.
+- **`server/`** — a minimal standalone Node.js HTTP server that receives uploads from the phone. A prototype, not production infrastructure (no auth, JSON-file storage); runs locally behind an ngrok tunnel, or in Docker on the owner's VPS via Coolify (see `server/DEPLOY.md` and the CI/CD section below).
 - **`ARCHITECTURE.md`** (root) — up-to-date narrative overview of the whole system: data flow, per-file responsibilities, and the reasoning behind non-obvious design decisions (custom `.opus` framing, round-display safe zone, the account/QR config flow, etc). **Read this first** before making non-trivial changes — it captures "why" context that isn't in code comments.
 - **`API_SPEC.md`** (root) — the HTTP contract for `server/`'s endpoints (`/messages`, `/accounts/*`, `/setup`, `/uploads`). The watch and Side Service depend only on this contract, not on the Node implementation — any server change must keep it intact.
 - **`REQUIREMENTS_ANALYSIS.md`** (root) — Russian-language analysis of requirements for the planned SaaS platform (backend, flow engine, frontend, apps for other watch platforms): workstreams, risks, load scenarios, open questions. No stack has been chosen yet; a stack/tool comparison is the next planned document.
@@ -15,7 +15,7 @@ Three independent Node/JS projects living side by side, connected only by the ru
 
 ## Language
 
-Talk to the user in Russian. User-facing docs (`ARCHITECTURE.md`, `API_SPEC.md`, `REQUIREMENTS_ANALYSIS.md`) are written in Russian; this file and other Claude-only files stay in English.
+Talk to the user in Russian. User-facing docs (`ARCHITECTURE.md`, `API_SPEC.md`, `REQUIREMENTS_ANALYSIS.md`, `server/DEPLOY.md`) are written in Russian; this file and other Claude-only files stay in English.
 
 ## Git
 
@@ -49,7 +49,10 @@ zeus cache clean
 ```
 Clears simulator/build cache — useful when UI or icon changes don't seem to take effect.
 
-There is no test suite (`package.json`'s `test` script is a placeholder) and no lint script configured.
+```bash
+npm test
+```
+Runs the watch-app tests (`test/*.test.mjs`, plain node:test, no install needed). They load the app's real source files with the `@zos/*` modules stubbed (`test/helpers/load.mjs` rewrites each import; an unmapped import fails the test on purpose) - they cover the chunked upload protocol and its failure modes, the main page's screen hold, the settings page, and that `config.example.js` has every constant the code imports. They run on stubs, so they do not replace checking screen/BLE/memory behaviour on the watch. No lint script is configured.
 
 ### server (test upload server)
 
@@ -66,7 +69,15 @@ Standalone CLI for the opus→wav converter also used internally by `server.js` 
 
 To expose the local server to the watch/phone over the internet, an ngrok tunnel is used; the resulting URL must be manually placed in **both** `PigeonDrop/config.js`'s `SERVER_URL`/`WEB_APP_BASE_URL` and `server/server.js`'s `DEFAULT_SERVER_URL` (pass it as an env var: `DEFAULT_SERVER_URL=https://... npm start`) — the server needs to know its own public address to resolve accounts' default `serverUrl` correctly. Never enter or manage the ngrok authtoken yourself — that's the user's action (`ngrok config add-authtoken <token>`).
 
-`STORAGE_DIR` env var controls where `data/` and `uploads/` live (defaults to next to `server.js`). There is no hosted deployment: the server only runs locally behind the tunnel.
+`STORAGE_DIR` env var controls where `data/` and `uploads/` live (defaults to next to `server.js`; `/data` in the Docker image).
+
+```bash
+npm test    # from server/: starts the real server.js on a free port with a temp STORAGE_DIR
+```
+
+### CI/CD (server on the VPS via Coolify)
+
+`server/Dockerfile` builds the image Coolify runs; `.github/workflows/ci.yml` runs the server tests + image build, the watch-app tests, a `zeus build`, and then (push to `main` touching `server/`, or a manual run) calls the Coolify API and waits for the deployment. Coolify's own auto-deploy must stay OFF, otherwise it deploys before the checks. Setup steps and the three GitHub secrets (`COOLIFY_URL`, `COOLIFY_TOKEN`, `COOLIFY_APP_UUID`) are in `server/DEPLOY.md`; never ask the user to paste the token into chat. The pipeline has only been exercised against a mock of the Coolify API, not a real Coolify or GitHub Actions run.
 
 ## Architecture
 
