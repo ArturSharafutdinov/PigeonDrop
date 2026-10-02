@@ -328,3 +328,16 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   log(`PigeonDrop test server listening on http://localhost:${PORT}`)
 })
+
+// Docker (and so Coolify) stops the old container with SIGTERM on every redeploy.
+// As PID 1 Node ignores that signal unless it has a handler, so without this
+// Docker would wait 10 s and then kill the process, possibly mid-upload. Stop
+// accepting connections, let requests already in flight finish, then exit; the
+// timer is the backstop for a connection that never closes.
+function shutdown(signal) {
+  log(signal, 'received - shutting down')
+  server.close(() => process.exit(0))
+  setTimeout(() => process.exit(0), 8000).unref()
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))

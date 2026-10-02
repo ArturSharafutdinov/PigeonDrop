@@ -4,7 +4,8 @@
   "description": "Minimal test server that receives PigeonDrop voice recordings",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "license": "ISC",
   "dependencies": {
