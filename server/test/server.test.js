@@ -13,6 +13,7 @@ const fs = require('node:fs')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const OpusScript = require('opusscript')
 
 const SERVER_DIR = path.join(__dirname, '..')
@@ -77,8 +78,10 @@ const json = (base, method, route, body) =>
 let storageDir
 let port
 let server
+let packer // the app's own Ogg/Opus packer (PigeonDrop/utils/oggOpus.js), exactly as the phone runs it
 
 before(async () => {
+  packer = await import(pathToFileURL(path.join(SERVER_DIR, '..', 'PigeonDrop', 'utils', 'oggOpus.js')).href)
   storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pigeondrop-server-'))
   port = await freePort()
   server = await startServer(storageDir, port)
@@ -156,6 +159,74 @@ test('POST /messages saves the recording, converts it to wav, lists it, and is i
 
   const listing = await (await fetch(server.base + '/uploads')).text()
   assert.ok(listing.includes(first.body.savedAs) && listing.includes(first.body.wavFile))
+})
+
+const wavSamples = async (fileName) => {
+  const wav = Buffer.from(await (await fetch(server.base + '/uploads/' + fileName)).arrayBuffer())
+  return wav.subarray(44)
+}
+const upload = (fileName, bytes) => json(server.base, 'POST', '/messages', { fileName, audio: Buffer.from(bytes).toString('base64') })
+
+test('an Ogg/Opus upload is saved as is, served as audio, and decodes to the same sound as the Zepp original', async () => {
+  const zepp = makeRecording(3)
+  const packed = packer.zeppToOggOpus(new Uint8Array(zepp))
+  assert.equal(packed.packets, 150)
+  assert.equal(packed.droppedBytes, 0)
+
+  const legacy = await upload('legacy_3.opus', zepp)
+  const ogg = await upload('ogg_3.opus', packed.ogg)
+  assert.equal(ogg.body.ok, true)
+  assert.ok(ogg.body.wavFile, 'the Ogg upload was converted')
+  assert.equal(ogg.body.bytesReceived, packed.ogg.length)
+
+  const saved = fs.readFileSync(path.join(storageDir, 'uploads', ogg.body.savedAs))
+  assert.ok(saved.equals(Buffer.from(packed.ogg)), 'the saved .opus is byte-identical to the Ogg that was sent')
+
+  const legacyWav = await wavSamples(legacy.body.wavFile)
+  const oggWav = await wavSamples(ogg.body.wavFile)
+  assert.equal(oggWav.length, 3 * 32000)
+  assert.ok(oggWav.equals(legacyWav), 'the same recording sounds identical whether it arrives as Ogg/Opus or in Zepp framing')
+
+  const oggRes = await fetch(server.base + '/uploads/' + ogg.body.savedAs)
+  assert.equal(oggRes.headers.get('content-type'), 'audio/ogg', 'browsers can play the Ogg directly')
+  const legacyRes = await fetch(server.base + '/uploads/' + legacy.body.savedAs)
+  assert.equal(legacyRes.headers.get('content-type'), 'application/octet-stream', 'a Zepp-framed file is not claimed to be audio')
+})
+
+test('a damaged Ogg upload is still stored, but is not converted and does not crash the server', async () => {
+  const ogg = Buffer.from(packer.zeppToOggOpus(new Uint8Array(makeRecording(2))).ogg)
+
+  const flipped = Buffer.from(ogg)
+  flipped[flipped.length - 10] ^= 0xff // inside the last page: its checksum no longer matches
+  const bad = await upload('ogg_flipped.opus', flipped)
+  assert.equal(bad.body.ok, true)
+  assert.equal(bad.body.wavFile, null, 'a failed checksum is refused rather than decoded into noise')
+
+  const cut = await upload('ogg_cut.opus', ogg.subarray(0, ogg.length - 30))
+  assert.equal(cut.body.ok, true)
+  assert.equal(cut.body.wavFile, null, 'a truncated Ogg is not decoded')
+
+  const health = await fetch(server.base + '/setup')
+  assert.equal(health.status, 200, 'and the server is still up')
+})
+
+test('a recording cut short mid-packet is trimmed, not lost (both formats)', async () => {
+  const zepp = makeRecording(2)
+  const cutAt = zepp.length - 13 // somewhere inside the last packet
+  const truncated = zepp.subarray(0, cutAt)
+
+  const packed = packer.zeppToOggOpus(new Uint8Array(truncated))
+  assert.equal(packed.packets, 99, 'the last, incomplete packet is dropped and the 99 complete ones are kept')
+  assert.ok(packed.droppedBytes > 0 && packed.droppedBytes < 13 + 200)
+
+  const viaOgg = await upload('ogg_trimmed.opus', packed.ogg)
+  const viaZepp = await upload('zepp_trimmed.opus', truncated)
+  assert.ok(viaOgg.body.wavFile && viaZepp.body.wavFile, 'both paths still produce a wav')
+  const a = await wavSamples(viaOgg.body.wavFile)
+  assert.equal(a.length, 99 * 640)
+  assert.ok(a.equals(await wavSamples(viaZepp.body.wavFile)))
+
+  assert.throws(() => packer.zeppToOggOpus(new Uint8Array(zepp.subarray(0, 7))), /no audio packets/, 'a file with no complete packet cannot be wrapped')
 })
 
 test('POST /messages rejects malformed requests', async () => {

@@ -36,7 +36,7 @@
 const http = require('http')
 const fs = require('fs')
 const path = require('path')
-const { opus2wav } = require('./convert-to-wav')
+const { opus2wav, isOggOpus } = require('./convert-to-wav')
 const accountsStore = require('./accounts-store')
 const uploadsStore = require('./uploads-store')
 const { log } = require('./logger')
@@ -275,6 +275,23 @@ function handleListUploads(req, res) {
 
 const UPLOAD_CONTENT_TYPES = { '.wav': 'audio/wav', '.opus': 'application/octet-stream' }
 
+// A saved .opus is a standard Ogg/Opus file when it came from the current app
+// (browsers can play it) and Zepp's private framing when it came from an older
+// one (they can't) - so look at the file rather than at its name.
+function contentTypeFor(filePath, fileName) {
+  if (path.extname(fileName) === '.opus') {
+    const head = Buffer.alloc(4)
+    const fd = fs.openSync(filePath, 'r')
+    try {
+      fs.readSync(fd, head, 0, 4, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+    if (isOggOpus(head)) return 'audio/ogg'
+  }
+  return UPLOAD_CONTENT_TYPES[path.extname(fileName)] || 'application/octet-stream'
+}
+
 function handleDownloadUpload(req, res, fileName) {
   // Reject anything that isn't a plain filename within UPLOADS_DIR itself -
   // no path traversal via '..' or a nested path.
@@ -289,8 +306,7 @@ function handleDownloadUpload(req, res, fileName) {
     return
   }
 
-  const contentType = UPLOAD_CONTENT_TYPES[path.extname(fileName)] || 'application/octet-stream'
-  res.writeHead(200, { 'Content-Type': contentType })
+  res.writeHead(200, { 'Content-Type': contentTypeFor(filePath, fileName) })
   res.end(fs.readFileSync(filePath))
 }
 

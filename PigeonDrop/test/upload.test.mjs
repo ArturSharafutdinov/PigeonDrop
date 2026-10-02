@@ -4,11 +4,14 @@
 import fs from 'fs'; import os from 'os'; import path from 'path'; import crypto from 'crypto'
 import { ctl, resetFds, fds } from './stubs/fs.mjs'
 import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+import { framedRecording, readOgg, sameAudio, samePackets, zeppPackets } from './helpers/ogg.mjs'
 // utils/uploadQueue.js and app-side/uploads.js are the real source files; only the platform pieces are stubbed.
 const FS = stubPath('fs.mjs'), DEPS = stubPath('upload-deps.mjs')
 const RECORDINGS = generate('utils/recordings.js', { '@zos/fs': FS })
 const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './account': DEPS, '../config': DEPS })
-const UPLOADS = generate('app-side/uploads.js', {})
+const OGG = generate('utils/oggOpus.js', {})
+const BASE64 = generate('app-side/base64.js', {})
+const UPLOADS = generate('app-side/uploads.js', { '../utils/oggOpus': OGG, './base64': BASE64 })
 const realSetTimeout = setTimeout
 globalThis.setTimeout = (fn) => realSetTimeout(fn, 0)           // collapse every pacing/retry delay
 let T = 0, failures = 0
@@ -46,34 +49,35 @@ async function world() {
 }
 function addRecording(w, name, bytes) {
   const dir = path.join(ctl.root, 'voice_messages'); fs.mkdirSync(dir, { recursive: true })
-  const buf = Buffer.isBuffer(bytes) ? bytes : crypto.randomBytes(bytes)
+  // A recording in Zepp's real framing (the phone now wraps it into Ogg/Opus, which needs valid packets); 0 means an empty file.
+  const buf = Buffer.isBuffer(bytes) ? bytes : bytes === 0 ? Buffer.alloc(0) : framedRecording(bytes)
   fs.writeFileSync(path.join(dir, name), buf); return buf
 }
 const uploaded = () => { const f = path.join(ctl.root, 'uploads.json'); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).uploaded : [] }
 const files = () => fs.readdirSync(path.join(ctl.root, 'voice_messages'))
 const finished = (w) => until(() => w.states.some((s) => s.state === 'done' || s.state === 'error'))
 
-console.log('1. 60 s recording (~160 KB): chunked, strictly sequential, server gets the identical body')
+console.log('1. 60 s recording (~160 KB): chunked, strictly sequential, the server gets the same audio wrapped as Ogg/Opus')
 { const w = await world(); const file = addRecording(w, 'voice_1000.opus', 163840)
   w.Q.retryPendingUploads(); await finished(w)
   ok(w.requests.length === 11 && w.requests.every((r, i) => r.index === i), '11 chunks in order 0..10 (ceil(163840/15360)) -> ' + w.requests.map((r) => r.index).join(','))
   ok(w.maxInflight === 1, 'never more than one request in flight (max ' + w.maxInflight + ')')
   ok(w.requests.every((r) => r.bytes <= 20480 + 0), 'every chunk message is small: max base64 ' + Math.max(...w.requests.map((r) => r.bytes)) + ' chars (vs 218 454 in one piece)')
-  ok(w.posts.length === 1 && w.posts[0].audio === file.toString('base64'), 'server received ONE POST whose audio is byte-identical base64 of the file')
+  ok(w.posts.length === 1 && sameAudio(w.posts[0].audio, file), 'server received ONE POST whose audio is a clean Ogg/Opus file carrying exactly the recording\'s packets')
   ok(w.posts[0].url === 'https://user-own.example/messages' && w.posts[0].fileName === 'voice_1000.opus', 'posted to the account serverUrl at /messages, fileName preserved')
   ok(JSON.stringify(uploaded()) === '["voice_1000.opus"]', 'marked uploaded only after the server confirmed')
   ok(w.states[0].state === 'sending' && w.states.at(-1).state === 'done' && w.states.at(-1).pending === 0, 'UI states: sending ... done(pending 0)')
   ok(w.states.filter((s) => s.state === 'sending').map((s) => s.chunk + '/' + s.total).join(' ') === Array.from({ length: 11 }, (_, i) => (i + 1) + '/11').join(' '), 'progress reports chunk 1/11 .. 11/11') }
 
 console.log('2. size edge cases: 1 B, 100 B, exactly 1 chunk, 3 chunks, one byte over')
-for (const size of [1, 100, 15360, 46080, 15361]) {
+for (const size of [9, 100, 15360, 46080, 15361]) {
   const w = await world(); const file = addRecording(w, 'voice_5.opus', size); w.Q.retryPendingUploads(); await finished(w)
-  ok(w.posts.length === 1 && w.posts[0].audio === file.toString('base64') && w.requests.length === Math.ceil(size / 15360), size + ' B -> ' + w.requests.length + ' chunk(s), body identical') }
+  ok(w.posts.length === 1 && sameAudio(w.posts[0].audio, file) && w.requests.length === Math.ceil(size / 15360), size + ' B -> ' + w.requests.length + ' chunk(s), same audio') }
 
 console.log('3. transport failures: retried per chunk, then give up cleanly')
 { const w = await world(); const file = addRecording(w, 'voice_7.opus', 100000); w.failRequests = new Set([3, 4])    // chunk index 2 fails twice
   w.Q.retryPendingUploads(); await finished(w)
-  ok(w.states.at(-1).state === 'done' && w.posts[0].audio === file.toString('base64'), 'two timeouts on one chunk are retried; upload completes with identical body')
+  ok(w.states.at(-1).state === 'done' && sameAudio(w.posts[0].audio, file), 'two timeouts on one chunk are retried; upload completes with the same audio')
   ok(w.requests.filter((r) => r.index === 2).length === 3, 'that chunk was requested 3 times (1 + 2 retries)') }
 { const w = await world(); addRecording(w, 'voice_8.opus', 100000); addRecording(w, 'voice_9.opus', 20000); w.failRequests = new Set([3, 4, 5])
   w.Q.retryPendingUploads(); await finished(w)
@@ -88,7 +92,7 @@ console.log('4. phone lost its partial copy mid-upload (Side Service restarted)'
 { const w = await world(); const file = addRecording(w, 'voice_11.opus', 100000); let wiped = false
   w.hooks.before = async (wire) => { if (wire.index === 4 && !wiped) { wiped = true; w.U.clearPendingUploads() } }
   w.Q.retryPendingUploads(); await finished(w)
-  ok(w.states.at(-1).state === 'done' && w.posts.length === 1 && w.posts[0].audio === file.toString('base64'), 'watch restarted that recording from chunk 0 and delivered the identical body once')
+  ok(w.states.at(-1).state === 'done' && w.posts.length === 1 && sameAudio(w.posts[0].audio, file), 'watch restarted that recording from chunk 0 and delivered the same audio once')
   ok(w.requests.map((r) => r.index).join(',') === '0,1,2,3,4,0,1,2,3,4,5,6' , 'request sequence shows the restart -> ' + w.requests.map((r) => r.index).join(',')) }
 
 console.log('5. server problems are not mistaken for success')
@@ -152,14 +156,14 @@ console.log('11. descriptors are released: more recordings than the device has d
 console.log('12. file cannot be opened: falls back to reading it whole')
 { const w = await world(); const file = addRecording(w, 'voice_220.opus', 100000); ctl.failOpen = () => true
   w.Q.retryPendingUploads(); await finished(w)
-  ok(w.states.at(-1).state === 'done' && w.posts.length === 1 && w.posts[0].audio === file.toString('base64'), 'delivered with an identical body without any descriptor -> ' + w.states.at(-1).state) }
+  ok(w.states.at(-1).state === 'done' && w.posts.length === 1 && sameAudio(w.posts[0].audio, file), 'delivered with the same audio without any descriptor -> ' + w.states.at(-1).state) }
 
 console.log('13. one unreadable recording must not block the ones behind it')
 { const w = await world(); addRecording(w, 'voice_230.opus', 20000); const good = addRecording(w, 'voice_231.opus', 20000)
   ctl.failOpen = (p) => p.includes('voice_230'); ctl.failWhole = (p) => p.includes('voice_230')
   w.Q.retryPendingUploads(); await finished(w)
   const last = w.states.at(-1)
-  ok(w.posts.length === 1 && w.posts[0].fileName === 'voice_231.opus' && w.posts[0].audio === good.toString('base64'), 'the readable recording behind it was still delivered')
+  ok(w.posts.length === 1 && w.posts[0].fileName === 'voice_231.opus' && sameAudio(w.posts[0].audio, good), 'the readable recording behind it was still delivered')
   ok(last.state === 'error' && /cannot open file/.test(last.message) && last.pending === 1, 'the failure is still reported, with the queue count -> ' + JSON.stringify(last))
   ok(files().includes('voice_230.opus') && JSON.stringify(uploaded()) === '["voice_231.opus"]', 'the unreadable one is kept (not deleted, not marked uploaded)')
   ok(fds.size === 0, 'no descriptors leaked') }
@@ -180,6 +184,35 @@ console.log('15. "Очистить память": clearAllRecordings')
   w2.Q.retryPendingUploads(); await finished(w2)
   ok(w2.cleared && w2.cleared.busy === true && w2.cleared.removed === 0, 'refuses while an upload is running -> ' + JSON.stringify(w2.cleared))
   const w3 = await world(); const empty = w3.Q.clearAllRecordings(); ok(empty.removed === 0 && !empty.busy, 'works on an empty watch') }
+
+console.log('16. a recording the phone cannot wrap is that file\'s own problem: skipped, not blocking')
+{ const w = await world()
+  const garbage = Buffer.alloc(20000, 7); garbage.writeUInt32BE(0xffffffff, 0)                  // a length prefix that runs far past the file
+  addRecording(w, 'voice_300.opus', garbage); const good = addRecording(w, 'voice_301.opus', 20000)
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(w.posts.length === 1 && w.posts[0].fileName === 'voice_301.opus' && sameAudio(w.posts[0].audio, good), 'the good recording behind it was delivered')
+  ok(last.state === 'error' && /cannot pack recording/.test(last.message) && last.pending === 1, 'the failure is reported with the queue count -> ' + JSON.stringify(last))
+  ok(files().includes('voice_300.opus') && JSON.stringify(uploaded()) === '["voice_301.opus"]', 'the unpackable file is kept, not marked uploaded')
+  ok(w.requests.filter((r) => r.file === 'voice_300.opus').length === 2, 'it is not retried or restarted in a loop (its own 2 chunks only) -> ' + w.requests.filter((r) => r.file === 'voice_300.opus').length) }
+
+console.log('17. a recording cut mid-packet is trimmed and still delivered')
+{ const w = await world(); const whole = framedRecording(40000); const cut = whole.subarray(0, whole.length - 5)
+  addRecording(w, 'voice_310.opus', cut); w.Q.retryPendingUploads(); await finished(w)
+  const ogg = readOgg(Buffer.from(w.posts[0].audio, 'base64'))
+  ok(w.states.at(-1).state === 'done' && ogg.problems.length === 0, 'delivered as a clean Ogg file -> ' + w.states.at(-1).state)
+  ok(samePackets(ogg.audio, zeppPackets(cut)) && ogg.audio.length === zeppPackets(whole).length - 1, 'all complete packets kept, only the partial last one dropped (' + ogg.audio.length + ' packets)') }
+
+console.log('18. what the server is sent')
+{ const w = await world(); addRecording(w, 'voice_320.opus', 3000); w.Q.retryPendingUploads(); await finished(w)
+  const post = w.posts[0]; const bytes = Buffer.from(post.audio, 'base64')
+  ok(Object.keys(post).filter((k) => k !== 'url').sort().join() === 'audio,fileName', 'the request is still just { fileName, audio } -> ' + Object.keys(post).join())
+  ok(bytes.toString('latin1', 0, 4) === 'OggS' && bytes.toString('latin1', 28, 36) === 'OpusHead', 'audio is an Ogg file that starts with an OpusHead packet')
+  const ogg = readOgg(bytes); const head = ogg.head
+  ok(head[9] === 1 && head.readUInt32LE(12) === 16000 && head.readUInt16LE(10) === 0 && head[18] === 0, 'OpusHead: mono, input rate 16000, pre-skip 0, mapping family 0')
+  ok(ogg.tags.toString('latin1', 12, 12 + ogg.tags.readUInt32LE(8)) === 'pigeondrop', 'OpusTags names this app as the vendor')
+  const last = ogg.pages[ogg.pages.length - 1]
+  ok(last.granule === BigInt(ogg.audio.length * 960), 'the last granule position counts every packet as 20 ms at 48 kHz (' + last.granule + ')') }
 
 console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'ALL CHECKS PASS'))
 process.exit(failures ? 1 : 0)
