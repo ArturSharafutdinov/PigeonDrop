@@ -15,6 +15,11 @@
 // the reply to the last chunk carries the server's answer, and only that reply
 // marks the recording uploaded. See app-side/uploads.js for the phone half.
 //
+// A recording that cannot be read (file won't open, stat fails, short read) is a
+// problem of that one file, not of the phone or the server: the sweep skips it,
+// keeps sending the recordings behind it, and reports the failure at the end. It
+// stays queued; clearAllRecordings() is the way to get rid of it.
+//
 // Depends one-way on ./recordings (not the other way around) so there's no
 // circular import between "what recordings exist" and "which are uploaded".
 
@@ -137,23 +142,83 @@ export function pruneRecordings() {
     })
 }
 
+// The "Очистить память" action (page/settings.js): deletes every recording on the
+// watch and forgets the upload history, which also empties the send queue. A
+// recording still being written is left alone. Refuses (busy) while an upload is
+// running, because that upload holds one of the files open and would otherwise
+// record a result for a file that no longer exists.
+export function clearAllRecordings() {
+  if (sweepInFlight) return { removed: 0, busy: true }
+
+  let removed = 0
+  listRecordings()
+    .filter((item) => item.fileName !== activeRecording)
+    .forEach((item) => {
+      try {
+        rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
+        removed++
+      } catch (e) {
+        console.log('clearAllRecordings: cannot remove', item.fileName, e)
+      }
+    })
+  writeIndex({ uploaded: [] })
+  return { removed, busy: false }
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-// Reads chunk `index` of the file and returns it base64-encoded. Reads only that
-// slice (not the whole file), so memory stays flat however long the recording is.
-function readChunk(fd, index, size) {
-  const expected = Math.min(CHUNK_BYTES, size - index * CHUNK_BYTES)
-  const buffer = new ArrayBuffer(CHUNK_BYTES)
-  const bytesRead = readSync({ fd, buffer, options: { offset: 0, length: CHUNK_BYTES, position: index * CHUNK_BYTES } })
+// A problem with one particular file. Marked so the sweep can tell it from a
+// transport/server failure (see retryPendingUploads).
+function fileError(message) {
+  const err = new Error(message)
+  err.local = true
+  return err
+}
 
-  // A short read anywhere but the end would put '=' padding mid-stream and
-  // corrupt the joined base64, so it is an error rather than something to send.
-  if (bytesRead !== expected) {
-    throw new Error('read ' + bytesRead + ' of ' + expected + ' bytes at chunk ' + index)
+function encode(bytes) {
+  return Buffer.from(bytes).toString('base64')
+}
+
+// Chunk-by-chunk access to one recording: read(index) returns that chunk
+// base64-encoded, close() releases the file. Normally each slice is read straight
+// from the file, so memory stays flat however long the recording is. If the file
+// cannot be opened that way, the whole file is read once and sliced instead - a
+// recording is at most MAX_RECORDING_SECONDS long, so this is affordable, and it
+// beats giving up on a file the watch can plainly read.
+function openReader(path, size) {
+  const fd = openSync({ path, flag: O_RDONLY })
+
+  if (typeof fd === 'number' && fd >= 0) {
+    return {
+      read(index) {
+        const expected = Math.min(CHUNK_BYTES, size - index * CHUNK_BYTES)
+        const buffer = new ArrayBuffer(CHUNK_BYTES)
+        const bytesRead = readSync({ fd, buffer, options: { offset: 0, length: CHUNK_BYTES, position: index * CHUNK_BYTES } })
+
+        // A short read anywhere but the end would put '=' padding mid-stream and
+        // corrupt the joined base64, so it is an error rather than something to send.
+        if (bytesRead !== expected) {
+          throw fileError('read ' + bytesRead + ' of ' + expected + ' bytes at chunk ' + index)
+        }
+        return encode(buffer.slice(0, bytesRead))
+      },
+      // The documented form is closeSync({ fd }). Passing the bare number does not
+      // close the descriptor, and the device only has a handful of them: after a
+      // few recordings openSync starts failing.
+      close: () => closeSync({ fd }),
+    }
   }
-  return Buffer.from(buffer.slice(0, bytesRead)).toString('base64')
+
+  const whole = readFileSync({ path })
+  if (!whole || whole.byteLength !== size) {
+    throw fileError('cannot open file (' + fd + ')')
+  }
+  return {
+    read: (index) => encode(whole.slice(index * CHUNK_BYTES, Math.min(size, (index + 1) * CHUNK_BYTES))),
+    close: () => {},
+  }
 }
 
 // One chunk, retried a couple of times on transport errors (timeout, BLE blip).
@@ -165,27 +230,36 @@ function requestChunk(messageBuilder, message, retriesLeft) {
 }
 
 // Sends one recording chunk by chunk. Resolves with the phone's final reply, or
-// { skip: true } for an empty/missing file (nothing to send). Rejects on failure;
-// the error has .restart = true if the phone lost its partial copy of the upload.
+// { skip: true } for an empty file (nothing to send). Rejects on failure; the error
+// has .restart = true if the phone lost its partial copy of the upload, and
+// .local = true if the problem is with this file itself.
 function sendRecording(item, onChunk) {
   const { messageBuilder } = getApp()._options.globalData
   const path = item.filePath.replace('data://', '')
 
-  const info = statSync({ path })
-  if (!info || !info.size) return Promise.resolve({ skip: true })
+  let reader
+  let size
+  let total
+  try {
+    const info = statSync({ path })
+    // Not the same as an empty file: a failed stat must never get a recording deleted.
+    if (!info) throw fileError('cannot read file size')
+    if (!info.size) return Promise.resolve({ skip: true })
 
-  const size = info.size
-  const total = Math.ceil(size / CHUNK_BYTES)
+    size = info.size
+    total = Math.ceil(size / CHUNK_BYTES)
+    reader = openReader(path, size)
+  } catch (err) {
+    return Promise.reject(err)
+  }
+
   const serverUrl = getServerUrl() // null until an account has been synced; the phone then uses its default
   const uploadId = String(Date.now()) // identifies this attempt, so a stale partial upload is never mixed in
-
-  const fd = openSync({ path, flag: O_RDONLY })
-  if (typeof fd !== 'number' || fd < 0) return Promise.reject(new Error('cannot open file'))
 
   const sendFrom = (index) => {
     let message
     try {
-      message = { type: 'uploadChunk', fileName: item.fileName, uploadId, index, total, data: readChunk(fd, index, size), serverUrl }
+      message = { type: 'uploadChunk', fileName: item.fileName, uploadId, index, total, data: reader.read(index), serverUrl }
     } catch (err) {
       return Promise.reject(err)
     }
@@ -203,14 +277,13 @@ function sendRecording(item, onChunk) {
     })
   }
 
-  const release = () => closeSync(fd)
   return sendFrom(0).then(
     (reply) => {
-      release()
+      reader.close()
       return reply
     },
     (err) => {
-      release()
+      reader.close()
       throw err
     },
   )
@@ -233,9 +306,10 @@ function shortReason(err) {
 // Sends every not-yet-uploaded recording, oldest first, strictly one at a time
 // and one chunk at a time. sweepInFlight stops the three retry triggers (new
 // recording, BLE reconnect, app open) from starting a second, competing sweep.
-// The first failure stops the sweep: if the phone or server is unreachable,
-// hammering every other pending recording at it would only waste battery - the
-// next trigger tries again.
+// A transport/server failure stops the sweep: if the phone or server is
+// unreachable, hammering every other pending recording at it would only waste
+// battery - the next trigger tries again. A failure of one file itself (see
+// fileError) only skips that file.
 export function retryPendingUploads() {
   if (sweepInFlight) return
 
@@ -243,32 +317,47 @@ export function retryPendingUploads() {
   if (pending.length === 0) return
 
   sweepInFlight = true
+  const unreadable = [] // files this sweep could not read, reported when it ends
 
   const sendFrom = (i) => {
     if (i >= pending.length) return Promise.resolve()
     const item = pending[i]
     if (item.fileName === activeRecording) return sendFrom(i + 1)
 
+    const next = () => delay(RETRY_PACING_MS).then(() => sendFrom(i + 1))
+
     return sendWithRestart(
       item,
       (chunk, total) => emit({ state: 'sending', index: i + 1, count: pending.length, chunk: chunk + 1, total }),
       1,
-    ).then((reply) => {
-      if (reply && reply.skip) {
-        // Empty file (a recording aborted before any audio) - it can't be sent or played.
-        rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
-        forgetUpload(item.fileName)
-      } else {
-        markUploaded(item.fileName)
-      }
-      return delay(RETRY_PACING_MS).then(() => sendFrom(i + 1))
-    })
+    ).then(
+      (reply) => {
+        if (reply && reply.skip) {
+          // Empty file (a recording aborted before any audio) - it can't be sent or played.
+          rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
+          forgetUpload(item.fileName)
+        } else {
+          markUploaded(item.fileName)
+        }
+        return next()
+      },
+      (err) => {
+        if (!err || !err.local) throw err
+        console.log('retryPendingUploads: skipping unreadable', item.fileName, err)
+        unreadable.push(err)
+        return next()
+      },
+    )
   }
 
   sendFrom(0)
     .then(() => {
       sweepInFlight = false
-      emit({ state: 'done', pending: pendingRecordings().length })
+      if (unreadable.length > 0) {
+        emit({ state: 'error', message: shortReason(unreadable[0]), pending: pendingRecordings().length })
+      } else {
+        emit({ state: 'done', pending: pendingRecordings().length })
+      }
       // A recording finished while this sweep was running wasn't in its snapshot,
       // so give those (and only those) their own pass. Anything that was in the
       // snapshot is never retried here, so a failed index write can't loop forever.
