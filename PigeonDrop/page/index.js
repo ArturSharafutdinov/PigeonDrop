@@ -25,9 +25,13 @@ import {
 } from '../utils/uploadQueue'
 import { MAX_RECORDING_SECONDS } from '../config'
 
-// How long the screen is kept awake after the recording limit, so the result
-// of an auto-stop is still visible when the user looks at the watch.
-const SCREEN_GRACE_MS = 60 * 1000
+// How long the screen is kept awake after a recording stops, so it can be sent
+// to the server before the display sleeps and the Mini Program is closed.
+const UPLOAD_SCREEN_HOLD_MS = 60 * 1000
+
+// Extra time on the page-brightness timeout beyond a hold: the stopwatch ticks
+// once a second, so an auto-stop can land a moment after the recording limit.
+const SCREEN_SLACK_MS = 5 * 1000
 
 // 75 -> "01:15", 3725 -> "1:02:05". Elapsed time shown on the recording screen.
 function formatElapsed(totalSeconds) {
@@ -47,6 +51,7 @@ Page({
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
     startedAt: null, // Date.now() when the current recording began (drives the stopwatch)
     ticker: null, // setInterval id of the once-a-second stopwatch refresh, or null when idle
+    uploadHoldTimer: null, // setTimeout id that ends the screen hold after a recording, or null when no hold is active
   },
 
   build() {
@@ -157,8 +162,10 @@ Page({
 
   // Starts capturing audio into a brand new, uniquely named file.
   startRecording() {
-    // Before the recorder starts, so the display can't time out in the gap.
-    this.keepScreenOn()
+    // Before the recorder starts, so the display can't time out in the gap. Any
+    // hold left over from the previous recording's upload is replaced by this one.
+    this.cancelUploadHold()
+    this.keepScreenOn(MAX_RECORDING_SECONDS * 1000)
 
     const filePath = newRecordingPath()
     // Tell the upload queue this file is still being written, so a retry
@@ -186,18 +193,18 @@ Page({
     this.state.recorder.stop()
     this.state.recorder = null
     this.state.recording = false
-    this.releaseScreen()
+    // The recording is over but the upload isn't: keep the screen on for it.
+    this.holdScreenForUpload()
     setActiveRecording(null)
     pruneRecordings()
     retryPendingUploads()
 
-    // Optimistic status - MessageBuilder#call is fire-and-forget, so this
-    // doesn't wait for the phone to actually finish uploading. The real
-    // upload result (success/failure, from the server) comes back later via
-    // app.js's messageBuilder.on('call', ...) listener, which is also what
-    // marks a recording as uploaded - so pendingCount here reflects whatever
-    // was still true just before this sweep kicked off.
+    // Initial status only - the sweep above runs asynchronously, so this shows
+    // what was still true as it kicked off. The real progress and the outcome
+    // arrive through showUploadState (onUploadState), which also ends the
+    // screen hold once everything has been sent.
     const pendingCount = pendingRecordings().length
+    if (pendingCount === 0) this.endUploadHold()
     const sending = 'Отправка...\nВ очереди: ' + pendingCount
     let status
     if (limitReached) {
@@ -208,24 +215,48 @@ Page({
     this.updateStatus(status)
   },
 
-  // Keeps the display awake for the whole recording. By default Zepp OS puts
-  // the screen to sleep after ~10 s and then closes the Mini Program, which
-  // silently killed long recordings before they were ever sent. Three things
-  // can sleep the screen - the page timeout, lowering the wrist, and resting a
-  // palm on it - so all three are suspended. Every duration is bounded by the
-  // recording limit, so a recording left running by mistake can't hold the
-  // screen on (and drain the battery) forever; releaseScreen() undoes it all.
-  keepScreenOn() {
-    const limitMs = MAX_RECORDING_SECONDS * 1000
-    this.checkDisplay('setPageBrightTime', setPageBrightTime({ brightTime: limitMs + SCREEN_GRACE_MS }))
-    this.checkDisplay('pauseDropWristScreenOff', pauseDropWristScreenOff({ duration: limitMs }))
-    this.checkDisplay('pausePalmScreenOff', pausePalmScreenOff({ duration: limitMs }))
+  // Keeps the display awake for `durationMs`. By default Zepp OS puts the
+  // screen to sleep after ~10 s and then closes the Mini Program, which
+  // silently killed long recordings - and uploads still in progress - before
+  // they were ever sent. Three things can sleep the screen - the page timeout,
+  // lowering the wrist, and resting a palm on it - so all three are suspended.
+  // Every duration is bounded (by the recording limit while recording, by
+  // UPLOAD_SCREEN_HOLD_MS while uploading), so nothing can hold the screen on
+  // (and drain the battery) forever; releaseScreen() undoes it all. Calling this
+  // again replaces the hold that was active.
+  keepScreenOn(durationMs) {
+    this.releaseScreen()
+    this.checkDisplay('setPageBrightTime', setPageBrightTime({ brightTime: durationMs + SCREEN_SLACK_MS }))
+    this.checkDisplay('pauseDropWristScreenOff', pauseDropWristScreenOff({ duration: durationMs }))
+    this.checkDisplay('pausePalmScreenOff', pausePalmScreenOff({ duration: durationMs }))
   },
 
   releaseScreen() {
     resetPageBrightTime()
     resetDropWristScreenOff()
     resetPalmScreenOff()
+  },
+
+  // After a recording stops, the screen stays on while it is being sent - for
+  // at most UPLOAD_SCREEN_HOLD_MS. The hold ends early once everything is sent
+  // (showUploadState) and is replaced if a new recording starts (startRecording).
+  holdScreenForUpload() {
+    this.cancelUploadHold()
+    this.keepScreenOn(UPLOAD_SCREEN_HOLD_MS)
+    this.state.uploadHoldTimer = setTimeout(() => this.endUploadHold(), UPLOAD_SCREEN_HOLD_MS)
+  },
+
+  endUploadHold() {
+    this.cancelUploadHold()
+    // A recording owns the screen hold while it runs; never release it from here.
+    if (!this.state.recording) this.releaseScreen()
+  },
+
+  cancelUploadHold() {
+    if (this.state.uploadHoldTimer !== null) {
+      clearTimeout(this.state.uploadHoldTimer)
+      this.state.uploadHoldTimer = null
+    }
   },
 
   // Display calls return 0 on success. A failure doesn't stop the recording,
@@ -282,6 +313,7 @@ Page({
       this.releaseScreen()
       setActiveRecording(null)
     }
+    if (this.state.uploadHoldTimer !== null) this.endUploadHold()
   },
 
   // Reflects the upload queue on the status label (see onUploadState). Ignored
@@ -293,6 +325,10 @@ Page({
       this.updateStatus('Отправка ' + state.index + ' из ' + state.count + '\nчасть ' + state.chunk + ' из ' + state.total)
     } else if (state.state === 'done') {
       this.updateStatus(state.pending > 0 ? 'В очереди: ' + state.pending : 'Отправлено\n\n' + this.idleText())
+      // Everything is sent, so the screen no longer has to be held. After an
+      // error it deliberately stays on until the hold runs out, so the reason
+      // can be read.
+      if (state.pending === 0 && this.state.uploadHoldTimer !== null) this.endUploadHold()
     } else if (state.state === 'error') {
       this.updateStatus('Не удалось отправить\n' + state.message + '\nВ очереди: ' + state.pending)
     }

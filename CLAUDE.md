@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Three independent Node/JS projects living side by side, connected only by the runtime data flow described below (no shared package.json, no monorepo tooling):
 
 - **`PigeonDrop/`** — the Zepp OS 4.0 Mini Program itself (device app + Side Service). This is the core deliverable.
-- **`server/`** — a minimal standalone Node.js HTTP server that receives uploads from the phone. A prototype, not production infrastructure (no auth, JSON-file storage); deployed to Railway — see `server/DEPLOY.md`.
+- **`server/`** — a minimal standalone Node.js HTTP server that receives uploads from the phone. A prototype, not production infrastructure (no auth, JSON-file storage); run locally and exposed to the phone through an ngrok tunnel.
 - **`ARCHITECTURE.md`** (root) — up-to-date narrative overview of the whole system: data flow, per-file responsibilities, and the reasoning behind non-obvious design decisions (custom `.opus` framing, round-display safe zone, the account/QR config flow, etc). **Read this first** before making non-trivial changes — it captures "why" context that isn't in code comments.
 - **`API_SPEC.md`** (root) — the HTTP contract for `server/`'s endpoints (`/messages`, `/accounts/*`, `/setup`, `/uploads`). The watch and Side Service depend only on this contract, not on the Node implementation — any server change must keep it intact.
 - **`REQUIREMENTS_ANALYSIS.md`** (root) — Russian-language analysis of requirements for the planned SaaS platform (backend, flow engine, frontend, apps for other watch platforms): workstreams, risks, load scenarios, open questions. No stack has been chosen yet; a stack/tool comparison is the next planned document.
@@ -15,7 +15,7 @@ Three independent Node/JS projects living side by side, connected only by the ru
 
 ## Language
 
-Talk to the user in Russian. User-facing docs (`ARCHITECTURE.md`, `API_SPEC.md`, `server/DEPLOY.md`) are written in Russian; this file and other Claude-only files stay in English.
+Talk to the user in Russian. User-facing docs (`ARCHITECTURE.md`, `API_SPEC.md`, `REQUIREMENTS_ANALYSIS.md`) are written in Russian; this file and other Claude-only files stay in English.
 
 ## Git
 
@@ -66,7 +66,7 @@ Standalone CLI for the opus→wav converter also used internally by `server.js` 
 
 To expose the local server to the watch/phone over the internet, an ngrok tunnel is used; the resulting URL must be manually placed in **both** `PigeonDrop/config.js`'s `SERVER_URL`/`WEB_APP_BASE_URL` and `server/server.js`'s `DEFAULT_SERVER_URL` (pass it as an env var: `DEFAULT_SERVER_URL=https://... npm start`) — the server needs to know its own public address to resolve accounts' default `serverUrl` correctly. Never enter or manage the ngrok authtoken yourself — that's the user's action (`ngrok config add-authtoken <token>`).
 
-For a persistent public deployment instead of ngrok, see `server/DEPLOY.md` (Railway). `STORAGE_DIR` env var controls where `data/` and `uploads/` live (defaults to next to `server.js` for local dev) — must point at a mounted persistent volume when deployed, or state is lost on every redeploy.
+`STORAGE_DIR` env var controls where `data/` and `uploads/` live (defaults to next to `server.js`). There is no hosted deployment: the server only runs locally behind the tunnel.
 
 ## Architecture
 
@@ -101,5 +101,5 @@ The user can point uploads at their own server without rebuilding the watch app:
 - **`device:os.mic` permission** must be declared in `app.json`'s `permissions` array or recording throws `Permission Denied device:os.mic` at runtime — this requirement isn't discoverable from docs, only from the runtime error.
 - **`QRCODE` widget background sizing**: `@zos/ui`'s QR widget takes `x/y/w/h` for the code itself and *separate* `bg_x/bg_y/bg_w/bg_h` for its background quad. Omitting the `bg_*` fields renders a background far larger than the code, bleeding past the round bezel — not visible from the type definitions, only on a real device. Always set both together, centered (see `page/qrcode.js`).
 - **Never send a recording as one `MessageBuilder` message.** `call()` pushes every ~3.6 KB BLE packet in one synchronous loop with no backpressure; a 60 s recording (~212 KB as base64, ~60 packets) overran the BLE send queue, `ble.send` returned `false`, and the resulting exception was swallowed by an unhandled promise - uploads failed silently, and the work/memory involved made app open slow and the list page crash. Uploads therefore go in chunks of `CHUNK_BYTES` (must stay a multiple of 3 so the chunks' base64 concatenates) with a `request()` per chunk; keep it that way and re-test with a 60 s+ recording on the device.
-- **Screen sleep kills the recording.** Zepp OS sleeps the screen and ~10 s later closes the Mini Program, so an unattended long recording is lost and never queued for upload. `page/index.js` therefore holds the screen on while recording (`setPageBrightTime`, `pauseDropWristScreenOff`, `pausePalmScreenOff` from `@zos/display`, all bounded by `MAX_RECORDING_SECONDS` and released on stop), auto-stops at that limit, and closes the file in `onDestroy` if the page is torn down mid-recording. Don't remove any of these without re-testing a long recording on the device.
+- **Screen sleep kills the recording.** Zepp OS sleeps the screen and ~10 s later closes the Mini Program, so an unattended long recording is lost and never queued for upload. `page/index.js` therefore holds the screen on while recording (`setPageBrightTime`, `pauseDropWristScreenOff`, `pausePalmScreenOff` from `@zos/display`, all bounded by `MAX_RECORDING_SECONDS`), auto-stops at that limit, and closes the file in `onDestroy` if the page is torn down mid-recording. On stop the hold is re-armed for `UPLOAD_SCREEN_HOLD_MS` (60 s) so the upload isn't cut off by the screen sleeping: it ends early when the queue empties, stays until the 60 s are up after an error (so the reason can be read), and is replaced by the next recording's hold; the app-open sweep deliberately holds nothing. Don't remove any of these without re-testing a long recording on the device.
 - **Configurable values live in `PigeonDrop/config.js`**, not hardcoded: `MAX_RECORDINGS` (oldest recordings pruned via `utils/recordings.js` once exceeded), `MAX_RECORDING_SECONDS` (longest single recording; also bounds how long the screen is held on), `SERVER_URL` (bootstrap/account server), and `WEB_APP_BASE_URL` (the setup-page host for the QR code).
