@@ -15,6 +15,13 @@ export const MAX_RECORDINGS = 20
 // up completely if the server is unreachable for a long time.
 export const MAX_PENDING_RECORDINGS = 50
 
+// Longest single recording, in seconds. While recording, the screen is kept on
+// (Zepp OS would otherwise close the app ~10 s after the display sleeps and the
+// recording would be lost), so this limit bounds how long a recording left
+// running by mistake can hold the screen on and drain the battery. When it is
+// reached the recording is stopped and sent automatically.
+export const MAX_RECORDING_SECONDS = 600
+
 // Bootstrap server address (see /server in the repo root, or server/DEPLOY.md
 // for a real deployment). This is also where the account/config server lives
 // - registerAccount and sync requests (see utils/account.js and

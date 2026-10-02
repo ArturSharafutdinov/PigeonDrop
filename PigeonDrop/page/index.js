@@ -7,8 +7,30 @@ import { px } from '@zos/utils'
 import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos/interaction'
 import { create, id, codec } from '@zos/media'
 import { push } from '@zos/router'
+import {
+  setPageBrightTime,
+  resetPageBrightTime,
+  pauseDropWristScreenOff,
+  resetDropWristScreenOff,
+  pausePalmScreenOff,
+  resetPalmScreenOff,
+} from '@zos/display'
 import { newRecordingPath, listRecordings } from '../utils/recordings'
 import { pruneRecordings, retryPendingUploads, isUploaded } from '../utils/uploadQueue'
+import { MAX_RECORDING_SECONDS } from '../config'
+
+// How long the screen is kept awake after the recording limit, so the result
+// of an auto-stop is still visible when the user looks at the watch.
+const SCREEN_GRACE_MS = 60 * 1000
+
+// 75 -> "01:15", 3725 -> "1:02:05". Elapsed time shown on the recording screen.
+function formatElapsed(totalSeconds) {
+  const pad = (n) => (n < 10 ? '0' + n : '' + n)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return hours > 0 ? hours + ':' + pad(minutes) + ':' + pad(seconds) : pad(minutes) + ':' + pad(seconds)
+}
 
 Page({
   state: {
@@ -17,6 +39,8 @@ Page({
     recorder: null, // active Recorder instance, or null when idle
     player: null, // lazily created Player instance, reused across plays (see getPlayer)
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
+    startedAt: null, // Date.now() when the current recording began (drives the stopwatch)
+    ticker: null, // setInterval id of the once-a-second stopwatch refresh, or null when idle
   },
 
   build() {
@@ -120,6 +144,9 @@ Page({
 
   // Starts capturing audio into a brand new, uniquely named file.
   startRecording() {
+    // Before the recorder starts, so the display can't time out in the gap.
+    this.keepScreenOn()
+
     const filePath = newRecordingPath()
     const recorder = create(id.RECORDER)
     recorder.setFormat(codec.OPUS, { target_file: filePath })
@@ -128,16 +155,21 @@ Page({
     this.state.recorder = recorder
     this.state.currentFile = filePath
     this.state.recording = true
-    this.updateStatus('Идёт запись...\nНажмите ещё раз\nчтобы остановить')
+    this.startStopwatch()
   },
 
   // Stops the current recording, enforces the storage caps (config.js), and
   // kicks off a retry sweep of the upload queue - which now includes this
   // recording as well as any older ones still waiting (utils/uploadQueue.js).
-  stopRecording() {
+  //
+  // limitReached is true when the stop came from the MAX_RECORDING_SECONDS
+  // safety limit rather than from the user.
+  stopRecording(limitReached) {
+    this.stopStopwatch()
     this.state.recorder.stop()
     this.state.recorder = null
     this.state.recording = false
+    this.releaseScreen()
     pruneRecordings()
     retryPendingUploads()
 
@@ -148,8 +180,88 @@ Page({
     // marks a recording as uploaded - so pendingCount here reflects whatever
     // was still true just before this sweep kicked off.
     const pendingCount = listRecordings().filter((item) => !isUploaded(item.fileName)).length
-    const status = pendingCount > 0 ? 'Отправка...\nВ очереди: ' + pendingCount : 'Отправлено\n\n' + this.idleText()
+    const sending = 'Отправка...\nВ очереди: ' + pendingCount
+    let status
+    if (limitReached) {
+      status = 'Лимит записи\nдостигнут\n\n' + sending
+    } else {
+      status = pendingCount > 0 ? sending : 'Отправлено\n\n' + this.idleText()
+    }
     this.updateStatus(status)
+  },
+
+  // Keeps the display awake for the whole recording. By default Zepp OS puts
+  // the screen to sleep after ~10 s and then closes the Mini Program, which
+  // silently killed long recordings before they were ever sent. Three things
+  // can sleep the screen - the page timeout, lowering the wrist, and resting a
+  // palm on it - so all three are suspended. Every duration is bounded by the
+  // recording limit, so a recording left running by mistake can't hold the
+  // screen on (and drain the battery) forever; releaseScreen() undoes it all.
+  keepScreenOn() {
+    const limitMs = MAX_RECORDING_SECONDS * 1000
+    this.checkDisplay('setPageBrightTime', setPageBrightTime({ brightTime: limitMs + SCREEN_GRACE_MS }))
+    this.checkDisplay('pauseDropWristScreenOff', pauseDropWristScreenOff({ duration: limitMs }))
+    this.checkDisplay('pausePalmScreenOff', pausePalmScreenOff({ duration: limitMs }))
+  },
+
+  releaseScreen() {
+    resetPageBrightTime()
+    resetDropWristScreenOff()
+    resetPalmScreenOff()
+  },
+
+  // Display calls return 0 on success. A failure doesn't stop the recording,
+  // but it is logged because it would bring the old "screen turns off" bug back.
+  checkDisplay(name, result) {
+    if (result !== 0) {
+      console.log('display call failed:', name, result)
+    }
+  },
+
+  // Stopwatch: shows how long the current recording has been running. Elapsed
+  // time is computed from the wall clock rather than by counting ticks, so a
+  // late or skipped tick can never make it drift. It also enforces the
+  // recording limit.
+  startStopwatch() {
+    this.state.startedAt = Date.now()
+    this.renderStopwatch()
+    this.state.ticker = setInterval(() => this.renderStopwatch(), 1000)
+  },
+
+  stopStopwatch() {
+    if (this.state.ticker !== null) {
+      clearInterval(this.state.ticker)
+      this.state.ticker = null
+    }
+  },
+
+  renderStopwatch() {
+    if (!this.state.recording) return
+
+    const elapsed = Math.floor((Date.now() - this.state.startedAt) / 1000)
+    if (this.state.recording && elapsed >= MAX_RECORDING_SECONDS) {
+      this.stopRecording(true)
+      return
+    }
+    this.updateStatus('Идёт запись\n' + formatElapsed(elapsed) + '\nНажмите ещё раз,\nчтобы остановить')
+  },
+
+  // The system can still tear the page down mid-recording - the user pressing
+  // the side button to sleep the screen, for example. Stop the recorder so the
+  // file is closed properly instead of left half-written; it is picked up and
+  // sent by the app-open retry in build() the next time the app starts.
+  onDestroy() {
+    this.stopStopwatch()
+    if (this.state.recording && this.state.recorder) {
+      try {
+        this.state.recorder.stop()
+      } catch (e) {
+        console.log('recorder.stop failed in onDestroy:', e)
+      }
+      this.state.recorder = null
+      this.state.recording = false
+      this.releaseScreen()
+    }
   },
 
   // Long-press shortcut: replay whatever was recorded most recently, without
