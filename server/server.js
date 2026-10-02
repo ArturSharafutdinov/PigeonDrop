@@ -11,10 +11,11 @@
 //   GET  /uploads/:name     - download/play a single saved .opus or .wav
 //
 // /uploads[/:name] are manual-access-only - the watch/phone never call them,
-// they exist so a human can actually listen to what landed on a deployed
-// server (e.g. Railway) without shelling in. No auth, same as everything
+// they exist so a human can listen to what landed on the server from a
+// browser, without opening the uploads folder. No auth, same as everything
 // else in this prototype - anyone with the URL and a filename can fetch a
-// recording, which matters once this isn't just localhost anymore.
+// recording, which matters as soon as the server is reachable through a
+// tunnel and isn't just localhost anymore.
 //
 // For /messages: saved files are named after the date/time the SERVER
 // received them (not when the watch recorded them), since that's what
