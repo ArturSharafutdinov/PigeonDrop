@@ -269,6 +269,8 @@ function sendRecording(item, onChunk) {
       if (!reply || reply.ok !== true) {
         const err = new Error((reply && reply.error) || 'phone rejected the chunk')
         err.restart = !!(reply && reply.restart)
+        // The phone could not wrap this particular recording: a problem of the file, not of the link.
+        err.local = !!(reply && reply.fileError)
         throw err
       }
       if (index < total - 1) return sendFrom(index + 1)

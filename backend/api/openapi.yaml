@@ -1,0 +1,52 @@
+openapi: 3.0.3
+info:
+  title: PigeonDrop API
+  version: 0.1.0
+  description: |
+    HTTP contract of the PigeonDrop server. This file is the source of truth: the Go
+    server interface (internal/api) is generated from it, and the web client's types
+    will be generated from it too. Run `make generate` after editing.
+
+    The routes of the current watch app (API_SPEC.md at the repository root) are added
+    here step by step as the Go server replaces the Node prototype.
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      tags: [ops]
+      summary: Liveness and database check
+      description: Answers 200 while the server can reach its database, 503 otherwise. Used by Docker and Coolify health checks.
+      responses:
+        '200':
+          description: The server and its database are fine.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: The database cannot be reached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  schemas:
+    Health:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          description: Always true.
+    Error:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          description: Always false.
+        error:
+          type: string
+          description: Short, human-readable reason (machine-readable codes arrive with the /v1 API).

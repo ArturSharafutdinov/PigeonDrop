@@ -1,0 +1,10 @@
+# Settings for `go tool -modfile=tools/go.mod oapi-codegen` (see Makefile).
+package: api
+output: internal/api/api.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+output-options:
+  # Keep every schema in the generated package even if no operation uses it yet.
+  skip-prune: true

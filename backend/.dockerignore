@@ -1,0 +1,7 @@
+.dev
+bin
+tools
+*.md
+Dockerfile
+.dockerignore
+.DS_Store

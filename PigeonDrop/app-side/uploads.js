@@ -9,14 +9,21 @@
 //
 // Each chunk is a slice of the raw file whose length is a multiple of 3 bytes, so
 // its base64 string stands alone and the strings simply concatenate into the
-// base64 of the whole file. The body forwarded to the server is therefore exactly
-// what the old single message carried, and the HTTP contract (API_SPEC.md) is
-// unchanged.
+// base64 of the whole file.
+//
+// That file is Zepp's private recording format. Once it is complete it is wrapped
+// into a standard Ogg/Opus file (../utils/oggOpus.js, no re-encoding) before
+// being sent, so that every server - the SaaS and any server a user supplies -
+// receives something ordinary tools can play. The request is still
+// { fileName, audio: base64 } (API_SPEC.md); only what `audio` holds changed.
 //
 // State is held in memory only: the Side Service has no dependable persistent
 // storage or lifetime. If it is restarted mid-upload, the next chunk is answered
 // with { restart: true } and the watch starts that recording over (the server
 // de-duplicates by fileName, so a repeat is harmless).
+
+import { zeppToOggOpus } from '../utils/oggOpus'
+import { base64ToBytes, bytesToBase64 } from './base64'
 
 const PENDING_TTL_MS = 10 * 60 * 1000 // abandoned partial uploads are dropped after this
 
@@ -97,5 +104,19 @@ export function handleUploadChunk(message, fallbackServerUrl) {
   if (entry.received !== total) {
     return Promise.resolve({ ok: false, restart: true, error: 'incomplete upload' })
   }
-  return forwardToServer(fileName, entry.parts.join(''), serverUrl || fallbackServerUrl)
+
+  // A recording that can't be wrapped is the file's own problem, not the phone's
+  // or the server's: the reply says so (fileError), and the watch skips that file
+  // instead of stopping the whole queue on it.
+  let audio
+  try {
+    const packed = zeppToOggOpus(base64ToBytes(entry.parts.join('')))
+    if (packed.droppedBytes > 0) {
+      console.log('recording', fileName, 'ended with', packed.droppedBytes, 'unusable bytes, trimmed')
+    }
+    audio = bytesToBase64(packed.ogg)
+  } catch (err) {
+    return Promise.resolve({ ok: false, fileError: true, error: 'cannot pack recording: ' + String((err && err.message) || err) })
+  }
+  return forwardToServer(fileName, audio, serverUrl || fallbackServerUrl)
 }
