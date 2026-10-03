@@ -31,8 +31,80 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /messages:
+    post:
+      operationId: postMessage
+      tags: [ingest]
+      summary: Upload a recording
+      description: |
+        Called by the phone's Side Service once it has received every part of a recording from the
+        watch. `audio` is the base64 of a standard Ogg/Opus file (the older Zepp framing is still
+        accepted, detected from the first bytes).
+
+        The upload is idempotent by `fileName`: repeating it returns the stored result and saves
+        nothing new. A recording is kept even when it cannot be converted to WAV; then `wavFile` is null.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadRequest'
+      responses:
+        '200':
+          description: The recording was stored (now, or by an earlier identical upload).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResult'
+        '400':
+          description: The body is not valid JSON, a field is missing, or `audio` is not valid base64.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: The request body is larger than the server accepts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
+    UploadRequest:
+      type: object
+      required: [fileName, audio]
+      properties:
+        fileName:
+          type: string
+          maxLength: 255
+          description: The recording's name on the watch. Also the idempotency key.
+          example: voice_1791004922779.opus
+        audio:
+          type: string
+          description: Base64 of the recording (Ogg/Opus).
+    UploadResult:
+      type: object
+      required: [ok, bytesReceived, savedAs, wavFile, receivedAt]
+      properties:
+        ok:
+          type: boolean
+          description: Always true.
+        bytesReceived:
+          type: integer
+          format: int64
+          description: Size of the decoded recording in bytes.
+        savedAs:
+          type: string
+          description: Name the server stored the recording under (by the time the server received it).
+          example: 2026-10-03_07-23-36-048.opus
+        wavFile:
+          type: string
+          nullable: true
+          description: Name of the converted WAV file, or null if conversion failed.
+          example: 2026-10-03_07-23-36-048.wav
+        receivedAt:
+          type: string
+          format: date-time
     Health:
       type: object
       required: [ok]

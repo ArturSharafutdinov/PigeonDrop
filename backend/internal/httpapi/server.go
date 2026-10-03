@@ -6,13 +6,22 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/api"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
 )
+
+// MaxBodyBytes is the largest request body the server reads. A 60-second recording is about
+// 180 KB as base64; this leaves room for much longer ones without letting a client stream
+// unbounded data into memory.
+const MaxBodyBytes = 8 << 20
 
 // Pinger is the part of the database pool the health check needs.
 type Pinger interface {
@@ -22,7 +31,18 @@ type Pinger interface {
 // Server holds what the handlers depend on.
 type Server struct {
 	Pinger Pinger
+	DB     dbgen.Querier
+	Files  storage.Store
 	Logger *slog.Logger
+	// Now supplies the time used to name stored files; nil means time.Now. Tests set it.
+	Now func() time.Time
+}
+
+func (s *Server) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 var _ api.StrictServerInterface = (*Server)(nil)
@@ -44,7 +64,15 @@ func (s *Server) GetHealth(ctx context.Context, _ api.GetHealthRequestObject) (a
 func NewHandler(s *Server) http.Handler {
 	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeError(w, http.StatusBadRequest, err.Error())
+			var tooLarge *http.MaxBytesError
+			switch {
+			case errors.As(err, &tooLarge):
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			case strings.Contains(err.Error(), "decode JSON body"):
+				writeError(w, http.StatusBadRequest, "invalid JSON body")
+			default:
+				writeError(w, http.StatusBadRequest, err.Error())
+			}
 		},
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.Logger.Error("handler failed", "method", r.Method, "path", r.URL.Path, "error", err)
@@ -65,7 +93,15 @@ func NewHandler(s *Server) http.Handler {
 		writeError(w, http.StatusNotFound, "not found")
 	})
 
-	return recoverer(s.Logger, logRequests(s.Logger, mux))
+	return recoverer(s.Logger, logRequests(s.Logger, limitBody(mux)))
+}
+
+// limitBody caps how much of a request body any handler can read.
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

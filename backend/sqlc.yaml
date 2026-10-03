@@ -1,0 +1,17 @@
+# Settings for `go tool -modfile=tools/go.mod sqlc generate` (see Makefile).
+# The schema is read straight from the goose migrations, so queries are checked against it.
+version: "2"
+sql:
+  - engine: postgresql
+    schema: migrations
+    queries: internal/db/queries
+    gen:
+      go:
+        package: dbgen
+        out: internal/db/dbgen
+        sql_package: pgx/v5
+        emit_interface: true
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: timestamptz
+            go_type: time.Time

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // Error defines model for Error.
@@ -28,11 +29,48 @@ type Health struct {
 	Ok bool `json:"ok"`
 }
 
+// UploadRequest defines model for UploadRequest.
+type UploadRequest struct {
+	// Audio Base64 of the recording (Ogg/Opus).
+	Audio string `json:"audio"`
+
+	// FileName The recording's name on the watch. Also the idempotency key.
+	//
+	// Example: voice_1791004922779.opus
+	FileName string `json:"fileName"`
+}
+
+// UploadResult defines model for UploadResult.
+type UploadResult struct {
+	// BytesReceived Size of the decoded recording in bytes.
+	BytesReceived int64 `json:"bytesReceived"`
+
+	// Ok Always true.
+	Ok         bool      `json:"ok"`
+	ReceivedAt time.Time `json:"receivedAt"`
+
+	// SavedAs Name the server stored the recording under (by the time the server received it).
+	//
+	// Example: 2026-10-03_07-23-36-048.opus
+	SavedAs string `json:"savedAs"`
+
+	// WavFile Name of the converted WAV file, or null if conversion failed.
+	//
+	// Example: 2026-10-03_07-23-36-048.wav
+	WavFile *string `json:"wavFile"`
+}
+
+// PostMessageJSONRequestBody defines body for PostMessage for application/json ContentType.
+type PostMessageJSONRequestBody = UploadRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// GetHealth Liveness and database check
 	// (GET /healthz)
 	GetHealth(w http.ResponseWriter, r *http.Request)
+	// PostMessage Upload a recording
+	// (POST /messages)
+	PostMessage(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -49,6 +87,20 @@ func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostMessage operation middleware
+func (siw *ServerInterfaceWrapper) PostMessage(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostMessage(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -179,6 +231,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/healthz", wrapper.GetHealth)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/messages", wrapper.PostMessage)
 
 	return m
 }
@@ -218,11 +271,64 @@ func (response GetHealth503JSONResponse) VisitGetHealthResponse(w http.ResponseW
 	return err
 }
 
+type PostMessageRequestObject struct {
+	Body *PostMessageJSONRequestBody
+}
+
+type PostMessageResponseObject interface {
+	VisitPostMessageResponse(w http.ResponseWriter) error
+}
+
+type PostMessage200JSONResponse UploadResult
+
+func (response PostMessage200JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage400JSONResponse Error
+
+func (response PostMessage400JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostMessage413JSONResponse Error
+
+func (response PostMessage413JSONResponse) VisitPostMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetHealth Liveness and database check
 	// (GET /healthz)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
+	// PostMessage Upload a recording
+	// (POST /messages)
+	PostMessage(ctx context.Context, request PostMessageRequestObject) (PostMessageResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -281,6 +387,37 @@ func (sh *strictHandler) GetHealth(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetHealthResponseObject); ok {
 		if err := validResponse.VisitGetHealthResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PostMessage operation middleware
+func (sh *strictHandler) PostMessage(w http.ResponseWriter, r *http.Request) {
+	var request PostMessageRequestObject
+
+	var body PostMessageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PostMessage(ctx, request.(PostMessageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostMessage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PostMessageResponseObject); ok {
+		if err := validResponse.VisitPostMessageResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

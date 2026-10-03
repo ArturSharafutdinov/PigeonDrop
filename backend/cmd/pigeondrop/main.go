@@ -24,7 +24,9 @@ import (
 
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/config"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/httpapi"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
 )
 
 // version is set at build time: go build -ldflags "-X main.version=1.2.3".
@@ -109,13 +111,14 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("%d database migration(s) pending: run `pigeondrop migrate up`, or set MIGRATE_ON_START=true", pending)
 	}
 
-	if err := os.MkdirAll(cfg.StorageDir, 0o750); err != nil {
-		return fmt.Errorf("create storage directory: %w", err)
+	files, err := storage.NewDisk(cfg.StorageDir)
+	if err != nil {
+		return err
 	}
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.Port),
-		Handler:           httpapi.NewHandler(&httpapi.Server{Pinger: pool, Logger: logger}),
+		Handler:           httpapi.NewHandler(&httpapi.Server{Pinger: pool, DB: dbgen.New(pool), Files: files, Logger: logger}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      120 * time.Second,
