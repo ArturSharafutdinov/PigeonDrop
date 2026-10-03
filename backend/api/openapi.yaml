@@ -496,6 +496,155 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/messages:
+    post:
+      operationId: uploadMessage
+      tags: [messages]
+      summary: A watch uploads a recording
+      description: |
+        Called by the phone's Side Service, with the device token the watch received when it was paired, once it has
+        every part of a recording. `audio` is the base64 of a standard Ogg/Opus file (Zepp's older framing is still
+        accepted, detected from the first bytes). The recording is stored for the device's owner.
+
+        Idempotent by `messageId` within the device: repeating an upload returns the stored result and saves nothing
+        new, while another device may use the same `messageId` without meeting it. A recording is kept even when it
+        cannot be converted to WAV (`hasWav` is then false in the list).
+      security:
+        - deviceAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadMessageRequest'
+      responses:
+        '200':
+          description: The recording was stored (now, or by an earlier identical upload).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadMessageResult'
+        '400':
+          description: The body is malformed, a field is missing, or `audio` is not valid base64 (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: The device token is missing, unknown, or revoked (`unauthorized`). The watch must be paired again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: The request body is larger than the server accepts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      operationId: listMessages
+      tags: [messages]
+      summary: The user's recordings, newest first
+      description: Only the signed-in user's own messages, from all their devices.
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          description: How many to return (1 to 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: before
+          in: query
+          description: The `nextCursor` of the previous page. Opaque.
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        '200':
+          description: One page of messages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageList'
+        '400':
+          description: The limit is out of range, or `before` is not a cursor this server gave out (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/messages/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: deleteMessage
+      tags: [messages]
+      summary: Delete a recording and its files
+      security:
+        - cookieAuth: []
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The user has no such message (`not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  # Like the routes below, this one is written by hand: it serves a file, with range requests.
+  /v1/messages/{id}/audio:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: format
+        in: query
+        description: '`wav` (the default when there is one) or `original` (the file as it was received, an Ogg/Opus file).'
+        schema:
+          type: string
+          enum: [wav, original]
+    get:
+      operationId: getMessageAudio
+      tags: [manual]
+      summary: Play or download a recording
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The audio. Range requests are supported.
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            audio/ogg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The user has no such message, or no such format of it (`not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   # The three routes below are for people with a browser, not for the apps. They are documented here but
   # written by hand (tag "manual" keeps them out of code generation): they serve HTML and files, with range
   # requests, which the generated JSON handlers are not built for.
@@ -570,6 +719,12 @@ paths:
                 $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
+    deviceAuth:
+      type: http
+      scheme: bearer
+      description: |
+        The device token a watch receives when it is paired (`pdd_` followed by 43 characters), sent in the
+        Authorization header as `Bearer <token>`. It can be revoked, after which it is refused at once.
     cookieAuth:
       type: apiKey
       in: cookie
@@ -767,6 +922,81 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Device'
+    UploadMessageRequest:
+      type: object
+      required: [messageId, audio]
+      properties:
+        messageId:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The client's own name for the recording (the watch uses its file name). The idempotency key, within the device.
+          example: voice_1791004922779.opus
+        audio:
+          type: string
+          description: Base64 of the recording (Ogg/Opus).
+    UploadMessageResult:
+      type: object
+      required: [ok, id, messageId, bytesReceived, duplicate, receivedAt]
+      properties:
+        ok:
+          type: boolean
+          description: Always true. (The Side Service checks it, as it does for the older route.)
+        id:
+          type: string
+          format: uuid
+          description: The message's id on the server.
+        messageId:
+          type: string
+        bytesReceived:
+          type: integer
+          format: int64
+          description: Size of the decoded recording in bytes.
+        duplicate:
+          type: boolean
+          description: True when this device had already uploaded this `messageId` and nothing new was stored.
+        receivedAt:
+          type: string
+          format: date-time
+    Message:
+      type: object
+      required: [id, messageId, deviceId, deviceName, bytesReceived, durationMs, hasWav, receivedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        messageId:
+          type: string
+        deviceId:
+          type: string
+          format: uuid
+        deviceName:
+          type: string
+        bytesReceived:
+          type: integer
+          format: int64
+        durationMs:
+          type: integer
+          nullable: true
+          description: Length of the audio; null when the recording could not be decoded.
+        hasWav:
+          type: boolean
+          description: Whether a WAV copy exists (the original, an Ogg/Opus file, always does).
+        receivedAt:
+          type: string
+          format: date-time
+    MessageList:
+      type: object
+      required: [messages, nextCursor]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        nextCursor:
+          type: string
+          nullable: true
+          description: Pass as `before` to get the next page; null when there is no more.
     ErrorCode:
       type: string
       description: What went wrong, for clients to act on and translate. `error` is an English sentence for logs.

@@ -132,10 +132,15 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	queries := dbgen.New(pool)
 	go purgeExpired(ctx, queries, logger)
 
+	messages, err := storage.NewDisk(filepath.Join(cfg.StorageDir, "messages"))
+	if err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr: ":" + strconv.Itoa(cfg.Port),
 		Handler: httpapi.NewHandler(&httpapi.Server{
-			Pinger: pool, DB: queries, Files: files, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
+			Pinger: pool, DB: queries, Files: files, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,

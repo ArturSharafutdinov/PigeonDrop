@@ -990,3 +990,13 @@ func TestSecretsAreNeverLogged(t *testing.T) {
 		t.Error("registration left no trace in the log at all")
 	}
 }
+
+// readSpec returns api/openapi.yaml.
+func readSpec(t testing.TB) string {
+	t.Helper()
+	spec, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(spec)
+}

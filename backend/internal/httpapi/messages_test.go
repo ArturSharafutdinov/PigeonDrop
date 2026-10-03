@@ -30,12 +30,13 @@ const defaultServerURL = "https://pigeon.test"
 
 // testEnv is the whole upload path on real parts: a real database, a real directory, the real handler.
 type testEnv struct {
-	handler http.Handler
-	files   *storage.Disk
-	db      dbgen.Querier
-	pool    *pgxpool.Pool
-	server  *Server
-	logs    *syncBuffer
+	handler  http.Handler
+	files    *storage.Disk
+	messages *storage.Disk // the /v1 message store
+	db       dbgen.Querier
+	pool     *pgxpool.Pool
+	server   *Server
+	logs     *syncBuffer
 
 	mu    sync.Mutex
 	clock time.Time
@@ -73,13 +74,19 @@ func newEnvWith(t *testing.T, configure func(*Server)) *testEnv {
 		t.Fatal(err)
 	}
 
-	e := &testEnv{files: files, pool: pool, logs: &syncBuffer{},
+	messages, err := storage.NewDisk(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := &testEnv{files: files, messages: messages, pool: pool, logs: &syncBuffer{},
 		clock: time.Date(2026, 10, 3, 7, 23, 36, 48*int(time.Millisecond), time.UTC)}
 	srv := &Server{
-		Pinger: pool,
-		DB:     dbgen.New(pool),
-		Files:  files,
-		Logger: slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Pinger:   pool,
+		DB:       dbgen.New(pool),
+		Files:    files,
+		Messages: messages,
+		Logger:   slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		// What an account without a server of its own resolves to.
 		DefaultServerURL: defaultServerURL,
 		// Each call to the clock is one millisecond later, so uploads get distinct, ordered names.
@@ -420,5 +427,20 @@ func TestWAVHeaderOfAServedUploadIsConsistent(t *testing.T) {
 	wav := e.read(t, body["wavFile"].(string))
 	if binary.LittleEndian.Uint32(wav[40:]) != uint32(len(wav)-44) {
 		t.Fatalf("data chunk size %d does not match the %d bytes that follow", binary.LittleEndian.Uint32(wav[40:]), len(wav)-44)
+	}
+}
+
+// PostgreSQL cannot store a NUL in text; the prototype's contract has no rule against it, and a 500 for it
+// would be a bug of this implementation, not of the contract.
+func TestAFileNameWithControlCharactersIsRefusedNotAnInternalError(t *testing.T) {
+	e := newEnv(t)
+	for _, name := range []string{"a\u0000b.opus", "a\nb.opus", "tab\there"} {
+		status, answer := e.post(t, `{"fileName":`+asJSON(name)+`,"audio":"`+base64.StdEncoding.EncodeToString(fixture(t, "tone.ogg"))+`"}`)
+		if status != http.StatusBadRequest || answer["ok"] != false {
+			t.Errorf("%q: %d %v", name, status, answer)
+		}
+	}
+	if names, _ := e.files.List(); len(names) != 0 {
+		t.Fatalf("a refused upload left %v", names)
 	}
 }

@@ -31,6 +31,8 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DeleteExpiredPairings(ctx context.Context, now time.Time) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
+	// No row when the user has no such message. The files are removed by the caller afterwards.
+	DeleteMessage(ctx context.Context, arg DeleteMessageParams) (DeleteMessageRow, error)
 	// Used after a password change: every other session of the user ends, the current one stays.
 	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
@@ -40,6 +42,10 @@ type Querier interface {
 	GetAccount(ctx context.Context, code string) (Account, error)
 	// The device behind a token. No row for an unknown token or a revoked device.
 	GetDeviceByTokenHash(ctx context.Context, tokenHash []byte) (GetDeviceByTokenHashRow, error)
+	GetMessage(ctx context.Context, arg GetMessageParams) (GetMessageRow, error)
+	// Recordings received from paired watches. Everything a person can reach is scoped by user_id here, in
+	// the query, so a handler cannot forget the ownership check.
+	GetMessageByClientID(ctx context.Context, arg GetMessageByClientIDParams) (GetMessageByClientIDRow, error)
 	// Only a pairing that can still be approved: unknown, expired and already approved codes are all "no row".
 	GetOpenPairingByUserCode(ctx context.Context, arg GetOpenPairingByUserCodeParams) (GetOpenPairingByUserCodeRow, error)
 	GetPairingByDeviceCodeHash(ctx context.Context, deviceCodeHash []byte) (GetPairingByDeviceCodeHashRow, error)
@@ -48,10 +54,15 @@ type Querier interface {
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	// Returns no row when this device already uploaded this name: a request with the same name won the race.
+	InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error)
 	// Returns no row when file_name is already taken: another request with the same name won the race.
 	InsertProcessedUpload(ctx context.Context, arg InsertProcessedUploadParams) (ProcessedUpload, error)
 	ListDevices(ctx context.Context, userID uuid.UUID) ([]ListDevicesRow, error)
 	ListInvitations(ctx context.Context) ([]ListInvitationsRow, error)
+	// The caller's messages, newest first, starting after the cursor (the received_at and id of the last message
+	// of the previous page; both null for the first page).
+	ListMessages(ctx context.Context, arg ListMessagesParams) ([]ListMessagesRow, error)
 	ListUsers(ctx context.Context) ([]ListUsersRow, error)
 	// Hands out the approval exactly once: no row means someone else collected it first, or it was never approved.
 	RedeemPairing(ctx context.Context, arg RedeemPairingParams) (RedeemPairingRow, error)
