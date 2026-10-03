@@ -1,0 +1,4 @@
+# Throwaway development database and storage (scripts/dev-db.sh, make run)
+.dev/
+# Build output
+bin/
