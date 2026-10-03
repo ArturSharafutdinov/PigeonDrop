@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -72,7 +73,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if err != nil {
 			return fmt.Errorf("configuration:\n%w", err)
 		}
-		return serve(ctx, cfg, newLogger(stderr, cfg.LogLevel))
+		return serve(ctx, cfg, newLogger(stdout, cfg.LogLevel))
 	case "migrate":
 		cfg, err := config.Load(getenv)
 		if err != nil {
@@ -111,14 +112,18 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("%d database migration(s) pending: run `pigeondrop migrate up`, or set MIGRATE_ON_START=true", pending)
 	}
 
-	files, err := storage.NewDisk(cfg.StorageDir)
+	// Recordings live in STORAGE_DIR/uploads, the layout the Node prototype used, so a volume it filled
+	// works as it is.
+	files, err := storage.NewDisk(filepath.Join(cfg.StorageDir, "uploads"))
 	if err != nil {
 		return err
 	}
 
 	srv := &http.Server{
-		Addr:              ":" + strconv.Itoa(cfg.Port),
-		Handler:           httpapi.NewHandler(&httpapi.Server{Pinger: pool, DB: dbgen.New(pool), Files: files, Logger: logger}),
+		Addr: ":" + strconv.Itoa(cfg.Port),
+		Handler: httpapi.NewHandler(&httpapi.Server{
+			Pinger: pool, DB: dbgen.New(pool), Files: files, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      120 * time.Second,

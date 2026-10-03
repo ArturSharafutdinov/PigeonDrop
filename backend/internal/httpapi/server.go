@@ -34,6 +34,8 @@ type Server struct {
 	DB     dbgen.Querier
 	Files  storage.Store
 	Logger *slog.Logger
+	// DefaultServerURL is this server's own public address: what an account resolves to when it has no server of its own.
+	DefaultServerURL string
 	// Now supplies the time used to name stored files; nil means time.Now. Tests set it.
 	Now func() time.Time
 }
@@ -87,6 +89,10 @@ func NewHandler(s *Server) http.Handler {
 			writeError(w, http.StatusBadRequest, err.Error())
 		},
 	})
+	// The hand-written browser routes (see uploads.go).
+	mux.HandleFunc("GET /setup", s.handleSetup)
+	mux.HandleFunc("GET /uploads", s.handleListUploads)
+	mux.HandleFunc("GET /uploads/{name}", s.handleDownload)
 	// Anything the generated routes do not claim - unknown path or wrong method alike -
 	// is a JSON 404, the same answer the Node prototype gave.
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {

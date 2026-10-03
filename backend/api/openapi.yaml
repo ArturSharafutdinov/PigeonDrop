@@ -68,8 +68,205 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /accounts:
+    post:
+      operationId: postAccount
+      tags: [accounts]
+      summary: Create an account for a device code, or return the existing one
+      description: |
+        Idempotent: if the account exists it is returned as it is, nothing is overwritten. Called by the
+        watch (through the phone) right after it generates its code, and by the setup page when it loads.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountRequest'
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: The body is not valid JSON, or `code` is missing or too long.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /accounts/{code}:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAccount
+      tags: [accounts]
+      summary: Read an account
+      description: Called by the watch (through the phone) when the user presses "Синхронизация". `serverUrl` is the address uploads should go to.
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          description: No such account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: putAccount
+      tags: [accounts]
+      summary: Set or reset the account's own server
+      description: |
+        Called by the setup page. `customServerUrl` must be present: a string starting with http:// or https://,
+        or null to go back to this server. This never creates an account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetServerRequest'
+      responses:
+        '200':
+          description: The updated account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: The body is not valid JSON, or `customServerUrl` is missing, or neither null nor an http(s) URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  # The three routes below are for people with a browser, not for the apps. They are documented here but
+  # written by hand (tag "manual" keeps them out of code generation): they serve HTML and files, with range
+  # requests, which the generated JSON handlers are not built for.
+  /setup:
+    get:
+      operationId: getSetupPage
+      tags: [manual]
+      summary: The page the watch's QR code opens
+      description: Static HTML. The `code` query parameter is read by the page itself in the browser, not by the server.
+      responses:
+        '200':
+          description: The page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /uploads:
+    get:
+      operationId: listUploads
+      tags: [manual]
+      summary: List stored recordings, newest first
+      description: |
+        For listening to recordings from a browser. **Not protected**: anyone who knows the address sees every
+        recording. The new account model replaces this with authenticated access.
+      responses:
+        '200':
+          description: A list of links.
+          content:
+            text/html:
+              schema:
+                type: string
+  /uploads/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: A stored file's name, as returned in `savedAs` or `wavFile` (not the watch's `fileName`).
+        schema:
+          type: string
+    get:
+      operationId: getUpload
+      tags: [manual]
+      summary: Download or play a stored file
+      description: Content type is audio/wav for .wav, audio/ogg for an Ogg/Opus .opus, application/octet-stream otherwise. Range requests are supported.
+      responses:
+        '200':
+          description: The file.
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            audio/ogg:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: The name is not a plain file name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
+    AccountRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          maxLength: 128
+          description: The device code the watch generated.
+          example: m0x1y2z-ab12cd
+    SetServerRequest:
+      type: object
+      required: [customServerUrl]
+      properties:
+        customServerUrl:
+          type: string
+          description: An http(s) URL, or null for this server (OpenAPI 3.0 cannot say "string or null" here without making the generated type indistinguishable from "missing"). Required, so that an empty body can never reset it by accident.
+          # Kept raw so the handler can tell "missing" from "null"; a plain pointer cannot.
+          # (the generated file already imports encoding/json for its own use)
+          x-go-type: json.RawMessage
+    Account:
+      type: object
+      required: [ok, code, customServerUrl, serverUrl, createdAt, updatedAt]
+      properties:
+        ok:
+          type: boolean
+          description: Always true.
+        code:
+          type: string
+        customServerUrl:
+          type: string
+          nullable: true
+          description: The server the user chose, or null for this one.
+        serverUrl:
+          type: string
+          description: Where uploads go - computed, never stored - `customServerUrl`, or this server's own address when that is null.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     UploadRequest:
       type: object
       required: [fileName, audio]
