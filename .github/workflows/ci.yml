@@ -79,8 +79,8 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: go vet
         run: go vet ./...
-      - name: Tests
-        run: go test ./...
+      - name: Tests (with the race detector)
+        run: go test -race ./...
       - name: Build the Docker image
         run: docker build --tag pigeondrop-backend .
 
