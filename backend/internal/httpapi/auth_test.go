@@ -865,6 +865,9 @@ func TestEveryOperationDeclaredWithSecurityRefusesRequestsWithoutASession(t *tes
 	e.signUp(t, "alice@example.com") // a user exists, but these requests carry no cookie
 	for _, op := range protected {
 		method, path, _ := strings.Cut(op, " ")
+		// A placeholder such as {id} stands for a well-formed value, or the request would be refused for its
+		// shape before anything asks who is sending it.
+		path = regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(path, "00000000-0000-0000-0000-000000000000")
 		rec := e.call(method, path, "{}")
 		if rec.Code != http.StatusUnauthorized || codeOf(t, rec) != "unauthorized" {
 			t.Errorf("%s answers %d %s without a session", op, rec.Code, rec.Body.String())

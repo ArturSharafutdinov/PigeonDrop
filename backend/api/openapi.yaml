@@ -316,6 +316,186 @@ paths:
                 $ref: '#/components/schemas/Error'
         '429':
           $ref: '#/components/responses/TooManyAttempts'
+  /v1/device/code:
+    post:
+      operationId: startDevicePairing
+      tags: [devices]
+      summary: A watch asks to be paired
+      description: |
+        The first step of pairing (the device authorization grant of RFC 8628), called by the watch through the
+        phone. No sign-in: the watch has nothing yet. The answer holds two codes. `deviceCode` is a secret that
+        only the watch knows; it polls `/v1/device/token` with it. `userCode` is short and is shown to the person
+        (as text and inside the QR code that opens `verificationUriComplete`), who approves it on the pairing page
+        while signed in. A pairing lives `expiresIn` seconds.
+
+        Requests are limited per address (`too_many_attempts`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartPairingRequest'
+      responses:
+        '200':
+          description: The codes for this pairing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pairing'
+        '400':
+          description: The body is malformed (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+  /v1/device/token:
+    post:
+      operationId: pollDevicePairing
+      tags: [devices]
+      summary: The watch asks whether its pairing was approved
+      description: |
+        Polled by the watch every `interval` seconds. While the person has not approved, the answer is
+        `{ "status": "pending" }`. After approval the next poll answers `{ "status": "approved" }` with the device
+        token, **once**: the token is not stored in a form that can be shown again, and a second poll of the same
+        pairing is `invalid_device_code`. The watch keeps the token and sends it with every upload.
+
+        Polling faster than the server allows is answered 429 with `Retry-After`; such a poll counts for nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PollPairingRequest'
+      responses:
+        '200':
+          description: Still waiting for approval, or approved (with the token).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollPairingResult'
+        '400':
+          description: The device code is unknown or its token was already collected (`invalid_device_code`), or the pairing ran out of time unapproved (`expired_token`). Either way the watch starts over.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+  /v1/device/pairing/{userCode}:
+    parameters:
+      - name: userCode
+        in: path
+        required: true
+        description: The code shown on the watch. Case and the dash do not matter.
+        schema:
+          type: string
+    get:
+      operationId: getDevicePairing
+      tags: [devices]
+      summary: What a user code is waiting for
+      description: |
+        Lets the pairing page show the person which watch is asking before they approve it. Unknown, expired and
+        already approved codes are all `invalid_user_code`. Wrong codes are limited per user and per address.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The pairing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No open pairing has this code (`invalid_user_code`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+  /v1/device/approve:
+    post:
+      operationId: approveDevicePairing
+      tags: [devices]
+      summary: Pair the watch that shows this code with the signed-in user
+      description: |
+        The person's half of pairing. The watch's next poll receives its token. The person should compare the code
+        with the one on the watch's screen before approving: a link can be made to point at someone else's code.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovePairingRequest'
+      responses:
+        '204':
+          description: Approved.
+        '400':
+          description: The body is malformed, or the name is too long (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No open pairing has this code (`invalid_user_code`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+  /v1/devices:
+    get:
+      operationId: listDevices
+      tags: [devices]
+      summary: The user's paired watches
+      description: Revoked devices are not listed.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The devices, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/devices/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: revokeDevice
+      tags: [devices]
+      summary: Revoke a watch
+      description: |
+        The device's token stops working at once. What the device already uploaded stays. Revoking twice is fine.
+      security:
+        - cookieAuth: []
+      responses:
+        '204':
+          description: The device is revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The user has no such device (`not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   # The three routes below are for people with a browser, not for the apps. They are documented here but
   # written by hand (tag "manual" keeps them out of code generation): they serve HTML and files, with range
   # requests, which the generated JSON handlers are not built for.
@@ -480,6 +660,113 @@ components:
         createdAt:
           type: string
           format: date-time
+    StartPairingRequest:
+      type: object
+      properties:
+        clientName:
+          type: string
+          maxLength: 64
+          description: What the watch calls itself (for example its model). Shown to the person approving, and offered as the device's name.
+          example: Amazfit Balance
+    Pairing:
+      type: object
+      required: [deviceCode, userCode, verificationUri, verificationUriComplete, expiresIn, interval]
+      properties:
+        deviceCode:
+          type: string
+          description: The secret the watch polls with. Never shown to people.
+        userCode:
+          type: string
+          description: The short code to show, in the form BCDF-GHJK.
+          example: BCDF-GHJK
+        verificationUri:
+          type: string
+          description: The page where the person approves, to be shown as text.
+          example: https://pigeon.example.com/pair
+        verificationUriComplete:
+          type: string
+          description: The same page with the code filled in; the content of the QR code.
+          example: https://pigeon.example.com/pair?code=BCDF-GHJK
+        expiresIn:
+          type: integer
+          description: Seconds the pairing stays open.
+        interval:
+          type: integer
+          description: Seconds the watch should wait between polls.
+    PollPairingRequest:
+      type: object
+      required: [deviceCode]
+      properties:
+        deviceCode:
+          type: string
+          maxLength: 128
+    PollPairingResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [pending, approved]
+        interval:
+          type: integer
+          description: With `pending`, seconds to wait before the next poll.
+        deviceToken:
+          type: string
+          description: With `approved`, the token to send in the Authorization header, as `Bearer <token>`. Shown this once.
+        deviceId:
+          type: string
+          format: uuid
+          description: With `approved`, the new device's id.
+    PairingInfo:
+      type: object
+      required: [userCode, clientName, expiresAt]
+      properties:
+        userCode:
+          type: string
+          example: BCDF-GHJK
+        clientName:
+          type: string
+          nullable: true
+          description: What the watch calls itself. Chosen by the watch, so not to be trusted or rendered as markup.
+        expiresAt:
+          type: string
+          format: date-time
+    ApprovePairingRequest:
+      type: object
+      required: [userCode]
+      properties:
+        userCode:
+          type: string
+          maxLength: 32
+        name:
+          type: string
+          maxLength: 64
+          description: The device's name in the user's list. Defaults to the name the watch gave itself.
+    Device:
+      type: object
+      required: [id, name, createdAt, lastSeenAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the device last called the API (recorded at most once an hour); null if it never has.
+    DeviceList:
+      type: object
+      required: [devices]
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Device'
     ErrorCode:
       type: string
       description: What went wrong, for clients to act on and translate. `error` is an English sentence for logs.
@@ -494,6 +781,10 @@ components:
         - unauthorized
         - too_many_attempts
         - forbidden_origin
+        - invalid_user_code
+        - invalid_device_code
+        - expired_token
+        - not_found
     AccountRequest:
       type: object
       required: [code]

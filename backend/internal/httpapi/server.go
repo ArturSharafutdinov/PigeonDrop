@@ -52,6 +52,9 @@ type Server struct {
 	AllowedOrigins []string
 	// TrustProxyHeaders reads the client's address from X-Forwarded-For (only behind a proxy that sets it).
 	TrustProxyHeaders bool
+
+	// userCodes draws the short code of a pairing; nil means auth.NewUserCode. Tests replace it to force collisions.
+	userCodes func() (display, canonical string, err error)
 }
 
 func (s *Server) now() time.Time {
