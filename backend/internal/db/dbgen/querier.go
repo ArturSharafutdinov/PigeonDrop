@@ -6,17 +6,46 @@ package dbgen
 
 import (
 	"context"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type Querier interface {
+	// Spends the invitation. No row means it was unknown, expired, or already used (possibly a moment ago
+	// by someone else) - the caller cannot and need not tell which.
+	ConsumeInvitation(ctx context.Context, arg ConsumeInvitationParams) (uuid.UUID, error)
 	// Returns no row when the account already exists: creating twice is harmless, the caller then reads it.
 	CreateAccount(ctx context.Context, code string) (Account, error)
+	CreateInvitation(ctx context.Context, arg CreateInvitationParams) (CreateInvitationRow, error)
+	CreateSession(ctx context.Context, arg CreateSessionParams) (uuid.UUID, error)
+	// Users, invitations and sessions. Times come from the caller (never now()) so the server and its
+	// tests share one clock.
+	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
+	// Used after a password change: every other session of the user ends, the current one stays.
+	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
+	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
+	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
+	// Read-only look, to refuse an unusable code before spending a password hash on it.
+	FindUsableInvitation(ctx context.Context, arg FindUsableInvitationParams) (uuid.UUID, error)
 	GetAccount(ctx context.Context, code string) (Account, error)
 	GetProcessedUpload(ctx context.Context, fileName string) (ProcessedUpload, error)
+	// The session behind a cookie, with its user. No row when it is unknown or has expired.
+	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
+	GetUserByEmail(ctx context.Context, email string) (User, error)
+	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	// Returns no row when file_name is already taken: another request with the same name won the race.
 	InsertProcessedUpload(ctx context.Context, arg InsertProcessedUploadParams) (ProcessedUpload, error)
+	ListInvitations(ctx context.Context) ([]ListInvitationsRow, error)
+	ListUsers(ctx context.Context) ([]ListUsersRow, error)
+	// Only an unused invitation can be withdrawn; a used one stays as the record of who came through it.
+	RevokeInvitation(ctx context.Context, id uuid.UUID) (int64, error)
 	// Returns no row when there is no such account: this never creates one.
 	SetAccountServerURL(ctx context.Context, arg SetAccountServerURLParams) (Account, error)
+	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
+	// Slides the expiry forward, but never past the absolute limit.
+	TouchSession(ctx context.Context, arg TouchSessionParams) error
 }
 
 var _ Querier = (*Queries)(nil)

@@ -3,6 +3,8 @@
 //	pigeondrop serve          run the HTTP server
 //	pigeondrop migrate up     apply pending database migrations
 //	pigeondrop migrate status list migrations and whether they are applied
+//	pigeondrop invite ...     create, list and revoke invitation codes
+//	pigeondrop user ...       list users, set a password
 //	pigeondrop healthcheck    exit 0 if the local server answers /healthz (for Docker)
 //	pigeondrop version
 //
@@ -39,6 +41,8 @@ commands:
   serve             run the HTTP server
   migrate up        apply pending database migrations
   migrate status    list migrations and whether they are applied
+  invite create     print a new invitation code        (also: invite list, invite revoke <id>)
+  user list         list users                         (also: user set-password <email>)
   healthcheck       exit 0 if the local server answers /healthz
   version           print the version
 `
@@ -47,13 +51,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr); err != nil {
+	if err := run(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "pigeondrop:", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) error {
+func run(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return errors.New("no command given")
@@ -80,6 +84,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			return fmt.Errorf("configuration:\n%w", err)
 		}
 		return migrate(ctx, cfg, args[1:], stdout)
+	case "invite", "user":
+		cfg, err := config.Load(getenv)
+		if err != nil {
+			return fmt.Errorf("configuration:\n%w", err)
+		}
+		return admin(ctx, cfg, args[0], args[1:], stdin, stdout, stderr)
 	default:
 		fmt.Fprint(stderr, usage)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -119,10 +129,14 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 
+	queries := dbgen.New(pool)
+	go purgeSessions(ctx, queries, logger)
+
 	srv := &http.Server{
 		Addr: ":" + strconv.Itoa(cfg.Port),
 		Handler: httpapi.NewHandler(&httpapi.Server{
-			Pinger: pool, DB: dbgen.New(pool), Files: files, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
+			Pinger: pool, DB: queries, Files: files, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
+			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
@@ -151,6 +165,26 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("shut down: %w", err)
 	}
 	return nil
+}
+
+// purgeSessions deletes expired sessions once an hour until ctx ends. Expired sessions are already refused
+// at sign-in; this only keeps the table from growing.
+func purgeSessions(ctx context.Context, q dbgen.Querier, logger *slog.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			removed, err := q.DeleteExpiredSessions(ctx, time.Now())
+			if err != nil && ctx.Err() == nil {
+				logger.Warn("purge expired sessions", "error", err)
+			} else if removed > 0 {
+				logger.Info("expired sessions removed", "count", removed)
+			}
+		}
+	}
 }
 
 func migrate(ctx context.Context, cfg config.Config, args []string, stdout io.Writer) error {

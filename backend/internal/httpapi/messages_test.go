@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/auth"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/testdb"
@@ -28,10 +33,39 @@ type testEnv struct {
 	handler http.Handler
 	files   *storage.Disk
 	db      dbgen.Querier
+	pool    *pgxpool.Pool
 	server  *Server
+	logs    *syncBuffer
+
+	mu    sync.Mutex
+	clock time.Time
 }
 
-func newEnv(t *testing.T) *testEnv {
+// syncBuffer collects the server's log; handlers write to it from several goroutines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// testHasherParams keep password hashing fast; the real settings are exercised in internal/auth.
+var testHasherParams = auth.Params{MemoryKiB: 64, Iterations: 1, Parallelism: 1}
+
+func newEnv(t *testing.T) *testEnv { return newEnvWith(t, nil) }
+
+// newEnvWith is newEnv with a chance to change the Server before its handler is built.
+func newEnvWith(t *testing.T, configure func(*Server)) *testEnv {
 	t.Helper()
 	pool := testdb.New(t)
 	files, err := storage.NewDisk(t.TempDir())
@@ -39,25 +73,39 @@ func newEnv(t *testing.T) *testEnv {
 		t.Fatal(err)
 	}
 
-	// Each call to the clock is one millisecond later, so uploads get distinct, ordered names.
-	var mu sync.Mutex
-	clock := time.Date(2026, 10, 3, 7, 23, 36, 48*int(time.Millisecond), time.UTC)
-
+	e := &testEnv{files: files, pool: pool, logs: &syncBuffer{},
+		clock: time.Date(2026, 10, 3, 7, 23, 36, 48*int(time.Millisecond), time.UTC)}
 	srv := &Server{
 		Pinger: pool,
 		DB:     dbgen.New(pool),
 		Files:  files,
-		Logger: quietLogger(),
+		Logger: slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		// What an account without a server of its own resolves to.
 		DefaultServerURL: defaultServerURL,
+		// Each call to the clock is one millisecond later, so uploads get distinct, ordered names.
 		Now: func() time.Time {
-			mu.Lock()
-			defer mu.Unlock()
-			clock = clock.Add(time.Millisecond)
-			return clock
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.clock = e.clock.Add(time.Millisecond)
+			return e.clock
 		},
+		Tx:           db.InTx(pool),
+		Hasher:       auth.NewHasher(testHasherParams, 4),
+		CookieSecure: true,
 	}
-	return &testEnv{handler: NewHandler(srv), files: files, db: srv.DB, server: srv}
+	if configure != nil {
+		configure(srv)
+	}
+	e.server, e.db = srv, srv.DB
+	e.handler = NewHandler(srv)
+	return e
+}
+
+// advance moves the test clock forward.
+func (e *testEnv) advance(d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clock = e.clock.Add(d)
 }
 
 func fixture(t testing.TB, name string) []byte {
