@@ -15,7 +15,7 @@ Date.now = () => now
 const S = stubPath('main-page.mjs')
 const PAGE = generate('page/index.js', {
   '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S, '@zos/display': S,
-  '../utils/recordings': S, '../utils/uploadQueue': S, '../config': S,
+  '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S, '../config': S,
 })
 await import(fileUrl(PAGE))
 const mk = () => Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) })
@@ -169,3 +169,28 @@ reset(); page.toggleRecording()
 ok(heldFor(5000) && holdTimers() === 0, '8e: recording replaces the upload hold and cancels its timer')
 reset(); stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 2, total: 4 })
 ok(holdTimers() === 0 && !stubs.log.some((l) => /Bright|Off/.test(l)), '8e: sweep progress during a recording changes nothing about the screen')
+
+console.log('--- 9. a watch that is not paired ---')
+// 9a. the recording is kept and the screen says what to do - not "sending", which would be untrue
+stubs.setPaired(false)
+page = mk(); page.build(); reset(); timeouts.length = 0; now = 11_000_000
+page.toggleRecording(); reset(); page.toggleRecording()
+ok(last() === 'Записано. Часы не\nпривязаны: Настройки\n→ Привязать часы', '9a: after stop -> ' + JSON.stringify(last()))
+ok(stubs.log.includes('retryPendingUploads'), '9a: the queue is still kicked (it reports "unpaired" by itself)')
+// 9b. the limit message is kept in front of it
+page = mk(); page.build(); page.toggleRecording(); reset()
+for (let i = 1; i <= 5; i++) { now += 1000; tickFn() }
+ok(last().startsWith('Лимит записи\nдостигнут') && last().includes('не\nпривязаны'), '9b: limit + unpaired -> ' + JSON.stringify(last()))
+// 9c. what the upload queue reports
+reset(); stubs.listener({ state: 'unpaired', pending: 2, revoked: false })
+ok(last() === 'Часы не привязаны\nНастройки →\nПривязать часы\nВ очереди: 2', '9c: never paired -> ' + JSON.stringify(last()))
+stubs.listener({ state: 'unpaired', pending: 1, revoked: true })
+ok(last() === 'Привязка отозвана\nНастройки →\nПривязать часы\nВ очереди: 1', '9c: revoked by the server -> ' + JSON.stringify(last()))
+// 9d. ... and an "unpaired" report never overwrites the stopwatch
+page = mk(); page.build(); page.toggleRecording(); const n9 = stubs.texts.length
+stubs.listener({ state: 'unpaired', pending: 1, revoked: false })
+ok(stubs.texts.length === n9, '9d: ignored while recording')
+// 9e. paired again: the usual wording
+stubs.setPaired(true)
+page = mk(); page.build(); page.toggleRecording(); reset(); page.toggleRecording()
+ok(last().startsWith('Отправка...'), '9e: paired -> ' + JSON.stringify(last()))

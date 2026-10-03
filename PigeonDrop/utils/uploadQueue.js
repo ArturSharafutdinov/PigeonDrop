@@ -15,6 +15,12 @@
 // the reply to the last chunk carries the server's answer, and only that reply
 // marks the recording uploaded. See app-side/uploads.js for the phone half.
 //
+// Every chunk carries the device token (utils/device.js) that the watch received when it was
+// paired; the phone presents it to the server with the final request. A watch that has not
+// been paired sends nothing: recordings stay queued, and the sweep reports state 'unpaired' so
+// the screen can say how to fix it. If the server refuses the token (the device was revoked)
+// the token is forgotten and the same thing happens: it can never work again.
+//
 // A recording that cannot be read (file won't open, stat fails, short read) is a
 // problem of that one file, not of the phone or the server: the sweep skips it,
 // keeps sending the recordings behind it, and reports the failure at the end. It
@@ -25,7 +31,7 @@
 
 import { readFileSync, writeFileSync, rmSync, openSync, readSync, closeSync, statSync, O_RDONLY } from '@zos/fs'
 import { RECORDINGS_DIR, listRecordings } from './recordings'
-import { getServerUrl } from './account'
+import { getDeviceToken, isPaired, clearDevice } from './device'
 import { MAX_RECORDINGS, MAX_PENDING_RECORDINGS } from '../config'
 
 const UPLOADS_INDEX_FILE = 'uploads.json'
@@ -106,6 +112,8 @@ export function pendingRecordings() {
 //   { state: 'sending', index, count, chunk, total }  recording `index` of `count`, chunk `chunk` of `total`
 //   { state: 'done', pending }                        the sweep finished
 //   { state: 'error', message, pending }              the sweep stopped on a failure
+//   { state: 'unpaired', pending, revoked }           nothing was sent because the watch is not paired;
+//                                                     revoked is true when the server just refused its token
 // Pass null to unsubscribe.
 export function onUploadState(callback) {
   stateListener = callback
@@ -231,11 +239,19 @@ function requestChunk(messageBuilder, message, retriesLeft) {
 
 // Sends one recording chunk by chunk. Resolves with the phone's final reply, or
 // { skip: true } for an empty file (nothing to send). Rejects on failure; the error
-// has .restart = true if the phone lost its partial copy of the upload, and
-// .local = true if the problem is with this file itself.
+// has .restart = true if the phone lost its partial copy of the upload,
+// .local = true if the problem is with this file itself, and .unauthorized = true if
+// the server refused the device token.
 function sendRecording(item, onChunk) {
   const { messageBuilder } = getApp()._options.globalData
   const path = item.filePath.replace('data://', '')
+
+  const deviceToken = getDeviceToken()
+  if (!deviceToken) {
+    const err = new Error('watch is not paired')
+    err.unpaired = true
+    return Promise.reject(err)
+  }
 
   let reader
   let size
@@ -253,13 +269,12 @@ function sendRecording(item, onChunk) {
     return Promise.reject(err)
   }
 
-  const serverUrl = getServerUrl() // null until an account has been synced; the phone then uses its default
   const uploadId = String(Date.now()) // identifies this attempt, so a stale partial upload is never mixed in
 
   const sendFrom = (index) => {
     let message
     try {
-      message = { type: 'uploadChunk', fileName: item.fileName, uploadId, index, total, data: reader.read(index), serverUrl }
+      message = { type: 'uploadChunk', fileName: item.fileName, uploadId, index, total, data: reader.read(index), deviceToken }
     } catch (err) {
       return Promise.reject(err)
     }
@@ -271,6 +286,8 @@ function sendRecording(item, onChunk) {
         err.restart = !!(reply && reply.restart)
         // The phone could not wrap this particular recording: a problem of the file, not of the link.
         err.local = !!(reply && reply.fileError)
+        // The server refused the device token: this watch is no longer paired.
+        err.unauthorized = !!(reply && reply.unauthorized)
         throw err
       }
       if (index < total - 1) return sendFrom(index + 1)
@@ -317,6 +334,12 @@ export function retryPendingUploads() {
 
   const pending = pendingRecordings().sort((a, b) => a.timestamp - b.timestamp)
   if (pending.length === 0) return
+
+  // Nothing can be sent without a device token; say so instead of trying and failing on every chunk.
+  if (!isPaired()) {
+    emit({ state: 'unpaired', pending: pending.length, revoked: false })
+    return
+  }
 
   sweepInFlight = true
   const unreadable = [] // files this sweep could not read, reported when it ends
@@ -369,6 +392,15 @@ export function retryPendingUploads() {
     .catch((err) => {
       sweepInFlight = false
       console.log('retryPendingUploads: sweep stopped:', err)
+      if (err && err.unauthorized) {
+        clearDevice()
+        emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: true })
+        return
+      }
+      if (err && err.unpaired) {
+        emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: false })
+        return
+      }
       emit({ state: 'error', message: shortReason(err), pending: pendingRecordings().length })
     })
 }

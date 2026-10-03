@@ -23,6 +23,7 @@ import {
   setActiveRecording,
   onUploadState,
 } from '../utils/uploadQueue'
+import { isPaired } from '../utils/device'
 import { MAX_RECORDING_SECONDS } from '../config'
 
 // How long the screen is kept awake for an upload, so it can be sent to the
@@ -76,7 +77,7 @@ Page({
       text_style: text_style.WRAP,
     })
 
-    // Navigates to the server-configuration page (QR code + sync - see
+    // Navigates to the settings page (pairing the watch, clearing memory - see
     // page/settings.js). Stacked above "Список записей" rather than beside
     // it - side-by-side placement leaves much tighter margins near the
     // bezel, while stacking lets this reuse the same proven-safe width/x as
@@ -209,7 +210,8 @@ Page({
     // screen hold once everything has been sent.
     const pendingCount = pendingRecordings().length
     if (pendingCount === 0) this.endUploadHold()
-    const sending = 'Отправка...\nВ очереди: ' + pendingCount
+    // A watch that is not paired sends nothing: say the recording is safe, and what to do about it.
+    const sending = isPaired() ? 'Отправка...\nВ очереди: ' + pendingCount : 'Записано. Часы не\nпривязаны: Настройки\n→ Привязать часы'
     let status
     if (limitReached) {
       status = 'Лимит записи\nдостигнут\n\n' + sending
@@ -348,6 +350,11 @@ Page({
       if (state.pending === 0 && this.state.uploadHoldTimer !== null) this.endUploadHold()
     } else if (state.state === 'error') {
       this.updateStatus('Не удалось отправить\n' + state.message + '\nВ очереди: ' + state.pending)
+    } else if (state.state === 'unpaired') {
+      // Nothing was sent. The recordings are kept and go out as soon as the watch is paired.
+      this.updateStatus(
+        (state.revoked ? 'Привязка отозвана' : 'Часы не привязаны') + '\nНастройки →\nПривязать часы\nВ очереди: ' + state.pending,
+      )
     }
   },
 

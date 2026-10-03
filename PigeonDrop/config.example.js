@@ -24,17 +24,7 @@ export const MAX_PENDING_RECORDINGS = 50
 // upload and the phone-side Ogg packing were sized and tested around.
 export const MAX_RECORDING_SECONDS = 60
 
-// Bootstrap server address (see /server in the repo root, or server/DEPLOY.md
-// for a real deployment). This is also where the account/config server lives
-// - registerAccount and sync requests (see utils/account.js and
-// page/settings.js) go here too. Once the user has synced at least once, the
-// actual upload target is whatever serverUrl their account resolved to
-// (utils/account.js#getServerUrl) - this constant is only the fallback used
-// before that first sync.
+// The PigeonDrop server: where the watch is paired (page/pair.js) and where recordings are
+// uploaded (app-side/uploads.js). Put the address of your own deployment here - see
+// backend/README.md and server/DEPLOY.md. No trailing slash.
 export const SERVER_URL = 'https://your-server.example.com'
-
-// Base URL for the web setup page the QR code points to (see
-// page/settings.js). Kept as a separate constant from SERVER_URL, even
-// though they're usually the same address, since the account API and the
-// web/config page could end up hosted separately later.
-export const WEB_APP_BASE_URL = SERVER_URL

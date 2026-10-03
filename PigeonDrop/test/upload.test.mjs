@@ -3,12 +3,13 @@
 
 import fs from 'fs'; import os from 'os'; import path from 'path'; import crypto from 'crypto'
 import { ctl, resetFds, fds } from './stubs/fs.mjs'
+import { device } from './stubs/upload-deps.mjs'
 import { generate, fileUrl, stubPath } from './helpers/load.mjs'
 import { framedRecording, readOgg, sameAudio, samePackets, zeppPackets } from './helpers/ogg.mjs'
 // utils/uploadQueue.js and app-side/uploads.js are the real source files; only the platform pieces are stubbed.
 const FS = stubPath('fs.mjs'), DEPS = stubPath('upload-deps.mjs')
 const RECORDINGS = generate('utils/recordings.js', { '@zos/fs': FS })
-const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './account': DEPS, '../config': DEPS })
+const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, '../config': DEPS })
 const OGG = generate('utils/oggOpus.js', {})
 const BASE64 = generate('app-side/base64.js', {})
 const UPLOADS = generate('app-side/uploads.js', { '../utils/oggOpus': OGG, './base64': BASE64 })
@@ -21,17 +22,18 @@ const until = async (cond, ms = 4000) => { const t0 = Date.now(); while (!cond()
 
 async function world() {
   const n = ++T
+  device.token = 'pdd_test_token_0123456789'; device.cleared = 0
   ctl.root = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-')); ctl.shortRead = null; ctl.readCalls = 0; ctl.failOpen = ctl.failStat = ctl.failWhole = null; resetFds()
   const Q = await import(fileUrl(QUEUE) + '?t=' + n)
   const U = await import(fileUrl(UPLOADS) + '?t=' + n)
-  const w = { Q, U, states: [], requests: [], posts: [], inflight: 0, maxInflight: 0, failRequests: new Set(), serverReply: null, serverThrows: false, hooks: {}, now: Date.now() }
+  const w = { Q, U, states: [], requests: [], posts: [], inflight: 0, maxInflight: 0, failRequests: new Set(), serverReply: null, serverStatus: 200, serverThrows: false, hooks: {}, now: Date.now() }
   Q.onUploadState((s) => w.states.push(s))
   const builder = {
     request: async (msg, opts) => {
       w.inflight++; w.maxInflight = Math.max(w.maxInflight, w.inflight)
       try {
         const wire = JSON.parse(JSON.stringify(msg))                          // what actually crosses BLE
-        w.requests.push({ file: wire.fileName, index: wire.index, total: wire.total, id: wire.uploadId, bytes: wire.data.length })
+        w.requests.push({ file: wire.fileName, index: wire.index, total: wire.total, id: wire.uploadId, bytes: wire.data.length, token: wire.deviceToken })
         if (w.hooks.before) await w.hooks.before(wire, w)
         if (w.failRequests.has(w.requests.length)) throw new Error('Timed out in ' + opts.timeout + 'ms.')
         return JSON.parse(JSON.stringify(await U.handleUploadChunk(wire, 'https://default.example')))
@@ -40,10 +42,10 @@ async function world() {
   }
   globalThis.getApp = () => ({ _options: { globalData: { messageBuilder: builder } } })
   globalThis.fetch = async (o) => {
-    const body = JSON.parse(o.body); w.posts.push({ url: o.url, ...body })
+    const body = JSON.parse(o.body); w.posts.push({ url: o.url, auth: o.headers && o.headers.Authorization, ...body })
     if (w.serverThrows) throw new Error('Network down')
-    const reply = w.serverReply || { ok: true, bytesReceived: Buffer.from(body.audio, 'base64').length, savedAs: 'a.opus', wavFile: 'a.wav' }
-    return { status: 200, body: JSON.stringify(reply) }
+    const reply = w.serverReply || { ok: true, id: 'm-1', messageId: body.messageId, bytesReceived: Buffer.from(body.audio, 'base64').length, duplicate: false }
+    return { status: w.serverStatus, body: typeof reply === 'string' ? reply : JSON.stringify(reply) }
   }
   return w
 }
@@ -64,7 +66,7 @@ console.log('1. 60 s recording (~160 KB): chunked, strictly sequential, the serv
   ok(w.maxInflight === 1, 'never more than one request in flight (max ' + w.maxInflight + ')')
   ok(w.requests.every((r) => r.bytes <= 20480 + 0), 'every chunk message is small: max base64 ' + Math.max(...w.requests.map((r) => r.bytes)) + ' chars (vs 218 454 in one piece)')
   ok(w.posts.length === 1 && sameAudio(w.posts[0].audio, file), 'server received ONE POST whose audio is a clean Ogg/Opus file carrying exactly the recording\'s packets')
-  ok(w.posts[0].url === 'https://user-own.example/messages' && w.posts[0].fileName === 'voice_1000.opus', 'posted to the account serverUrl at /messages, fileName preserved')
+  ok(w.posts[0].url === 'https://default.example/v1/messages' && w.posts[0].messageId === 'voice_1000.opus', 'posted to the server at /v1/messages, the file name sent as messageId')
   ok(JSON.stringify(uploaded()) === '["voice_1000.opus"]', 'marked uploaded only after the server confirmed')
   ok(w.states[0].state === 'sending' && w.states.at(-1).state === 'done' && w.states.at(-1).pending === 0, 'UI states: sending ... done(pending 0)')
   ok(w.states.filter((s) => s.state === 'sending').map((s) => s.chunk + '/' + s.total).join(' ') === Array.from({ length: 11 }, (_, i) => (i + 1) + '/11').join(' '), 'progress reports chunk 1/11 .. 11/11') }
@@ -132,9 +134,9 @@ console.log('9. read problems never send corrupted data')
   ok(w.states.at(-1).state === 'error' && /read \d+ of \d+ bytes/.test(w.states.at(-1).message) && w.posts.length === 0, 'short read -> error, nothing forwarded -> ' + w.states.at(-1).message) }
 
 console.log('10. phone-side validation, idempotency, expiry')
-{ const w = await world(); const U = w.U; const base = { fileName: 'f', uploadId: 'u', index: 0, total: 2, data: 'AAAA' }
+{ const w = await world(); const U = w.U; const base = { fileName: 'f', uploadId: 'u', index: 0, total: 2, data: 'AAAA', deviceToken: 'pdd_x' }
   const bad = async (patch) => (await U.handleUploadChunk({ ...base, ...patch }, 'x')).ok === false
-  ok((await bad({ index: 2 })) && (await bad({ index: -1 })) && (await bad({ total: 0 })) && (await bad({ data: '' })) && (await bad({ data: 5 })) && (await bad({ fileName: '' })) && (await bad({ index: 1.5 })), 'out-of-range / empty / non-string fields rejected')
+  ok((await bad({ index: 2 })) && (await bad({ index: -1 })) && (await bad({ total: 0 })) && (await bad({ data: '' })) && (await bad({ data: 5 })) && (await bad({ fileName: '' })) && (await bad({ index: 1.5 })) && (await bad({ deviceToken: '' })) && (await bad({ deviceToken: undefined })) && (await bad({ deviceToken: 5 })), 'out-of-range / empty / non-string fields rejected, and a chunk without a device token')
   ok((await U.handleUploadChunk(null, 'x')).ok === false, 'null message rejected')
   await U.handleUploadChunk(base, 'x'); const dup = await U.handleUploadChunk(base, 'x')
   ok(dup.ok && dup.received === 1, 'duplicate chunk does not double-count')
@@ -163,7 +165,7 @@ console.log('13. one unreadable recording must not block the ones behind it')
   ctl.failOpen = (p) => p.includes('voice_230'); ctl.failWhole = (p) => p.includes('voice_230')
   w.Q.retryPendingUploads(); await finished(w)
   const last = w.states.at(-1)
-  ok(w.posts.length === 1 && w.posts[0].fileName === 'voice_231.opus' && sameAudio(w.posts[0].audio, good), 'the readable recording behind it was still delivered')
+  ok(w.posts.length === 1 && w.posts[0].messageId === 'voice_231.opus' && sameAudio(w.posts[0].audio, good), 'the readable recording behind it was still delivered')
   ok(last.state === 'error' && /cannot open file/.test(last.message) && last.pending === 1, 'the failure is still reported, with the queue count -> ' + JSON.stringify(last))
   ok(files().includes('voice_230.opus') && JSON.stringify(uploaded()) === '["voice_231.opus"]', 'the unreadable one is kept (not deleted, not marked uploaded)')
   ok(fds.size === 0, 'no descriptors leaked') }
@@ -191,7 +193,7 @@ console.log('16. a recording the phone cannot wrap is that file\'s own problem: 
   addRecording(w, 'voice_300.opus', garbage); const good = addRecording(w, 'voice_301.opus', 20000)
   w.Q.retryPendingUploads(); await finished(w)
   const last = w.states.at(-1)
-  ok(w.posts.length === 1 && w.posts[0].fileName === 'voice_301.opus' && sameAudio(w.posts[0].audio, good), 'the good recording behind it was delivered')
+  ok(w.posts.length === 1 && w.posts[0].messageId === 'voice_301.opus' && sameAudio(w.posts[0].audio, good), 'the good recording behind it was delivered')
   ok(last.state === 'error' && /cannot pack recording/.test(last.message) && last.pending === 1, 'the failure is reported with the queue count -> ' + JSON.stringify(last))
   ok(files().includes('voice_300.opus') && JSON.stringify(uploaded()) === '["voice_301.opus"]', 'the unpackable file is kept, not marked uploaded')
   ok(w.requests.filter((r) => r.file === 'voice_300.opus').length === 2, 'it is not retried or restarted in a loop (its own 2 chunks only) -> ' + w.requests.filter((r) => r.file === 'voice_300.opus').length) }
@@ -206,13 +208,58 @@ console.log('17. a recording cut mid-packet is trimmed and still delivered')
 console.log('18. what the server is sent')
 { const w = await world(); addRecording(w, 'voice_320.opus', 3000); w.Q.retryPendingUploads(); await finished(w)
   const post = w.posts[0]; const bytes = Buffer.from(post.audio, 'base64')
-  ok(Object.keys(post).filter((k) => k !== 'url').sort().join() === 'audio,fileName', 'the request is still just { fileName, audio } -> ' + Object.keys(post).join())
+  ok(Object.keys(post).filter((k) => k !== 'url' && k !== 'auth').sort().join() === 'audio,messageId', 'the request body is just { messageId, audio } -> ' + Object.keys(post).join())
   ok(bytes.toString('latin1', 0, 4) === 'OggS' && bytes.toString('latin1', 28, 36) === 'OpusHead', 'audio is an Ogg file that starts with an OpusHead packet')
   const ogg = readOgg(bytes); const head = ogg.head
   ok(head[9] === 1 && head.readUInt32LE(12) === 16000 && head.readUInt16LE(10) === 0 && head[18] === 0, 'OpusHead: mono, input rate 16000, pre-skip 0, mapping family 0')
   ok(ogg.tags.toString('latin1', 12, 12 + ogg.tags.readUInt32LE(8)) === 'pigeondrop', 'OpusTags names this app as the vendor')
   const last = ogg.pages[ogg.pages.length - 1]
   ok(last.granule === BigInt(ogg.audio.length * 960), 'the last granule position counts every packet as 20 ms at 48 kHz (' + last.granule + ')') }
+
+console.log('19. every chunk carries the device token; the server receives it as a bearer token')
+{ const w = await world(); addRecording(w, 'voice_400.opus', 40000); w.Q.retryPendingUploads(); await finished(w)
+  ok(w.requests.length > 1 && w.requests.every((r) => r.token === 'pdd_test_token_0123456789'), 'all ' + w.requests.length + ' chunk messages carry the token')
+  ok(w.posts.length === 1 && w.posts[0].auth === 'Bearer pdd_test_token_0123456789', 'the one POST to the server has Authorization: Bearer <token> -> ' + w.posts[0].auth)
+  ok(!JSON.stringify(w.posts[0]).includes('"deviceToken"') && !w.posts[0].audio.includes('pdd_'), 'the token is not in the request body') }
+{ const w = await world(); addRecording(w, 'voice_401.opus', 20000); device.token = 'pdd_another_token_AAAAAAAAAAAA'
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.posts[0].auth === 'Bearer pdd_another_token_AAAAAAAAAAAA', 'the token is read when the upload starts, so a watch paired again uses the new one') }
+
+console.log('20. a watch that is not paired sends nothing, says why, and keeps its recordings')
+{ const w = await world(); device.token = null; addRecording(w, 'voice_410.opus', 20000)
+  w.Q.retryPendingUploads(); await tick()
+  ok(w.requests.length === 0 && w.posts.length === 0 && uploaded().length === 0, 'nothing left the watch')
+  ok(w.states.length === 1 && w.states[0].state === 'unpaired' && w.states[0].pending === 1 && w.states[0].revoked === false, 'one "unpaired" state with the queue size -> ' + JSON.stringify(w.states))
+  ok(files().includes('voice_410.opus'), 'the recording is kept')
+  w.Q.retryPendingUploads(); await tick(); ok(w.states.length === 2, 'every trigger reports it again (app open, reconnect, new recording)')
+  device.token = 'pdd_test_token_0123456789'; w.Q.retryPendingUploads(); await until(() => uploaded().length === 1)
+  ok(JSON.stringify(uploaded()) === '["voice_410.opus"]', 'and it goes out as soon as the watch is paired') }
+{ const w = await world(); device.token = null; w.Q.retryPendingUploads(); await tick()
+  ok(w.states.length === 0, 'with nothing queued, being unpaired is silent') }
+
+console.log('21. the server refuses the token (device revoked): the watch forgets it and says so')
+for (const [label, status, reply] of [['error code in the body', 200, { ok: false, code: 'unauthorized', error: 'missing or invalid device token' }], ['HTTP 401 with a non-JSON body', 401, '<html>Unauthorized</html>']]) {
+  const w = await world(); addRecording(w, 'voice_420.opus', 20000); addRecording(w, 'voice_421.opus', 20000)
+  w.serverStatus = status; w.serverReply = reply
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(last.state === 'unpaired' && last.revoked === true && last.pending === 2, label + ' -> state ' + JSON.stringify(last))
+  ok(device.token === null && device.cleared === 1, label + ': the token was forgotten (clearDevice called once)')
+  ok(uploaded().length === 0 && files().length === 2, label + ': nothing marked uploaded, both recordings kept')
+  ok(!w.requests.some((r) => r.file === 'voice_421.opus'), label + ': the sweep stopped at the first recording')
+  const before = w.requests.length; w.Q.retryPendingUploads(); await tick()
+  ok(w.requests.length === before && w.states.at(-1).state === 'unpaired' && w.states.at(-1).revoked === false, label + ': the next trigger sends nothing and reports plainly "not paired"') }
+
+console.log('22. other server answers')
+{ const w = await world(); addRecording(w, 'voice_430.opus', 20000); w.serverReply = { ok: true, id: 'x', messageId: 'voice_430.opus', bytesReceived: 5, duplicate: true }
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'done' && JSON.stringify(uploaded()) === '["voice_430.opus"]', 'a duplicate answer (the server already had it) counts as delivered') }
+{ const w = await world(); addRecording(w, 'voice_431.opus', 20000); w.serverStatus = 500; w.serverReply = { ok: false, code: 'internal', error: 'internal error' }
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'error' && /internal error/.test(w.states.at(-1).message) && device.token !== null && uploaded().length === 0, 'a server error is an error, and the token is kept') }
+{ const w = await world(); addRecording(w, 'voice_432.opus', 20000); w.serverReply = { ok: false, code: 'invalid_request', error: 'audio is not valid base64' }
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'error' && device.token !== null, 'a refused request is not mistaken for a revoked device') }
 
 console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'ALL CHECKS PASS'))
 process.exit(failures ? 1 : 0)

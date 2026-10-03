@@ -27,3 +27,6 @@ export const setActiveRecording = (n) => log.push('setActive ' + n)
 export let listener = null
 export const onUploadState = (cb) => { listener = cb; log.push('onUploadState ' + (cb ? 'set' : 'null')) }
 export const MAX_RECORDING_SECONDS = 5
+export let paired = true
+export const setPaired = (v) => { paired = v }
+export const isPaired = () => paired
