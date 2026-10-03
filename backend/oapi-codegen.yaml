@@ -8,3 +8,6 @@ generate:
 output-options:
   # Keep every schema in the generated package even if no operation uses it yet.
   skip-prune: true
+  # Operations tagged "manual" are documented in the spec but implemented by hand.
+  exclude-tags:
+    - manual

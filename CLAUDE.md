@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repo layout
 
-Three independent Node/JS projects living side by side, connected only by the runtime data flow described below (no shared package.json, no monorepo tooling):
+Independent projects living side by side, connected only by the runtime data flow described below (no shared package.json, no monorepo tooling):
 
 - **`PigeonDrop/`** — the Zepp OS 4.0 Mini Program itself (device app + Side Service). This is the core deliverable.
+- **`backend/`** — the Go server that replaces the Node prototype (stack decision, set B in `STACK_COMPARISON.md`). Go 1.26, `net/http`, PostgreSQL via `pgx`, goose migrations, `sqlc` queries, OpenAPI-first with `oapi-codegen` (`backend/api/openapi.yaml` is the source of truth for the contract; run `make generate` after editing it or the SQL in `internal/db/queries`). It serves the same HTTP contract as `server/` today, verified by running `server/test` against it; accounts by invitation code, device tokens and the chain engine come next. Read `backend/README.md` before working on it. Work on it goes through branches and pull requests (the owner also writes Go), not straight to main.
 - **`server/`** — a minimal standalone Node.js HTTP server that receives uploads from the phone. A prototype, not production infrastructure (no auth, JSON-file storage); runs locally behind an ngrok tunnel, or in Docker on the owner's VPS via Coolify (see `server/DEPLOY.md` and the CI/CD section below).
 - **`ARCHITECTURE.md`** (root) — up-to-date narrative overview of the whole system: data flow, per-file responsibilities, and the reasoning behind non-obvious design decisions (custom `.opus` framing, round-display safe zone, the account/QR config flow, etc). **Read this first** before making non-trivial changes — it captures "why" context that isn't in code comments.
 - **`API_SPEC.md`** (root) — the HTTP contract for `server/`'s endpoints (`/messages`, `/accounts/*`, `/setup`, `/uploads`). The watch and Side Service depend only on this contract, not on the Node implementation — any server change must keep it intact.
@@ -53,6 +54,20 @@ Clears simulator/build cache — useful when UI or icon changes don't seem to ta
 npm test
 ```
 Runs the watch-app tests (`test/*.test.mjs`, plain node:test, no install needed). They load the app's real source files with the `@zos/*` modules stubbed (`test/helpers/load.mjs` rewrites each import; an unmapped import fails the test on purpose) - they cover the chunked upload protocol and its failure modes, the main page's screen hold, the settings page, and that `config.example.js` has every constant the code imports. They run on stubs, so they do not replace checking screen/BLE/memory behaviour on the watch. No lint script is configured.
+
+### backend (Go server)
+
+Run from `backend/`. Needs Go 1.26+ and the PostgreSQL server binaries (the dev database is a throwaway cluster that never touches other databases).
+
+```bash
+scripts/dev-db.sh up     # PostgreSQL on 127.0.0.1:55432, data in backend/.dev
+make test                # go test -race ./...; tests create and drop their own databases (REQUIRE_DB=1 makes a missing database fail instead of skip)
+make check               # gofmt + vet + tests, what CI runs
+make generate            # after editing api/openapi.yaml or internal/db/queries; CI fails if generated code is stale
+make run                 # server on :3000 against the dev database
+```
+
+To check the Go server against the contract tests: build it, create an empty database, then `cd server && SERVER_CMD="$PWD/../backend/bin/pigeondrop serve" DATABASE_URL=<empty database> MIGRATE_ON_START=true npm test`.
 
 ### server (test upload server)
 

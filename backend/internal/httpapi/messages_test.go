@@ -21,6 +21,8 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/testdb"
 )
 
+const defaultServerURL = "https://pigeon.test"
+
 // testEnv is the whole upload path on real parts: a real database, a real directory, the real handler.
 type testEnv struct {
 	handler http.Handler
@@ -46,6 +48,8 @@ func newEnv(t *testing.T) *testEnv {
 		DB:     dbgen.New(pool),
 		Files:  files,
 		Logger: quietLogger(),
+		// What an account without a server of its own resolves to.
+		DefaultServerURL: defaultServerURL,
 		Now: func() time.Time {
 			mu.Lock()
 			defer mu.Unlock()

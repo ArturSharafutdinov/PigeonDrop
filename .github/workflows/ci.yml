@@ -84,6 +84,52 @@ jobs:
       - name: Build the Docker image
         run: docker build --tag pigeondrop-backend .
 
+  # Until the Node prototype is retired, the Go backend must keep answering exactly as the contract
+  # tests in server/test expect: those tests only use HTTP and the files in STORAGE_DIR/uploads, so
+  # they run unchanged against any implementation named in SERVER_CMD.
+  backend-contract:
+    name: Go backend passes the contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Build the backend
+        run: go build -o bin/pigeondrop ./cmd/pigeondrop
+        working-directory: backend
+      - name: Create an empty database
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -c 'CREATE DATABASE pigeon_contract'
+      - name: Install the test dependencies
+        run: npm ci
+        working-directory: server
+      - name: Run the contract tests against the Go binary
+        run: npm test
+        working-directory: server
+        env:
+          SERVER_CMD: ${{ github.workspace }}/backend/bin/pigeondrop serve
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/pigeon_contract?sslmode=disable
+          MIGRATE_ON_START: "true"
+
   watch-app:
     name: Watch app tests
     runs-on: ubuntu-latest

@@ -2,6 +2,11 @@
 // with its own temporary STORAGE_DIR, and talk to it over HTTP. Nothing here
 // touches the developer's own server/data or server/uploads.
 //
+// They only use HTTP and the files in STORAGE_DIR/uploads, so they double as the
+// contract tests of any other implementation: set SERVER_CMD to the command that
+// starts it (for the Go backend: "<path>/pigeondrop serve", with DATABASE_URL
+// pointing at a fresh, empty database and MIGRATE_ON_START=true) and run them.
+//
 // Recordings are synthetic (a sine tone encoded with opusscript and wrapped in
 // the watch's packet framing - see convert-to-wav.js), so no real voice data is
 // needed in the repository.
@@ -32,7 +37,8 @@ function freePort() {
 
 // Starts server.js; resolves once it reports that it is listening.
 function startServer(storageDir, port) {
-  const proc = spawn(process.execPath, ['server.js'], {
+  const [command, ...args] = process.env.SERVER_CMD ? process.env.SERVER_CMD.split(' ') : [process.execPath, 'server.js']
+  const proc = spawn(command, args, {
     cwd: SERVER_DIR,
     env: { ...process.env, PORT: String(port), STORAGE_DIR: storageDir, DEFAULT_SERVER_URL: PUBLIC_URL },
     stdio: ['ignore', 'pipe', 'inherit'],

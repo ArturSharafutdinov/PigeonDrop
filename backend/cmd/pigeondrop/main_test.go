@@ -7,11 +7,30 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/testdb"
 )
+
+// syncBuffer is a bytes.Buffer that the server goroutine can write while the test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func freePort(t *testing.T) int {
 	t.Helper()
@@ -67,7 +86,7 @@ func TestServeMigratesAnswersAndShutsDownCleanly(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	var out, errOut bytes.Buffer
+	var out, errOut syncBuffer
 	go func() { done <- run(ctx, []string{"serve"}, env, &out, &errOut) }()
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -77,7 +96,7 @@ func TestServeMigratesAnswersAndShutsDownCleanly(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			cancel()
-			t.Fatalf("server never became healthy; log: %s", errOut.String())
+			t.Fatalf("server never became healthy; log: %s", out.String())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

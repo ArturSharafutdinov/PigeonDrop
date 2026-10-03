@@ -12,7 +12,33 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/oapi-codegen/runtime"
 )
+
+// Account defines model for Account.
+type Account struct {
+	Code      string    `json:"code"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	// CustomServerUrl The server the user chose, or null for this one.
+	CustomServerUrl *string `json:"customServerUrl"`
+
+	// Ok Always true.
+	Ok bool `json:"ok"`
+
+	// ServerUrl Where uploads go - computed, never stored - `customServerUrl`, or this server's own address when that is null.
+	ServerUrl string    `json:"serverUrl"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// AccountRequest defines model for AccountRequest.
+type AccountRequest struct {
+	// Code The device code the watch generated.
+	//
+	// Example: m0x1y2z-ab12cd
+	Code string `json:"code"`
+}
 
 // Error defines model for Error.
 type Error struct {
@@ -27,6 +53,12 @@ type Error struct {
 type Health struct {
 	// Ok Always true.
 	Ok bool `json:"ok"`
+}
+
+// SetServerRequest defines model for SetServerRequest.
+type SetServerRequest struct {
+	// CustomServerUrl An http(s) URL, or null for this server (OpenAPI 3.0 cannot say "string or null" here without making the generated type indistinguishable from "missing"). Required, so that an empty body can never reset it by accident.
+	CustomServerUrl json.RawMessage `json:"customServerUrl"`
 }
 
 // UploadRequest defines model for UploadRequest.
@@ -60,11 +92,26 @@ type UploadResult struct {
 	WavFile *string `json:"wavFile"`
 }
 
+// PostAccountJSONRequestBody defines body for PostAccount for application/json ContentType.
+type PostAccountJSONRequestBody = AccountRequest
+
+// PutAccountJSONRequestBody defines body for PutAccount for application/json ContentType.
+type PutAccountJSONRequestBody = SetServerRequest
+
 // PostMessageJSONRequestBody defines body for PostMessage for application/json ContentType.
 type PostMessageJSONRequestBody = UploadRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// PostAccount Create an account for a device code, or return the existing one
+	// (POST /accounts)
+	PostAccount(w http.ResponseWriter, r *http.Request)
+	// GetAccount Read an account
+	// (GET /accounts/{code})
+	GetAccount(w http.ResponseWriter, r *http.Request, code string)
+	// PutAccount Set or reset the account's own server
+	// (PUT /accounts/{code})
+	PutAccount(w http.ResponseWriter, r *http.Request, code string)
 	// GetHealth Liveness and database check
 	// (GET /healthz)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -81,6 +128,72 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// PostAccount operation middleware
+func (siw *ServerInterfaceWrapper) PostAccount(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostAccount(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAccount operation middleware
+func (siw *ServerInterfaceWrapper) GetAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "code" -------------
+	var code string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "code", r.PathValue("code"), &code, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAccount(w, r, code)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutAccount operation middleware
+func (siw *ServerInterfaceWrapper) PutAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "code" -------------
+	var code string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "code", r.PathValue("code"), &code, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutAccount(w, r, code)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetHealth operation middleware
 func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Request) {
@@ -232,8 +345,134 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/healthz", wrapper.GetHealth)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/messages", wrapper.PostMessage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/accounts", wrapper.PostAccount)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/accounts/{code}", wrapper.GetAccount)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/accounts/{code}", wrapper.PutAccount)
 
 	return m
+}
+
+type PostAccountRequestObject struct {
+	Body *PostAccountJSONRequestBody
+}
+
+type PostAccountResponseObject interface {
+	VisitPostAccountResponse(w http.ResponseWriter) error
+}
+
+type PostAccount200JSONResponse Account
+
+func (response PostAccount200JSONResponse) VisitPostAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostAccount400JSONResponse Error
+
+func (response PostAccount400JSONResponse) VisitPostAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAccountRequestObject struct {
+	Code string `json:"code"`
+}
+
+type GetAccountResponseObject interface {
+	VisitGetAccountResponse(w http.ResponseWriter) error
+}
+
+type GetAccount200JSONResponse Account
+
+func (response GetAccount200JSONResponse) VisitGetAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAccount404JSONResponse Error
+
+func (response GetAccount404JSONResponse) VisitGetAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutAccountRequestObject struct {
+	Code string `json:"code"`
+	Body *PutAccountJSONRequestBody
+}
+
+type PutAccountResponseObject interface {
+	VisitPutAccountResponse(w http.ResponseWriter) error
+}
+
+type PutAccount200JSONResponse Account
+
+func (response PutAccount200JSONResponse) VisitPutAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutAccount400JSONResponse Error
+
+func (response PutAccount400JSONResponse) VisitPutAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutAccount404JSONResponse Error
+
+func (response PutAccount404JSONResponse) VisitPutAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
 }
 
 type GetHealthRequestObject struct {
@@ -323,6 +562,15 @@ func (response PostMessage413JSONResponse) VisitPostMessageResponse(w http.Respo
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// PostAccount Create an account for a device code, or return the existing one
+	// (POST /accounts)
+	PostAccount(ctx context.Context, request PostAccountRequestObject) (PostAccountResponseObject, error)
+	// GetAccount Read an account
+	// (GET /accounts/{code})
+	GetAccount(ctx context.Context, request GetAccountRequestObject) (GetAccountResponseObject, error)
+	// PutAccount Set or reset the account's own server
+	// (PUT /accounts/{code})
+	PutAccount(ctx context.Context, request PutAccountRequestObject) (PutAccountResponseObject, error)
 	// GetHealth Liveness and database check
 	// (GET /healthz)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -368,6 +616,96 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// PostAccount operation middleware
+func (sh *strictHandler) PostAccount(w http.ResponseWriter, r *http.Request) {
+	var request PostAccountRequestObject
+
+	var body PostAccountJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PostAccount(ctx, request.(PostAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PostAccountResponseObject); ok {
+		if err := validResponse.VisitPostAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetAccount operation middleware
+func (sh *strictHandler) GetAccount(w http.ResponseWriter, r *http.Request, code string) {
+	var request GetAccountRequestObject
+
+	request.Code = code
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAccount(ctx, request.(GetAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAccountResponseObject); ok {
+		if err := validResponse.VisitGetAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutAccount operation middleware
+func (sh *strictHandler) PutAccount(w http.ResponseWriter, r *http.Request, code string) {
+	var request PutAccountRequestObject
+
+	request.Code = code
+
+	var body PutAccountJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutAccount(ctx, request.(PutAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutAccountResponseObject); ok {
+		if err := validResponse.VisitPutAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // GetHealth operation middleware

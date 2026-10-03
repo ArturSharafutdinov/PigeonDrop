@@ -9,9 +9,14 @@ import (
 )
 
 type Querier interface {
+	// Returns no row when the account already exists: creating twice is harmless, the caller then reads it.
+	CreateAccount(ctx context.Context, code string) (Account, error)
+	GetAccount(ctx context.Context, code string) (Account, error)
 	GetProcessedUpload(ctx context.Context, fileName string) (ProcessedUpload, error)
 	// Returns no row when file_name is already taken: another request with the same name won the race.
 	InsertProcessedUpload(ctx context.Context, arg InsertProcessedUploadParams) (ProcessedUpload, error)
+	// Returns no row when there is no such account: this never creates one.
+	SetAccountServerURL(ctx context.Context, arg SetAccountServerURLParams) (Account, error)
 }
 
 var _ Querier = (*Queries)(nil)
