@@ -6,6 +6,8 @@ package dbgen
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type Account struct {
@@ -15,10 +17,39 @@ type Account struct {
 	UpdatedAt       time.Time
 }
 
+type Invitation struct {
+	ID        uuid.UUID
+	CodeHash  []byte
+	Note      string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	UsedAt    *time.Time
+	UsedBy    *uuid.UUID
+}
+
 type ProcessedUpload struct {
 	FileName      string
 	BytesReceived int64
 	SavedAs       string
 	WavFile       *string
 	ReceivedAt    time.Time
+}
+
+type Session struct {
+	ID                uuid.UUID
+	UserID            uuid.UUID
+	TokenHash         []byte
+	CreatedAt         time.Time
+	LastSeenAt        time.Time
+	ExpiresAt         time.Time
+	AbsoluteExpiresAt time.Time
+}
+
+type User struct {
+	ID           uuid.UUID
+	Email        string
+	PasswordHash string
+	Plan         string
+	Language     string
+	CreatedAt    time.Time
 }

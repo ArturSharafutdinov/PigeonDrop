@@ -32,4 +32,4 @@ db-down:
 	scripts/dev-db.sh down
 
 run: build ## Starts the server against the dev database
-	DATABASE_URL="$$(scripts/dev-db.sh url)" MIGRATE_ON_START=true STORAGE_DIR=.dev/storage ./bin/pigeondrop serve
+	DATABASE_URL="$$(scripts/dev-db.sh url)" MIGRATE_ON_START=true STORAGE_DIR=.dev/storage COOKIE_SECURE=false ./bin/pigeondrop serve

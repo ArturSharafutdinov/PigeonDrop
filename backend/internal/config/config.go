@@ -27,6 +27,15 @@ type Config struct {
 	LogLevel       slog.Level
 	// MaxDBConns caps the connection pool: the PostgreSQL server is shared with other projects.
 	MaxDBConns int32
+	// CookieSecure marks the session cookie Secure (HTTPS only). Leave it on everywhere but local development
+	// over plain http, where browsers would refuse to send the cookie back.
+	CookieSecure bool
+	// AllowedOrigins are web pages, besides this server's own address, whose scripts may call the API with a
+	// signed-in session - for example the front end's dev server. Each is scheme://host[:port].
+	AllowedOrigins []string
+	// TrustProxyHeaders believes X-Forwarded-For for the client's address (the sign-in limits are per address).
+	// Turn it on only behind a reverse proxy that sets the header itself, such as Coolify's Traefik.
+	TrustProxyHeaders bool
 }
 
 // Load reads the configuration through getenv (os.Getenv in production). It reports
@@ -40,6 +49,8 @@ func Load(getenv func(string) string) (Config, error) {
 		StorageDir:  orDefault(getenv("STORAGE_DIR"), "./data"),
 		Port:        3000,
 		MaxDBConns:  10,
+
+		CookieSecure: true,
 	}
 
 	if c.DatabaseURL == "" {
@@ -81,6 +92,36 @@ func Load(getenv func(string) string) (Config, error) {
 		} else {
 			c.MaxDBConns = int32(n)
 		}
+	}
+
+	if v := strings.TrimSpace(getenv("COOKIE_SECURE")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			bad("COOKIE_SECURE must be true or false, got %q", v)
+		} else {
+			c.CookieSecure = b
+		}
+	}
+
+	if v := strings.TrimSpace(getenv("TRUST_PROXY_HEADERS")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			bad("TRUST_PROXY_HEADERS must be true or false, got %q", v)
+		} else {
+			c.TrustProxyHeaders = b
+		}
+	}
+
+	for _, origin := range strings.Split(getenv("ALLOWED_ORIGINS"), ",") {
+		origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+		if origin == "" {
+			continue
+		}
+		if u, err := url.Parse(origin); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
+			bad("ALLOWED_ORIGINS must list origins like https://app.example.com, got %q", origin)
+			continue
+		}
+		c.AllowedOrigins = append(c.AllowedOrigins, origin)
 	}
 
 	if len(problems) > 0 {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/api"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/auth"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
 )
@@ -36,8 +37,21 @@ type Server struct {
 	Logger *slog.Logger
 	// DefaultServerURL is this server's own public address: what an account resolves to when it has no server of its own.
 	DefaultServerURL string
-	// Now supplies the time used to name stored files; nil means time.Now. Tests set it.
+	// Now supplies the time used to name stored files and to date sessions; nil means time.Now. Tests set it.
 	Now func() time.Time
+
+	// Tx runs a function in one database transaction (db.InTx). Needed by registration and password changes.
+	Tx TxFunc
+	// Hasher hashes passwords; NewHandler makes one with the default settings if it is nil.
+	Hasher *auth.Hasher
+	// Limits are the sign-in brute-force limiters; NewHandler makes the default ones if they are unset.
+	Limits AuthLimits
+	// CookieSecure marks the session cookie Secure. On for HTTPS, off only for local development over http.
+	CookieSecure bool
+	// AllowedOrigins are other web pages (scheme://host[:port]) allowed to call the /v1 API with a session.
+	AllowedOrigins []string
+	// TrustProxyHeaders reads the client's address from X-Forwarded-For (only behind a proxy that sets it).
+	TrustProxyHeaders bool
 }
 
 func (s *Server) now() time.Time {
@@ -62,18 +76,26 @@ func (s *Server) GetHealth(ctx context.Context, _ api.GetHealthRequestObject) (a
 }
 
 // NewHandler returns the complete HTTP handler: generated routes, JSON errors for
-// everything that is not a route, request logging, and panic recovery.
+// everything that is not a route, request logging, and panic recovery. It fills in the
+// defaults of the optional Server fields (Hasher, Limits).
 func NewHandler(s *Server) http.Handler {
+	if s.Hasher == nil {
+		s.Hasher = auth.NewHasher(auth.DefaultParams, 4)
+	}
+	if s.Limits == (AuthLimits{}) {
+		s.Limits = defaultLimits(s.now)
+	}
+
 	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
-		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			var tooLarge *http.MaxBytesError
 			switch {
 			case errors.As(err, &tooLarge):
 				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
 			case strings.Contains(err.Error(), "decode JSON body"):
-				writeError(w, http.StatusBadRequest, "invalid JSON body")
+				writeBadRequest(w, r, "invalid JSON body")
 			default:
-				writeError(w, http.StatusBadRequest, err.Error())
+				writeBadRequest(w, r, err.Error())
 			}
 		},
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -85,8 +107,8 @@ func NewHandler(s *Server) http.Handler {
 	mux := http.NewServeMux()
 	api.HandlerWithOptions(strict, api.StdHTTPServerOptions{ // registers the generated routes on mux
 		BaseRouter: mux,
-		ErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeError(w, http.StatusBadRequest, err.Error())
+		ErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			writeBadRequest(w, r, err.Error())
 		},
 	})
 	// The hand-written browser routes (see uploads.go).
@@ -99,7 +121,7 @@ func NewHandler(s *Server) http.Handler {
 		writeError(w, http.StatusNotFound, "not found")
 	})
 
-	return recoverer(s.Logger, logRequests(s.Logger, limitBody(mux)))
+	return recoverer(s.Logger, logRequests(s.Logger, limitBody(s.crossOriginGuard(s.authContext(mux)))))
 }
 
 // limitBody caps how much of a request body any handler can read.
@@ -111,9 +133,23 @@ func limitBody(next http.Handler) http.Handler {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	writeErrorBody(w, status, api.Error{Ok: false, Error: message})
+}
+
+func writeErrorBody(w http.ResponseWriter, status int, body api.Error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(api.Error{Ok: false, Error: message})
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// writeBadRequest answers 400. The /v1 API also names the problem with a machine-readable code; the older
+// routes keep the exact answer the Node prototype gave, so their clients see no change.
+func writeBadRequest(w http.ResponseWriter, r *http.Request, message string) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") {
+		writeCodedError(w, http.StatusBadRequest, api.ErrorCodeInvalidRequest, message)
+		return
+	}
+	writeError(w, http.StatusBadRequest, message)
 }
 
 // statusRecorder remembers the status code a handler wrote.

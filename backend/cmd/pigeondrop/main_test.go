@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/testdb"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/migrations"
 )
 
 // syncBuffer is a bytes.Buffer that the server goroutine can write while the test reads it.
@@ -48,28 +50,41 @@ func envOf(pairs map[string]string) func(string) string {
 
 func TestVersionAndHelp(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := run(context.Background(), []string{"version"}, envOf(nil), &out, &errOut); err != nil || strings.TrimSpace(out.String()) != version {
+	if err := run(context.Background(), []string{"version"}, envOf(nil), nil, &out, &errOut); err != nil || strings.TrimSpace(out.String()) != version {
 		t.Fatalf("version: %q, %v", out.String(), err)
 	}
 	out.Reset()
-	if err := run(context.Background(), []string{"help"}, envOf(nil), &out, &errOut); err != nil || !strings.Contains(out.String(), "serve") {
+	if err := run(context.Background(), []string{"help"}, envOf(nil), nil, &out, &errOut); err != nil || !strings.Contains(out.String(), "serve") {
 		t.Fatalf("help: %q, %v", out.String(), err)
 	}
 }
 
+// unmigrate leaves a database that exists but was never migrated, whatever the migrations create.
+const unmigrate = `DROP SCHEMA public CASCADE; CREATE SCHEMA public`
+
+// migrationCount is how many migrations the binary carries.
+func migrationCount(t *testing.T) int {
+	t.Helper()
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("migrations: %v %v", files, err)
+	}
+	return len(files)
+}
+
 func TestUnknownAndMissingCommands(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := run(context.Background(), nil, envOf(nil), &out, &errOut); err == nil {
+	if err := run(context.Background(), nil, envOf(nil), nil, &out, &errOut); err == nil {
 		t.Error("no command must fail")
 	}
-	if err := run(context.Background(), []string{"frobnicate"}, envOf(nil), &out, &errOut); err == nil {
+	if err := run(context.Background(), []string{"frobnicate"}, envOf(nil), nil, &out, &errOut); err == nil {
 		t.Error("unknown command must fail")
 	}
 }
 
 func TestServeNeedsConfiguration(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := run(context.Background(), []string{"serve"}, envOf(nil), &out, &errOut)
+	err := run(context.Background(), []string{"serve"}, envOf(nil), nil, &out, &errOut)
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL is required") {
 		t.Fatalf("got %v", err)
 	}
@@ -87,7 +102,7 @@ func TestServeMigratesAnswersAndShutsDownCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	var out, errOut syncBuffer
-	go func() { done <- run(ctx, []string{"serve"}, env, &out, &errOut) }()
+	go func() { done <- run(ctx, []string{"serve"}, env, nil, &out, &errOut) }()
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -121,7 +136,7 @@ func TestServeMigratesAnswersAndShutsDownCleanly(t *testing.T) {
 func TestServeRefusesWhenMigrationsArePending(t *testing.T) {
 	// a database that exists but was never migrated
 	url, pool := testdb.NewURL(t)
-	if _, err := pool.Exec(context.Background(), `DROP TABLE processed_uploads; DROP TABLE accounts; DROP TABLE goose_db_version`); err != nil {
+	if _, err := pool.Exec(context.Background(), unmigrate); err != nil {
 		t.Fatal(err)
 	}
 	env := envOf(map[string]string{"DATABASE_URL": url, "PORT": fmt.Sprint(freePort(t)), "STORAGE_DIR": t.TempDir(), "LOG_LEVEL": "error"})
@@ -130,7 +145,7 @@ func TestServeRefusesWhenMigrationsArePending(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var out, errOut bytes.Buffer
-	err := run(ctx, []string{"serve"}, env, &out, &errOut)
+	err := run(ctx, []string{"serve"}, env, nil, &out, &errOut)
 	if err == nil || !strings.Contains(err.Error(), "migration(s) pending") {
 		t.Fatalf("got %v", err)
 	}
@@ -138,24 +153,24 @@ func TestServeRefusesWhenMigrationsArePending(t *testing.T) {
 
 func TestMigrateUpAndStatus(t *testing.T) {
 	url, pool := testdb.NewURL(t)
-	if _, err := pool.Exec(context.Background(), `DROP TABLE processed_uploads; DROP TABLE accounts; DROP TABLE goose_db_version`); err != nil {
+	if _, err := pool.Exec(context.Background(), unmigrate); err != nil {
 		t.Fatal(err)
 	}
 	env := envOf(map[string]string{"DATABASE_URL": url})
 
 	var out, errOut bytes.Buffer
-	if err := run(context.Background(), []string{"migrate", "status"}, env, &out, &errOut); err != nil || !strings.Contains(out.String(), "pending") {
+	if err := run(context.Background(), []string{"migrate", "status"}, env, nil, &out, &errOut); err != nil || !strings.Contains(out.String(), "pending") {
 		t.Fatalf("status before: %q, %v", out.String(), err)
 	}
 	out.Reset()
-	if err := run(context.Background(), []string{"migrate", "up"}, env, &out, &errOut); err != nil || !strings.Contains(out.String(), "applied 1 migration") {
+	if err := run(context.Background(), []string{"migrate", "up"}, env, nil, &out, &errOut); err != nil || !strings.Contains(out.String(), fmt.Sprintf("applied %d migration", migrationCount(t))) {
 		t.Fatalf("up: %q, %v", out.String(), err)
 	}
 	out.Reset()
-	if err := run(context.Background(), []string{"migrate", "status"}, env, &out, &errOut); err != nil || !strings.Contains(out.String(), "applied") {
+	if err := run(context.Background(), []string{"migrate", "status"}, env, nil, &out, &errOut); err != nil || !strings.Contains(out.String(), "applied") {
 		t.Fatalf("status after: %q, %v", out.String(), err)
 	}
-	if err := run(context.Background(), []string{"migrate", "sideways"}, env, &out, &errOut); err == nil {
+	if err := run(context.Background(), []string{"migrate", "sideways"}, env, nil, &out, &errOut); err == nil {
 		t.Error("an unknown migrate subcommand must fail")
 	}
 }

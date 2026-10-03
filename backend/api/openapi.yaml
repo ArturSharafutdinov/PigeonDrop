@@ -7,8 +7,10 @@ info:
     server interface (internal/api) is generated from it, and the web client's types
     will be generated from it too. Run `make generate` after editing.
 
-    The routes of the current watch app (API_SPEC.md at the repository root) are added
-    here step by step as the Go server replaces the Node prototype.
+    The routes without a prefix are those of the current watch app (API_SPEC.md at the
+    repository root); they stay exactly as the Node prototype had them. The `/v1` routes are
+    the new API, for people (the web client): registration by invitation, sign-in, sessions.
+    Errors there carry a machine-readable `code`.
 servers:
   - url: /
 paths:
@@ -152,6 +154,168 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Create an account with an invitation code, and sign in
+      description: |
+        Registration is by invitation only: the code comes from the server's operator (`pigeondrop invite create`).
+        The code is spent only if the account is created; a rejected request leaves it usable. On success the
+        response sets the session cookie, so the person is signed in.
+
+        An unknown, expired or already used code all answer `invalid_invite`, so the answer does not tell which.
+        Repeated bad codes from one address are slowed down (`too_many_attempts`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: The account was created and the session started.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The body is malformed (`invalid_request`), the email is not an address (`invalid_email`), or the password breaks the length rules (`weak_password`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The invitation code is not valid (`invalid_invite`), or the request came from a foreign web page (`forbidden_origin`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: That email is already registered (`email_taken`). The invitation code is not spent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Sign in with email and password
+      description: |
+        Starts a new session and sets its cookie; sessions started earlier stay valid. An unknown email and a
+        wrong password give the same answer and take the same time. After repeated failures for an email, or from
+        an address, further attempts are refused for a while (`too_many_attempts`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The body is malformed (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: The email or the password is wrong (`invalid_credentials`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The request came from a foreign web page (`forbidden_origin`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: End the current session
+      description: Always answers 204 and clears the cookie, also when there was no session, so it can be called without checking first.
+      responses:
+        '204':
+          description: Signed out.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+        '403':
+          description: The request came from a foreign web page (`forbidden_origin`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: The signed-in user
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/me/password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change the password
+      description: |
+        Needs the current password. Every other session of the user ends; the one making the request stays.
+        A wrong current password counts toward the same limit as failed sign-ins.
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: The password was changed.
+        '400':
+          description: The body is malformed (`invalid_request`) or the new password breaks the length rules (`weak_password`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The current password is wrong (`wrong_password`), or the request came from a foreign web page (`forbidden_origin`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
   # The three routes below are for people with a browser, not for the apps. They are documented here but
   # written by hand (tag "manual" keeps them out of code generation): they serve HTML and files, with range
   # requests, which the generated JSON handlers are not built for.
@@ -225,7 +389,111 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: pd_session
+      description: |
+        The session cookie, set by `register` and `login`. It is `HttpOnly` and `SameSite=Lax`; when the server runs
+        over HTTPS it is also `Secure` and named `__Host-pd_session`. Browsers handle it by themselves.
+  headers:
+    SetSessionCookie:
+      description: Sets (or, on logout, clears) the session cookie.
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Not signed in, or the session has expired (`unauthorized`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyAttempts:
+      description: Too many failed attempts for now (`too_many_attempts`).
+      headers:
+        Retry-After:
+          description: Seconds until another attempt is allowed.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
+    Language:
+      type: string
+      enum: [en, ru]
+    RegisterRequest:
+      type: object
+      required: [inviteCode, email, password]
+      properties:
+        inviteCode:
+          type: string
+          maxLength: 64
+          description: The invitation code. Case, dashes and spaces do not matter.
+          example: 7K3M-Q9XD-4TNA-B2WH-C8RY
+        email:
+          type: string
+          maxLength: 254
+          example: alice@example.com
+        password:
+          type: string
+          maxLength: 1024
+          description: At least 12 characters, at most 256 bytes (after Unicode NFKC normalisation).
+        language:
+          $ref: '#/components/schemas/Language'
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+        password:
+          type: string
+          maxLength: 1024
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          maxLength: 1024
+        newPassword:
+          type: string
+          maxLength: 1024
+    User:
+      type: object
+      required: [id, email, plan, language, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        plan:
+          type: string
+          enum: [free, paid]
+        language:
+          $ref: '#/components/schemas/Language'
+        createdAt:
+          type: string
+          format: date-time
+    ErrorCode:
+      type: string
+      description: What went wrong, for clients to act on and translate. `error` is an English sentence for logs.
+      enum:
+        - invalid_request
+        - invalid_email
+        - weak_password
+        - invalid_invite
+        - email_taken
+        - invalid_credentials
+        - wrong_password
+        - unauthorized
+        - too_many_attempts
+        - forbidden_origin
     AccountRequest:
       type: object
       required: [code]
@@ -318,4 +586,6 @@ components:
           description: Always false.
         error:
           type: string
-          description: Short, human-readable reason (machine-readable codes arrive with the /v1 API).
+          description: Short, human-readable reason in English.
+        code:
+          $ref: '#/components/schemas/ErrorCode'
