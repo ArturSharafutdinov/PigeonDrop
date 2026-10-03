@@ -10,12 +10,12 @@ Three independent Node/JS projects living side by side, connected only by the ru
 - **`server/`** — a minimal standalone Node.js HTTP server that receives uploads from the phone. A prototype, not production infrastructure (no auth, JSON-file storage); runs locally behind an ngrok tunnel, or in Docker on the owner's VPS via Coolify (see `server/DEPLOY.md` and the CI/CD section below).
 - **`ARCHITECTURE.md`** (root) — up-to-date narrative overview of the whole system: data flow, per-file responsibilities, and the reasoning behind non-obvious design decisions (custom `.opus` framing, round-display safe zone, the account/QR config flow, etc). **Read this first** before making non-trivial changes — it captures "why" context that isn't in code comments.
 - **`API_SPEC.md`** (root) — the HTTP contract for `server/`'s endpoints (`/messages`, `/accounts/*`, `/setup`, `/uploads`). The watch and Side Service depend only on this contract, not on the Node implementation — any server change must keep it intact.
-- **`REQUIREMENTS_ANALYSIS.md`** (root) — Russian-language analysis of requirements for the planned SaaS platform (backend, flow engine, frontend, apps for other watch platforms): workstreams, risks, load scenarios, open questions. No stack has been chosen yet; a stack/tool comparison is the next planned document.
+- **`REQUIREMENTS_ANALYSIS.md`** (root) — Russian-language analysis of requirements for the planned SaaS platform (backend, flow engine, frontend, apps for other watch platforms): workstreams, risks, load scenarios, open questions. No stack has been chosen yet. **`STACK_COMPARISON.md`** (root, Russian) compares tools for each of the ten topics with pros/cons, reliability tags ([проверено]/[источник]/[вторично]/[оценка]) and a clearly marked recommendation; the owner makes the choice, so treat nothing in it as decided until they say so.
 - **`todo.md`** (root) — the original draft proposal for a persistent *phone-side* upload queue. Historical: the queue was ultimately built on the **watch** instead (`PigeonDrop/utils/uploadQueue.js`), because the Side Service turned out to have no reliable persistent storage or lifecycle — see `ARCHITECTURE.md` §2.2 for the reasoning. Kept for context, not as a spec.
 
 ## Language
 
-Talk to the user in Russian. User-facing docs (`ARCHITECTURE.md`, `API_SPEC.md`, `REQUIREMENTS_ANALYSIS.md`, `server/DEPLOY.md`) are written in Russian; this file and other Claude-only files stay in English.
+Talk to the user in Russian. User-facing docs (`ARCHITECTURE.md`, `API_SPEC.md`, `REQUIREMENTS_ANALYSIS.md`, `STACK_COMPARISON.md`, `server/DEPLOY.md`) are written in Russian; this file and other Claude-only files stay in English.
 
 ## Git
 
