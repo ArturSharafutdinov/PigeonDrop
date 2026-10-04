@@ -293,7 +293,7 @@ func TestInvalidInputIsRefusedAndDoesNotSpendTheInvitation(t *testing.T) {
 	}
 }
 
-func TestMalformedBodiesGetMachineReadableCodesOnV1Only(t *testing.T) {
+func TestMalformedBodiesGetMachineReadableCodes(t *testing.T) {
 	e := newEnv(t)
 	for _, path := range []string{"/v1/auth/register", "/v1/auth/login"} {
 		for _, body := range []string{"", "{", "[]", `"text"`, `{"email": 5}`} {
@@ -302,11 +302,6 @@ func TestMalformedBodiesGetMachineReadableCodesOnV1Only(t *testing.T) {
 				t.Errorf("POST %s %q: %d %s", path, body, rec.Code, rec.Body.String())
 			}
 		}
-	}
-	// The older routes answer exactly as the Node prototype did: no extra field.
-	rec := e.call(http.MethodPost, "/messages", "{")
-	if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":"invalid JSON body","ok":false}`+"\n" {
-		t.Errorf("legacy answer changed: %d %q", rec.Code, rec.Body.String())
 	}
 }
 
@@ -906,24 +901,6 @@ func TestCrossSiteRequestsToTheV1ApiAreRefused(t *testing.T) {
 	// Reading is not a state change: a foreign page may ask, it just gets no answer worth having.
 	if rec := e.call(http.MethodGet, "/v1/me", "", withHeader("Origin", "https://evil.example")); rec.Code != http.StatusUnauthorized {
 		t.Errorf("GET with a foreign origin: %d", rec.Code)
-	}
-}
-
-func TestTheOlderRoutesAreNotSubjectToTheOriginCheck(t *testing.T) {
-	// The phone's Side Service posts to /messages and may send headers of its own; that contract must not change.
-	e := newEnv(t)
-	for _, mods := range [][]func(*http.Request){
-		{withHeader("Origin", "https://evil.example")},
-		{withHeader("Sec-Fetch-Site", "cross-site")},
-	} {
-		rec := e.call(http.MethodPost, "/accounts", `{"code":"abc"}`, mods...)
-		if rec.Code != http.StatusOK {
-			t.Errorf("POST /accounts with browser headers: %d %s", rec.Code, rec.Body.String())
-		}
-		rec = e.call(http.MethodPost, "/messages", "{", mods...)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("POST /messages with browser headers: %d %s", rec.Code, rec.Body.String())
-		}
 	}
 }
 

@@ -122,13 +122,6 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("%d database migration(s) pending: run `pigeondrop migrate up`, or set MIGRATE_ON_START=true", pending)
 	}
 
-	// Recordings live in STORAGE_DIR/uploads, the layout the Node prototype used, so a volume it filled
-	// works as it is.
-	files, err := storage.NewDisk(filepath.Join(cfg.StorageDir, "uploads"))
-	if err != nil {
-		return err
-	}
-
 	queries := dbgen.New(pool)
 	go purgeExpired(ctx, queries, logger)
 
@@ -140,7 +133,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	srv := &http.Server{
 		Addr: ":" + strconv.Itoa(cfg.Port),
 		Handler: httpapi.NewHandler(&httpapi.Server{
-			Pinger: pool, DB: queries, Files: files, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
+			Pinger: pool, DB: queries, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 			Storage: httpapi.StorageLimits{
 				MaxAudioBytes: httpapi.DefaultStorageLimits.MaxAudioBytes, AccountBytes: cfg.AccountStorageBytes, WarnPercent: httpapi.DefaultStorageLimits.WarnPercent,

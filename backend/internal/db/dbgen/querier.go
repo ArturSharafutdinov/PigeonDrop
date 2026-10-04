@@ -18,8 +18,6 @@ type Querier interface {
 	// Spends the invitation. No row means it was unknown, expired, or already used (possibly a moment ago
 	// by someone else) - the caller cannot and need not tell which.
 	ConsumeInvitation(ctx context.Context, arg ConsumeInvitationParams) (uuid.UUID, error)
-	// Returns no row when the account already exists: creating twice is harmless, the caller then reads it.
-	CreateAccount(ctx context.Context, code string) (Account, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (CreateDeviceRow, error)
 	CreateInvitation(ctx context.Context, arg CreateInvitationParams) (CreateInvitationRow, error)
 	// Device pairing and paired devices. Times come from the caller (never now()).
@@ -40,7 +38,6 @@ type Querier interface {
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
 	// Read-only look, to refuse an unusable code before spending a password hash on it.
 	FindUsableInvitation(ctx context.Context, arg FindUsableInvitationParams) (uuid.UUID, error)
-	GetAccount(ctx context.Context, code string) (Account, error)
 	// The device behind a token. No row for an unknown token or a revoked device.
 	GetDeviceByTokenHash(ctx context.Context, tokenHash []byte) (GetDeviceByTokenHashRow, error)
 	GetMessage(ctx context.Context, arg GetMessageParams) (GetMessageRow, error)
@@ -50,15 +47,12 @@ type Querier interface {
 	// Only a pairing that can still be approved: unknown, expired and already approved codes are all "no row".
 	GetOpenPairingByUserCode(ctx context.Context, arg GetOpenPairingByUserCodeParams) (GetOpenPairingByUserCodeRow, error)
 	GetPairingByDeviceCodeHash(ctx context.Context, deviceCodeHash []byte) (GetPairingByDeviceCodeHashRow, error)
-	GetProcessedUpload(ctx context.Context, fileName string) (ProcessedUpload, error)
 	// The session behind a cookie, with its user. No row when it is unknown or has expired.
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	// Returns no row when this device already uploaded this name: a request with the same name won the race.
 	InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error)
-	// Returns no row when file_name is already taken: another request with the same name won the race.
-	InsertProcessedUpload(ctx context.Context, arg InsertProcessedUploadParams) (ProcessedUpload, error)
 	ListDevices(ctx context.Context, userID uuid.UUID) ([]ListDevicesRow, error)
 	ListInvitations(ctx context.Context) ([]ListInvitationsRow, error)
 	// The caller's messages, newest first, starting after the cursor (the received_at and id of the last message
@@ -78,8 +72,6 @@ type Querier interface {
 	RevokeDevice(ctx context.Context, arg RevokeDeviceParams) (uuid.UUID, error)
 	// Only an unused invitation can be withdrawn; a used one stays as the record of who came through it.
 	RevokeInvitation(ctx context.Context, id uuid.UUID) (int64, error)
-	// Returns no row when there is no such account: this never creates one.
-	SetAccountServerURL(ctx context.Context, arg SetAccountServerURLParams) (Account, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
 	// What the user's recordings take. Only the original files count; the WAV played in a browser is made on demand.
 	SumMessageBytes(ctx context.Context, userID uuid.UUID) (int64, error)

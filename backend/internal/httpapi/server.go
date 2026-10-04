@@ -51,11 +51,10 @@ type Pinger interface {
 type Server struct {
 	Pinger Pinger
 	DB     dbgen.Querier
-	// Files holds the prototype's recordings (the older /messages route); Messages the /v1 ones.
-	Files    storage.Store
+	// Messages holds the recordings (the original files, one per message).
 	Messages storage.Store
 	Logger   *slog.Logger
-	// DefaultServerURL is this server's own public address: what an account resolves to when it has no server of its own.
+	// DefaultServerURL is this server's own public address: the pairing page's link is built from it.
 	DefaultServerURL string
 	// Now supplies the time used to name stored files and to date sessions; nil means time.Now. Tests set it.
 	Now func() time.Time
@@ -146,16 +145,12 @@ func NewHandler(s *Server) http.Handler {
 			writeBadRequest(w, r, err.Error())
 		},
 	})
-	// The hand-written browser routes (see uploads.go).
-	mux.HandleFunc("GET /setup", s.handleSetup)
-	mux.HandleFunc("GET /uploads", s.handleListUploads)
-	mux.HandleFunc("GET /uploads/{name}", s.handleDownload)
+	// The hand-written routes: they serve files and pages, which the generated JSON handlers are not built for.
 	mux.HandleFunc("GET /v1/messages/{id}/audio", s.handleMessageAudio)
 	mux.HandleFunc("GET /pair", servePage("text/html; charset=utf-8", pairHTML))
 	mux.HandleFunc("GET /pair.js", servePage("text/javascript; charset=utf-8", pairJS))
 	mux.HandleFunc("GET /pair.css", servePage("text/css; charset=utf-8", pairCSS))
-	// Anything the generated routes do not claim - unknown path or wrong method alike -
-	// is a JSON 404, the same answer the Node prototype gave.
+	// Anything the generated routes do not claim - unknown path or wrong method alike - is a JSON 404.
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 	})
@@ -194,8 +189,8 @@ func writeErrorBody(w http.ResponseWriter, status int, body api.Error) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// writeBadRequest answers 400. The /v1 API also names the problem with a machine-readable code; the older
-// routes keep the exact answer the Node prototype gave, so their clients see no change.
+// writeBadRequest answers 400. The /v1 API also names the problem with a machine-readable code; the only
+// route outside /v1, the health check, takes no input and never gets here.
 func writeBadRequest(w http.ResponseWriter, r *http.Request, message string) {
 	if strings.HasPrefix(r.URL.Path, "/v1/") {
 		writeCodedError(w, http.StatusBadRequest, api.ErrorCodeInvalidRequest, message)
