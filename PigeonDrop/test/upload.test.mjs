@@ -9,7 +9,8 @@ import { framedRecording, readOgg, sameAudio, samePackets, zeppPackets } from '.
 // utils/uploadQueue.js and app-side/uploads.js are the real source files; only the platform pieces are stubbed.
 const FS = stubPath('fs.mjs'), DEPS = stubPath('upload-deps.mjs')
 const RECORDINGS = generate('utils/recordings.js', { '@zos/fs': FS })
-const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, '../config': DEPS })
+const STORAGE = generate('utils/storageState.js', { '@zos/fs': FS })
+const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, './storageState': STORAGE, '../config': DEPS })
 const OGG = generate('utils/oggOpus.js', {})
 const BASE64 = generate('app-side/base64.js', {})
 const UPLOADS = generate('app-side/uploads.js', { '../utils/oggOpus': OGG, './base64': BASE64 })
@@ -23,10 +24,10 @@ const until = async (cond, ms = 4000) => { const t0 = Date.now(); while (!cond()
 async function world() {
   const n = ++T
   device.token = 'pdd_test_token_0123456789'; device.cleared = 0
-  ctl.root = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-')); ctl.shortRead = null; ctl.readCalls = 0; ctl.failOpen = ctl.failStat = ctl.failWhole = null; resetFds()
+  ctl.root = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-')); ctl.shortRead = null; ctl.readCalls = 0; ctl.failOpen = ctl.failStat = ctl.failWhole = ctl.failWrite = null; resetFds()
   const Q = await import(fileUrl(QUEUE) + '?t=' + n)
   const U = await import(fileUrl(UPLOADS) + '?t=' + n)
-  const w = { Q, U, states: [], requests: [], posts: [], inflight: 0, maxInflight: 0, failRequests: new Set(), serverReply: null, serverStatus: 200, serverThrows: false, hooks: {}, now: Date.now() }
+  const w = { Q, U, states: [], requests: [], posts: [], inflight: 0, maxInflight: 0, failRequests: new Set(), serverReply: null, serverStatus: 200, serverThrows: false, replyFor: null, hooks: {}, now: Date.now() }
   Q.onUploadState((s) => w.states.push(s))
   const builder = {
     request: async (msg, opts) => {
@@ -44,8 +45,9 @@ async function world() {
   globalThis.fetch = async (o) => {
     const body = JSON.parse(o.body); w.posts.push({ url: o.url, auth: o.headers && o.headers.Authorization, ...body })
     if (w.serverThrows) throw new Error('Network down')
-    const reply = w.serverReply || { ok: true, id: 'm-1', messageId: body.messageId, bytesReceived: Buffer.from(body.audio, 'base64').length, duplicate: false }
-    return { status: w.serverStatus, body: typeof reply === 'string' ? reply : JSON.stringify(reply) }
+    const custom = w.replyFor && w.replyFor(body, w.posts.length)   // { status, reply } for this very POST, or nothing
+    const reply = (custom && custom.reply) || w.serverReply || { ok: true, id: 'm-1', messageId: body.messageId, bytesReceived: Buffer.from(body.audio, 'base64').length, duplicate: false }
+    return { status: custom ? custom.status : w.serverStatus, body: typeof reply === 'string' ? reply : JSON.stringify(reply) }
   }
   return w
 }
@@ -260,6 +262,94 @@ console.log('22. other server answers')
 { const w = await world(); addRecording(w, 'voice_432.opus', 20000); w.serverReply = { ok: false, code: 'invalid_request', error: 'audio is not valid base64' }
   w.Q.retryPendingUploads(); await finished(w)
   ok(w.states.at(-1).state === 'error' && device.token !== null, 'a refused request is not mistaken for a revoked device') }
+
+console.log('23. the server says how full the account is: remembered, and reported as an alert only when it is news')
+const storageFile = () => path.join(ctl.root, 'storage.json')
+const storedState = () => (fs.existsSync(storageFile()) ? JSON.parse(fs.readFileSync(storageFile(), 'utf8')).state : null)
+const accepted = (name, extra) => ({ ok: true, id: 'm-' + name, messageId: name, bytesReceived: 5, duplicate: false, ...extra })
+// One sweep of one recording whose answer says `says`, on a watch that had `before` remembered; what the sweep reported.
+const sweepWith = async (before, says, extra) => {
+  const w = await world(); addRecording(w, 'voice_5' + (++T) + '.opus', 20000)
+  if (before) fs.writeFileSync(storageFile(), JSON.stringify({ state: before }))
+  w.serverReply = accepted('x', says === undefined ? {} : { storage: says, ...extra })
+  w.Q.retryPendingUploads(); await finished(w)
+  return { w, last: w.states.at(-1) }
+}
+for (const [before, says, alert, kept, label] of [
+  [null, 'nearly_full', 'nearly_full', 'nearly_full', 'it just became nearly full: alert'],
+  ['nearly_full', 'nearly_full', null, 'nearly_full', 'still nearly full: no new alert (not at every upload)'],
+  ['full', 'nearly_full', null, 'nearly_full', 'better than before but not yet ok: no alert'],
+  ['nearly_full', 'full', 'full', 'full', 'old recordings were just deleted: alert'],
+  [null, 'full', 'full', 'full', 'straight to full: alert'],
+  ['full', 'full', 'full', 'full', 'deleting again: alert again (each deletion is news)'],
+  ['full', 'ok', null, null, 'room again: no alert, and the warning is forgotten'],
+  [null, 'ok', null, null, 'ok stays quiet'],
+  ['nearly_full', 'ok', null, null, 'room again after nearly full'],
+]) {
+  const { last } = await sweepWith(before, { state: says, usedBytes: 1, limitBytes: 100 })
+  ok(last.state === 'done' && last.alert === alert && storedState() === kept, 'was ' + before + ', server says ' + says + ' -> alert ' + alert + ', remembered ' + kept + ' (' + label + ')') }
+{ const { last } = await sweepWith('full', undefined)    // the default answer has no storage at all (an older server)
+  ok(last.state === 'done' && last.alert === null && storedState() === 'full', 'no word about storage: no alert, what was remembered is left as it was') }
+{ const { last } = await sweepWith(null, { state: 'exploded' })
+  ok(last.alert === null && storedState() === null, 'a state this app does not know is ignored') }
+{ const w = await world(); addRecording(w, 'voice_550.opus', 20000)
+  w.serverReply = accepted('x', { duplicate: true, storage: { state: 'full' } }); w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).alert === 'full', 'a repeat of an upload (the server already had it) can alert too') }
+{ // a queue of recordings gives one alert, the strongest
+  for (const [first, second, want] of [['nearly_full', 'full', 'full'], ['full', 'nearly_full', 'full'], ['nearly_full', 'nearly_full', 'nearly_full'], ['full', 'full', 'full']]) {
+    const w = await world(); addRecording(w, 'voice_560.opus', 20000); addRecording(w, 'voice_561.opus', 20000)
+    w.replyFor = (body, n) => ({ status: 200, reply: accepted(body.messageId, { storage: { state: n === 1 ? first : second } }) })
+    w.Q.retryPendingUploads(); await finished(w)
+    ok(w.states.filter((s) => s.state === 'done').length === 1 && w.states.at(-1).alert === want, 'two recordings, answers ' + first + ' then ' + second + ' -> one "done" with alert ' + want + ' (' + w.states.at(-1).alert + ')') } }
+{ // one world, two sweeps: what the first one learned is not reported again by the second
+  const w = await world(); addRecording(w, 'voice_570.opus', 20000)
+  w.serverReply = accepted('a', { storage: { state: 'full' } })
+  w.Q.retryPendingUploads(); await finished(w)
+  w.states.length = 0; addRecording(w, 'voice_571.opus', 20000); w.serverReply = accepted('b')
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'done' && w.states.at(-1).alert === null, 'a later sweep with no word about storage has no alert -> ' + JSON.stringify(w.states.at(-1))) }
+{ // a sweep that ends with a skipped (unreadable) file still reports what it learned
+  const w = await world(); addRecording(w, 'voice_580.opus', 20000); addRecording(w, 'voice_581.opus', 20000)
+  w.replyFor = (body) => (body.messageId === 'voice_580.opus' ? { status: 413, reply: { ok: false, code: 'payload_too_large' } } : { status: 200, reply: accepted(body.messageId, { storage: { state: 'full' } }) })
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'error' && w.states.at(-1).alert === 'full', 'an error ending with a skipped file still carries the alert -> ' + JSON.stringify(w.states.at(-1))) }
+{ const w = await world(); addRecording(w, 'voice_590.opus', 20000); ctl.failWrite = (p) => p === 'storage.json'
+  w.serverReply = accepted('x', { storage: { state: 'full' } })
+  const orig = console.log; console.log = () => {}
+  try { w.Q.retryPendingUploads(); await finished(w) } finally { console.log = orig }
+  ok(w.states.at(-1).state === 'done' && w.states.at(-1).alert === 'full' && JSON.stringify(uploaded()) === '["voice_590.opus"]', 'a watch that cannot keep the state still uploads, marks the recording sent, and still raises the alert') }
+
+console.log('24. the server refuses a recording as too large: that file is skipped, the others go on')
+for (const [label, status, reply] of [['413 with the error code', 413, { ok: false, code: 'payload_too_large', error: 'a recording may be at most 524288 bytes' }], ['413 from a proxy, not JSON', 413, '<html>Request Entity Too Large</html>'], ['the code in a 200-looking body', 200, { ok: false, code: 'payload_too_large', error: 'too big' }]]) {
+  const w = await world(); addRecording(w, 'voice_600.opus', 20000); addRecording(w, 'voice_601.opus', 20000)
+  w.replyFor = (body) => (body.messageId === 'voice_600.opus' ? { status, reply } : null)
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(w.posts.length === 2 && JSON.stringify(uploaded()) === '["voice_601.opus"]', label + ': the next recording was still sent, the large one was not marked sent')
+  ok(last.state === 'error' && last.message === 'server: recording too large' && last.pending === 1, label + ' -> ' + JSON.stringify(last))
+  ok(files().includes('voice_600.opus') && device.token !== null && device.cleared === 0, label + ': kept on the watch, token kept') }
+
+console.log('25. the server says this watch uploads too often (429): stop, say so, keep everything, try again later')
+for (const [label, status, reply] of [['429 with the error code', 429, { ok: false, code: 'too_many_attempts', error: 'too many attempts' }], ['429 from a proxy, not JSON', 429, 'Too Many Requests'], ['the code in a 200-looking body', 200, { ok: false, code: 'too_many_attempts', error: 'too many attempts' }]]) {
+  const w = await world(); addRecording(w, 'voice_610.opus', 20000); addRecording(w, 'voice_611.opus', 20000)
+  w.serverStatus = status; w.serverReply = reply
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(last.state === 'error' && last.message === 'Слишком много загрузок.\nПовторите позже' && last.pending === 2, label + ' -> ' + JSON.stringify(last))
+  ok(w.posts.length === 1 && uploaded().length === 0 && files().length === 2, label + ': the sweep stopped at the first refusal, nothing was marked sent or deleted')
+  ok(device.token !== null && device.cleared === 0, label + ': the watch is still paired')
+  w.serverStatus = 200; w.serverReply = null
+  w.Q.retryPendingUploads(); await until(() => uploaded().length === 2)
+  ok(uploaded().length === 2, label + ': the next trigger delivers both once the server allows it') }
+
+console.log('26. the watch is unpaired (token refused): the storage warning is forgotten with it')
+{ const w = await world(); addRecording(w, 'voice_620.opus', 20000); fs.writeFileSync(storageFile(), '{"state":"full"}')
+  w.serverStatus = 401; w.serverReply = '<html>Unauthorized</html>'
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'unpaired' && w.states.at(-1).revoked === true && !fs.existsSync(storageFile()), 'revoked: the warning about the old account is gone') }
+{ const w = await world(); device.token = null; addRecording(w, 'voice_630.opus', 20000); fs.writeFileSync(storageFile(), '{"state":"full"}')
+  w.Q.retryPendingUploads(); await tick()
+  ok(fs.existsSync(storageFile()), 'a watch that was merely never paired this session keeps what it knew') }
 
 console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'ALL CHECKS PASS'))
 process.exit(failures ? 1 : 0)

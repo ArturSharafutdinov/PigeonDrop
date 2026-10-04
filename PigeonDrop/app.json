@@ -30,7 +30,8 @@
             "page/index",
             "page/list",
             "page/settings",
-            "page/pair"
+            "page/pair",
+            "page/storage"
           ]
         },
         "app-side": {

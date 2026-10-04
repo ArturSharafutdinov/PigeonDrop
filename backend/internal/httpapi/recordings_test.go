@@ -87,11 +87,11 @@ func TestUploadStoresTheRecordingForTheDevicesOwner(t *testing.T) {
 	}
 	id := got["id"].(string)
 
-	// Both files are there under the message's id, and nothing else is.
-	if !bytes.Equal(fileBytes(t, e, id+".opus"), ogg) || !bytes.Equal(fileBytes(t, e, id+".wav"), wav) {
-		t.Fatal("the stored files differ from what was sent and what the converter makes")
+	// Only the original is stored, under the message's id: the WAV is made when it is played.
+	if !bytes.Equal(fileBytes(t, e, id+".opus"), ogg) {
+		t.Fatal("the stored file differs from what was sent")
 	}
-	if names := e.storedNames(t); len(names) != 2 {
+	if names := e.storedNames(t); !slices.Equal(names, []string{id + ".opus"}) {
 		t.Fatalf("stored files: %v", names)
 	}
 
@@ -162,7 +162,7 @@ func TestUploadIsIdempotentWithinOneDevice(t *testing.T) {
 	if other := bodyOf(t, e.uploadAs(first, "voice_1.opus", fixture(t, "tone.zepp"))); other["id"] != one["id"] || other["duplicate"] != true {
 		t.Fatalf("a different body under the same name: %v", other)
 	}
-	if n := e.count(t, `SELECT count(*) FROM messages`); n != 1 || len(e.storedNames(t)) != 2 {
+	if n := e.count(t, `SELECT count(*) FROM messages`); n != 1 || len(e.storedNames(t)) != 1 {
 		t.Fatalf("%d rows and %d files after repeats", n, len(e.storedNames(t)))
 	}
 
@@ -264,7 +264,7 @@ func TestRacingDuplicateUploadsStoreOneMessage(t *testing.T) {
 	if winners != 1 {
 		t.Fatalf("%d uploads claim to have stored the message", winners)
 	}
-	if rows, files := e.count(t, `SELECT count(*) FROM messages`), e.storedNames(t); rows != 1 || len(files) != 2 {
+	if rows, files := e.count(t, `SELECT count(*) FROM messages`), e.storedNames(t); rows != 1 || len(files) != 1 {
 		t.Fatalf("%d rows, files %v: the losers left files behind", rows, files)
 	}
 }
@@ -455,7 +455,7 @@ func TestAMessageIsInvisibleToEveryoneButItsOwner(t *testing.T) {
 	if rec := e.call(http.MethodDelete, "/v1/messages/"+mine, "", withCookie(bob)); rec.Code != http.StatusNotFound {
 		t.Fatalf("bob deleting alice's message: %d", rec.Code)
 	}
-	if n := e.count(t, `SELECT count(*) FROM messages`); n != 2 || len(e.storedNames(t)) != 4 {
+	if n := e.count(t, `SELECT count(*) FROM messages`); n != 2 || len(e.storedNames(t)) != 2 {
 		t.Fatalf("a refused delete removed something (%d rows)", n)
 	}
 	if rec := e.call(http.MethodGet, "/v1/messages", ""); rec.Code != http.StatusUnauthorized {
@@ -588,7 +588,7 @@ func TestDeletingAMessageRemovesItsRowAndFiles(t *testing.T) {
 			t.Errorf("deleting twice: %d %s", rec.Code, rec.Body.String())
 		}
 	}
-	if names := e.storedNames(t); !slices.Equal(names, []string{keep + ".opus", keep + ".wav"}) {
+	if names := e.storedNames(t); !slices.Equal(names, []string{keep + ".opus"}) {
 		t.Fatalf("files left: %v", names)
 	}
 	if n := e.count(t, `SELECT count(*) FROM messages`); n != 1 {

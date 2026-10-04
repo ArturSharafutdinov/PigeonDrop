@@ -19,10 +19,28 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
 )
 
-// MaxBodyBytes is the largest request body the server reads. A 60-second recording is about
-// 180 KB as base64; this leaves room for much longer ones without letting a client stream
-// unbounded data into memory.
+// MaxBodyBytes is the largest request body the server reads, whatever the route. Uploads of recordings have a
+// much smaller limit of their own (see Server.uploadBodyLimit).
 const MaxBodyBytes = 8 << 20
+
+// StorageLimits are what one recording and one account may take. A minute of the watch's audio is about 140 KiB
+// in the Ogg/Opus file the phone sends.
+type StorageLimits struct {
+	// MaxAudioBytes is the largest recording, as decoded bytes; a bigger one is refused with 413.
+	MaxAudioBytes int
+	// AccountBytes is the room an account's recordings may take. When a new recording does not fit, the account's
+	// oldest ones are deleted to make room. There is one limit for every plan until there are paid ones.
+	AccountBytes int64
+	// WarnPercent is the share of AccountBytes from which the server tells the watch that storage is nearly full.
+	WarnPercent int
+}
+
+// DefaultStorageLimits are what a server runs with unless a test or an operator says otherwise.
+var DefaultStorageLimits = StorageLimits{MaxAudioBytes: 512 << 10, AccountBytes: 100 << 20, WarnPercent: 90}
+
+// concurrentDecodes bounds how many recordings are decoded at once (when one is received and when one is played):
+// decoding is the one CPU-heavy thing a request can ask for.
+const concurrentDecodes = 4
 
 // Pinger is the part of the database pool the health check needs.
 type Pinger interface {
@@ -46,8 +64,10 @@ type Server struct {
 	Tx TxFunc
 	// Hasher hashes passwords; NewHandler makes one with the default settings if it is nil.
 	Hasher *auth.Hasher
-	// Limits are the sign-in brute-force limiters; NewHandler makes the default ones if they are unset.
+	// Limits are the rate limiters (sign-in, pairing, uploads); NewHandler makes the default ones if they are unset.
 	Limits AuthLimits
+	// Storage are the size limits of recordings and accounts; NewHandler uses DefaultStorageLimits if it is unset.
+	Storage StorageLimits
 	// CookieSecure marks the session cookie Secure. On for HTTPS, off only for local development over http.
 	CookieSecure bool
 	// AllowedOrigins are other web pages (scheme://host[:port]) allowed to call the /v1 API with a session.
@@ -57,6 +77,8 @@ type Server struct {
 
 	// userCodes draws the short code of a pairing; nil means auth.NewUserCode. Tests replace it to force collisions.
 	userCodes func() (display, canonical string, err error)
+	// decodeSlots holds a token for every recording being decoded right now (see concurrentDecodes).
+	decodeSlots chan struct{}
 }
 
 func (s *Server) now() time.Time {
@@ -90,13 +112,21 @@ func NewHandler(s *Server) http.Handler {
 	if s.Limits == (AuthLimits{}) {
 		s.Limits = defaultLimits(s.now)
 	}
+	if s.Storage == (StorageLimits{}) {
+		s.Storage = DefaultStorageLimits
+	}
+	s.decodeSlots = make(chan struct{}, concurrentDecodes)
 
 	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			var tooLarge *http.MaxBytesError
 			switch {
 			case errors.As(err, &tooLarge):
-				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				if strings.HasPrefix(r.URL.Path, "/v1/") {
+					writeCodedError(w, http.StatusRequestEntityTooLarge, api.ErrorCodePayloadTooLarge, "request body too large")
+				} else {
+					writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				}
 			case strings.Contains(err.Error(), "decode JSON body"):
 				writeBadRequest(w, r, "invalid JSON body")
 			default:
@@ -130,15 +160,28 @@ func NewHandler(s *Server) http.Handler {
 		writeError(w, http.StatusNotFound, "not found")
 	})
 
-	return recoverer(s.Logger, logRequests(s.Logger, limitBody(s.crossOriginGuard(s.authContext(mux)))))
+	return recoverer(s.Logger, logRequests(s.Logger, s.limitBody(s.crossOriginGuard(s.authContext(mux)))))
 }
 
 // limitBody caps how much of a request body any handler can read.
-func limitBody(next http.Handler) http.Handler {
+func (s *Server) limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+		limit := int64(MaxBodyBytes)
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/messages" {
+			limit = s.uploadBodyLimit()
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// uploadBodyLimit is the largest body an upload of a recording may have: the base64 of the largest recording,
+// with room for line breaks in it (some clients wrap their base64; in JSON each break is the four characters \r\n,
+// which adds up to 6% for lines of 64 characters) and for the rest of the JSON. A client sending more is
+// refused before the server has read it all.
+func (s *Server) uploadBodyLimit() int64 {
+	base64Len := int64(s.Storage.MaxAudioBytes+2) / 3 * 4
+	return base64Len + base64Len/10 + 4096
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

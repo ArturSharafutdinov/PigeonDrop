@@ -29,6 +29,7 @@ type Querier interface {
 	// Users, invitations and sessions. Times come from the caller (never now()) so the server and its
 	// tests share one clock.
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DeleteAllMessages(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
 	DeleteExpiredPairings(ctx context.Context, now time.Time) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
 	// No row when the user has no such message. The files are removed by the caller afterwards.
@@ -64,6 +65,13 @@ type Querier interface {
 	// of the previous page; both null for the first page).
 	ListMessages(ctx context.Context, arg ListMessagesParams) ([]ListMessagesRow, error)
 	ListUsers(ctx context.Context) ([]ListUsersRow, error)
+	// Everything that changes how much room a user's recordings take (an upload counts, makes room and inserts)
+	// runs under this lock, so two uploads of one user cannot both see free room that only one of them gets.
+	// NO KEY UPDATE conflicts with itself but not with the key-share locks that inserts referencing the user take.
+	LockUserStorage(ctx context.Context, id uuid.UUID) error
+	// Deletes the user's oldest messages, never keep_id, until the newest ones that are left fit in room bytes
+	// (the limit minus the message being kept, whatever its place in time). The files are removed by the caller.
+	PruneMessages(ctx context.Context, arg PruneMessagesParams) ([]uuid.UUID, error)
 	// Hands out the approval exactly once: no row means someone else collected it first, or it was never approved.
 	RedeemPairing(ctx context.Context, arg RedeemPairingParams) (RedeemPairingRow, error)
 	// No row means the user has no such device. Revoking twice is fine: the second time changes nothing.
@@ -73,6 +81,8 @@ type Querier interface {
 	// Returns no row when there is no such account: this never creates one.
 	SetAccountServerURL(ctx context.Context, arg SetAccountServerURLParams) (Account, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
+	// What the user's recordings take. Only the original files count; the WAV played in a browser is made on demand.
+	SumMessageBytes(ctx context.Context, userID uuid.UUID) (int64, error)
 	// Records that the device was seen, at most once per interval: the caller passes the oldest last_seen_at
 	// that still counts as recent.
 	TouchDevice(ctx context.Context, arg TouchDeviceParams) error

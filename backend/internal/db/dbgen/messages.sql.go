@@ -12,6 +12,30 @@ import (
 	"github.com/google/uuid"
 )
 
+const deleteAllMessages = `-- name: DeleteAllMessages :many
+DELETE FROM messages WHERE user_id = $1 RETURNING id
+`
+
+func (q *Queries) DeleteAllMessages(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, deleteAllMessages, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteMessage = `-- name: DeleteMessage :one
 DELETE FROM messages WHERE id = $1 AND user_id = $2
 RETURNING id, has_wav
@@ -233,4 +257,67 @@ func (q *Queries) ListMessages(ctx context.Context, arg ListMessagesParams) ([]L
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockUserStorage = `-- name: LockUserStorage :exec
+SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE
+`
+
+// Everything that changes how much room a user's recordings take (an upload counts, makes room and inserts)
+// runs under this lock, so two uploads of one user cannot both see free room that only one of them gets.
+// NO KEY UPDATE conflicts with itself but not with the key-share locks that inserts referencing the user take.
+func (q *Queries) LockUserStorage(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockUserStorage, id)
+	return err
+}
+
+const pruneMessages = `-- name: PruneMessages :many
+WITH ranked AS (
+    SELECT id, SUM(bytes_received) OVER (ORDER BY received_at DESC, id DESC) AS newest_first_total
+    FROM messages
+    WHERE messages.user_id = $2::uuid AND messages.id <> $3::uuid
+)
+DELETE FROM messages
+WHERE id IN (SELECT id FROM ranked WHERE newest_first_total > $1::bigint)
+RETURNING id
+`
+
+type PruneMessagesParams struct {
+	Room   int64
+	Owner  uuid.UUID
+	KeepID uuid.UUID
+}
+
+// Deletes the user's oldest messages, never keep_id, until the newest ones that are left fit in room bytes
+// (the limit minus the message being kept, whatever its place in time). The files are removed by the caller.
+func (q *Queries) PruneMessages(ctx context.Context, arg PruneMessagesParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, pruneMessages, arg.Room, arg.Owner, arg.KeepID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const sumMessageBytes = `-- name: SumMessageBytes :one
+SELECT COALESCE(SUM(bytes_received), 0)::bigint AS used FROM messages WHERE user_id = $1
+`
+
+// What the user's recordings take. Only the original files count; the WAV played in a browser is made on demand.
+func (q *Queries) SumMessageBytes(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, sumMessageBytes, userID)
+	var used int64
+	err := row.Scan(&used)
+	return used, err
 }

@@ -36,7 +36,18 @@ type Config struct {
 	// TrustProxyHeaders believes X-Forwarded-For for the client's address (the sign-in limits are per address).
 	// Turn it on only behind a reverse proxy that sets the header itself, such as Coolify's Traefik.
 	TrustProxyHeaders bool
+	// AccountStorageBytes is the room one account's recordings may take; beyond it the oldest are deleted.
+	AccountStorageBytes int64
 }
+
+// DefaultAccountStorageBytes is 100 MiB. MinAccountStorageBytes only guards against a typo (a limit in megabytes
+// or kilobytes by mistake); it is lower than one large recording on purpose, so that the storage warning can be
+// tried with a few recordings. A recording that alone exceeds the limit is still accepted and keeps the
+// account's older recordings out, never itself.
+const (
+	DefaultAccountStorageBytes = 100 << 20
+	MinAccountStorageBytes     = 100_000
+)
 
 // Load reads the configuration through getenv (os.Getenv in production). It reports
 // every problem at once rather than stopping at the first.
@@ -50,7 +61,8 @@ func Load(getenv func(string) string) (Config, error) {
 		Port:        3000,
 		MaxDBConns:  10,
 
-		CookieSecure: true,
+		CookieSecure:        true,
+		AccountStorageBytes: DefaultAccountStorageBytes,
 	}
 
 	if c.DatabaseURL == "" {
@@ -109,6 +121,15 @@ func Load(getenv func(string) string) (Config, error) {
 			bad("TRUST_PROXY_HEADERS must be true or false, got %q", v)
 		} else {
 			c.TrustProxyHeaders = b
+		}
+	}
+
+	if v := strings.TrimSpace(getenv("STORAGE_ACCOUNT_BYTES")); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < MinAccountStorageBytes {
+			bad("STORAGE_ACCOUNT_BYTES must be a number of bytes, at least %d, got %q", MinAccountStorageBytes, v)
+		} else {
+			c.AccountStorageBytes = n
 		}
 	}
 

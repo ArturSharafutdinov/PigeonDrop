@@ -142,6 +142,9 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		Handler: httpapi.NewHandler(&httpapi.Server{
 			Pinger: pool, DB: queries, Files: files, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
+			Storage: httpapi.StorageLimits{
+				MaxAudioBytes: httpapi.DefaultStorageLimits.MaxAudioBytes, AccountBytes: cfg.AccountStorageBytes, WarnPercent: httpapi.DefaultStorageLimits.WarnPercent,
+			},
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,

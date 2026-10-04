@@ -53,6 +53,7 @@ Page({
     recorder: null, // active Recorder instance, or null when idle
     player: null, // lazily created Player instance, reused across plays (see getPlayer)
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
+    pendingAlert: null, // a storage warning that arrived during a recording, shown once it ends
     startedAt: null, // Date.now() when the current recording began (drives the stopwatch)
     ticker: null, // setInterval id of the once-a-second stopwatch refresh, or null when idle
     uploadHoldTimer: null, // setTimeout id that ends the upload screen hold, or null when no hold is active
@@ -219,6 +220,9 @@ Page({
       status = pendingCount > 0 ? sending : 'Отправлено\n\n' + this.idleText()
     }
     this.updateStatus(status)
+
+    // A storage warning that came in while this was being recorded.
+    if (this.state.pendingAlert) this.alertStorage(this.state.pendingAlert)
   },
 
   // Keeps the display awake for `durationMs`. By default Zepp OS puts the
@@ -334,9 +338,13 @@ Page({
     if (this.state.uploadHoldTimer !== null) this.endUploadHold()
   },
 
-  // Reflects the upload queue on the status label (see onUploadState). Ignored
+  // Reflects the upload queue on the status label (see onUploadState). The status is ignored
   // while recording, so a background upload can never overwrite the stopwatch.
   showUploadState(state) {
+    // The storage warning is a page of its own (page/storage.js). It must not interrupt a recording: it waits
+    // until the recording has ended.
+    if (state.alert) this.alertStorage(state.alert)
+
     if (this.state.recording) return
 
     if (state.state === 'sending') {
@@ -344,6 +352,7 @@ Page({
       this.updateStatus('Отправка ' + state.index + ' из ' + state.count + '\nчасть ' + state.chunk + ' из ' + state.total)
     } else if (state.state === 'done') {
       this.updateStatus(state.pending > 0 ? 'В очереди: ' + state.pending : 'Отправлено\n\n' + this.idleText())
+
       // Everything is sent, so the screen no longer has to be held. After an
       // error it deliberately stays on until the hold runs out, so the reason
       // can be read.
@@ -411,5 +420,16 @@ Page({
 
   updateStatus(text) {
     this.state.statusText.setProperty(prop.MORE, { text })
+  },
+
+  // Opens the storage warning page, which buzzes, stays up for a few seconds and goes back here by itself.
+  // 'full' (old recordings are being deleted) outranks 'nearly_full' if both arrive while a recording runs.
+  alertStorage(alert) {
+    if (this.state.recording) {
+      if (this.state.pendingAlert !== 'full') this.state.pendingAlert = alert
+      return
+    }
+    this.state.pendingAlert = null
+    push({ url: 'page/storage', params: JSON.stringify({ state: alert }) })
   },
 })
