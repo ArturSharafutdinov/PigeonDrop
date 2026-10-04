@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -77,7 +78,7 @@ func TestLoadReportsEveryProblem(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 	for _, part := range []string{"DATABASE_URL is required", "PORT must", "DEFAULT_SERVER_URL must", "MIGRATE_ON_START must", "LOG_LEVEL must", "MAX_DB_CONNS must",
-		"COOKIE_SECURE must", "TRUST_PROXY_HEADERS must", `STORAGE_ACCOUNT_BYTES must be a number of bytes, at least 524288 (one recording), got "100MB"`, `ALLOWED_ORIGINS must list origins like https://app.example.com, got "not-an-origin"`,
+		"COOKIE_SECURE must", "TRUST_PROXY_HEADERS must", `STORAGE_ACCOUNT_BYTES must be a number of bytes, at least 100000, got "100MB"`, `ALLOWED_ORIGINS must list origins like https://app.example.com, got "not-an-origin"`,
 		`got "https://app.example.com/path"`} {
 		if !strings.Contains(err.Error(), part) {
 			t.Errorf("error does not mention %q:\n%v", part, err)
@@ -85,13 +86,15 @@ func TestLoadReportsEveryProblem(t *testing.T) {
 	}
 }
 
-func TestStorageAccountBytesMustHoldOneRecording(t *testing.T) {
-	for _, v := range []string{"0", "-5", "524287", "1e9", "1 000"} {
+func TestStorageAccountBytesHasASaneFloor(t *testing.T) {
+	for _, v := range []string{"0", "-5", "99999", "1e9", "1 000", "100MB"} {
 		if _, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "STORAGE_ACCOUNT_BYTES": v})); err == nil {
 			t.Errorf("%q was accepted", v)
 		}
 	}
-	if c, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "STORAGE_ACCOUNT_BYTES": "524288"})); err != nil || c.AccountStorageBytes != 524288 {
-		t.Errorf("exactly one recording: %+v %v", c, err)
+	for _, v := range []string{"100000", "300000", "104857600"} {
+		if c, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "STORAGE_ACCOUNT_BYTES": v})); err != nil || strconv.FormatInt(c.AccountStorageBytes, 10) != v {
+			t.Errorf("%q: %+v %v", v, c, err)
+		}
 	}
 }

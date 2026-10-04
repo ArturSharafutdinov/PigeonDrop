@@ -541,3 +541,23 @@ func (e *testEnv) firstMessage(t testing.TB) string {
 	}
 	return id.String()
 }
+
+// A limit below one recording is a strange setting (the config only guards against typos), but the rule still
+// holds: the new recording is accepted, and everything older makes way for it.
+func TestARecordingLargerThanTheWholeLimitIsStillAccepted(t *testing.T) {
+	e := newEnvWith(t, smallAccount(500))
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+
+	alone := e.uploaded(t, token, "alone", junk(800, 1)) // over the limit on its own, nothing to delete
+	if used, limit, state := storageOf(t, alone); used != 800 || limit != 500 || state != "nearly_full" || alone["pruned"] != float64(0) {
+		t.Fatalf("alone: used %v limit %v state %s pruned %v", used, limit, state, alone["pruned"])
+	}
+	next := e.uploaded(t, token, "next", junk(900, 1)) // now the older one makes way
+	if used, _, state := storageOf(t, next); used != 900 || state != "full" || next["pruned"] != float64(1) {
+		t.Fatalf("next: used %v state %s pruned %v", used, state, next["pruned"])
+	}
+	if names := e.messageIDs(t); !slices.Equal(names, []string{"next"}) || len(e.storedNames(t)) != 1 {
+		t.Fatalf("left: %v, %v", names, e.storedNames(t))
+	}
+}

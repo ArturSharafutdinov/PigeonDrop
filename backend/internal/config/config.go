@@ -40,11 +40,13 @@ type Config struct {
 	AccountStorageBytes int64
 }
 
-// DefaultAccountStorageBytes is 100 MiB. MinAccountStorageBytes is the largest single recording: an account
-// must be able to hold at least one.
+// DefaultAccountStorageBytes is 100 MiB. MinAccountStorageBytes only guards against a typo (a limit in megabytes
+// or kilobytes by mistake); it is lower than one large recording on purpose, so that the storage warning can be
+// tried with a few recordings. A recording that alone exceeds the limit is still accepted and keeps the
+// account's older recordings out, never itself.
 const (
 	DefaultAccountStorageBytes = 100 << 20
-	MinAccountStorageBytes     = 512 << 10
+	MinAccountStorageBytes     = 100_000
 )
 
 // Load reads the configuration through getenv (os.Getenv in production). It reports
@@ -125,7 +127,7 @@ func Load(getenv func(string) string) (Config, error) {
 	if v := strings.TrimSpace(getenv("STORAGE_ACCOUNT_BYTES")); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n < MinAccountStorageBytes {
-			bad("STORAGE_ACCOUNT_BYTES must be a number of bytes, at least %d (one recording), got %q", MinAccountStorageBytes, v)
+			bad("STORAGE_ACCOUNT_BYTES must be a number of bytes, at least %d, got %q", MinAccountStorageBytes, v)
 		} else {
 			c.AccountStorageBytes = n
 		}
