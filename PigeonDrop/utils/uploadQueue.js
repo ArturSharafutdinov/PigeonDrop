@@ -21,9 +21,10 @@
 // the screen can say how to fix it. If the server refuses the token (the device was revoked)
 // the token is forgotten and the same thing happens: it can never work again.
 //
-// Every answer to an upload says how full the account's storage is; the last one of a sweep is remembered
-// (utils/storageState.js) and reported with 'done', so the screen can warn that old recordings will be (or
-// are being) deleted on the server. A server that says "too many uploads" (429) stops the sweep like any other
+// Every answer to an upload says how full the account's storage is. The latest is remembered
+// (utils/storageState.js), and when it is worse than the one before, or says that old recordings were just
+// deleted, the sweep reports an `alert` with its last event, so the screen can warn the person (page/storage.js).
+// A server that says "too many uploads" (429) stops the sweep like any other
 // server problem and the screen says so; a recording the server calls too large (413) is skipped like an
 // unreadable one, since sending it again changes nothing.
 //
@@ -38,7 +39,7 @@
 import { readFileSync, writeFileSync, rmSync, openSync, readSync, closeSync, statSync, O_RDONLY } from '@zos/fs'
 import { RECORDINGS_DIR, listRecordings } from './recordings'
 import { getDeviceToken, isPaired, clearDevice } from './device'
-import { storageStateOf, saveStorageState, clearStorageState } from './storageState'
+import { storageStateOf, getStorageState, saveStorageState, clearStorageState } from './storageState'
 import { MAX_RECORDINGS, MAX_PENDING_RECORDINGS } from '../config'
 
 const UPLOADS_INDEX_FILE = 'uploads.json'
@@ -55,7 +56,7 @@ const RETRY_PACING_MS = 300 // pause between two recordings in one sweep
 let sweepInFlight = false
 let activeRecording = null // file name of the recording still being written, if any
 let stateListener = null
-let sweepStorage = null // how full the storage was, by the last answer of the running sweep (null: not told yet)
+let sweepAlert = null // the warning worth interrupting the person for, from the answers of the running sweep (null: none)
 
 function readIndex() {
   const raw = readFileSync({ path: UPLOADS_INDEX_FILE, options: { encoding: 'utf8' } })
@@ -118,9 +119,10 @@ export function pendingRecordings() {
 
 // One listener at most (the main page). Receives:
 //   { state: 'sending', index, count, chunk, total }  recording `index` of `count`, chunk `chunk` of `total`
-//   { state: 'done', pending, storage }               the sweep finished; storage is what the server last said
-//                                                     about the account's storage ('ok', 'nearly_full', 'full')
-//                                                     or null if it said nothing this time
+//   { state: 'done', pending, alert }                 the sweep finished; alert is null, or 'nearly_full' or
+//                                                     'full' when the server's answers say the account's storage
+//                                                     just got nearly full (once), or that old recordings were
+//                                                     deleted to make room (every time): the screen warns about it
 //   { state: 'error', message, pending }              the sweep stopped on a failure
 //   { state: 'unpaired', pending, revoked }           nothing was sent because the watch is not paired;
 //                                                     revoked is true when the server just refused its token
@@ -329,17 +331,25 @@ function sendWithRestart(item, onChunk, restartsLeft) {
   })
 }
 
-// Remembers how full the server says the account's storage is (the answer to an upload carries it).
+// Remembers how full the server says the account's storage is (the answer to an upload carries it) and decides
+// whether it is worth interrupting the person: when it just became nearly full (once, not at every upload
+// while it stays so), and whenever the server had to delete old recordings to take this one (every time, since
+// each deletion is news). The sweep keeps the strongest of its alerts, so a queue of recordings gives one.
 function noteStorage(storage) {
   const state = storageStateOf(storage)
   if (state === null) return
-  sweepStorage = state
+
+  let before = null
   try {
+    before = getStorageState()
     saveStorageState(state)
   } catch (e) {
     // The warning is a courtesy; a storage problem on the watch must never stop uploading.
     console.log('upload queue: could not keep the storage state:', e)
   }
+
+  const worse = state === 'full' || (state === 'nearly_full' && before !== 'nearly_full' && before !== 'full')
+  if (worse && (sweepAlert === null || state === 'full')) sweepAlert = state
 }
 
 function shortReason(err) {
@@ -367,7 +377,7 @@ export function retryPendingUploads() {
   }
 
   sweepInFlight = true
-  sweepStorage = null
+  sweepAlert = null
   const unreadable = [] // files this sweep could not read, reported when it ends
 
   const sendFrom = (i) => {
@@ -406,9 +416,9 @@ export function retryPendingUploads() {
     .then(() => {
       sweepInFlight = false
       if (unreadable.length > 0) {
-        emit({ state: 'error', message: shortReason(unreadable[0]), pending: pendingRecordings().length })
+        emit({ state: 'error', message: shortReason(unreadable[0]), pending: pendingRecordings().length, alert: sweepAlert })
       } else {
-        emit({ state: 'done', pending: pendingRecordings().length, storage: sweepStorage })
+        emit({ state: 'done', pending: pendingRecordings().length, alert: sweepAlert })
       }
       // A recording finished while this sweep was running wasn't in its snapshot,
       // so give those (and only those) their own pass. Anything that was in the

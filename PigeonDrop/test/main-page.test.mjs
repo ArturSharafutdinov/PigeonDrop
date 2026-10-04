@@ -15,13 +15,13 @@ Date.now = () => now
 const S = stubPath('main-page.mjs')
 const PAGE = generate('page/index.js', {
   '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S, '@zos/display': S,
-  '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S, '../utils/storageState': S, '../config': S,
+  '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S, '../config': S,
 })
 await import(fileUrl(PAGE))
 const mk = () => Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) })
 const ok = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL ') + msg); if (!cond) process.exitCode = 1 }
 const last = () => stubs.texts[stubs.texts.length - 1]
-const reset = () => { stubs.log.length = 0; stubs.texts.length = 0; stubs.notices.length = 0; cleared = 0 }
+const reset = () => { stubs.log.length = 0; stubs.texts.length = 0; cleared = 0 }
 const released = () => stubs.log.includes('resetPageBrightTime') && stubs.log.includes('resetDropWristScreenOff') && stubs.log.includes('resetPalmScreenOff')
 const heldFor = (ms) => stubs.log.includes('setPageBrightTime ' + (ms + 5000)) && stubs.log.includes('pauseDropWristScreenOff ' + ms) && stubs.log.includes('pausePalmScreenOff ' + ms)
 const UPLOAD = 60000
@@ -195,51 +195,39 @@ stubs.setPaired(true)
 page = mk(); page.build(); page.toggleRecording(); reset(); page.toggleRecording()
 ok(last().startsWith('Отправка...'), '9e: paired -> ' + JSON.stringify(last()))
 
-console.log('--- 10. the storage warning: its own label, from what the server last said ---')
-const noticeWidgets = () => stubs.created.filter((o) => o.color === 0xffb74d)
-const lastNotice = () => stubs.notices[stubs.notices.length - 1]
-// 10a. at app open: nothing, or what was said last time
-stubs.setStorageState(null); stubs.created.length = 0
-page = mk(); page.build()
-ok(noticeWidgets().length === 1 && noticeWidgets()[0].text === '', '10a: nothing said -> one label, empty')
-stubs.setStorageState('nearly_full'); stubs.created.length = 0; page = mk(); page.build()
-ok(noticeWidgets()[0].text.includes('почти заполнено') && noticeWidgets()[0].text.includes('на сайте'), '10a: nearly full is shown when the app opens -> ' + JSON.stringify(noticeWidgets()[0].text))
-stubs.setStorageState('full'); stubs.created.length = 0; page = mk(); page.build()
-ok(noticeWidgets()[0].text.includes('Хранилище заполнено') && noticeWidgets()[0].text.includes('удаляются сами') && !noticeWidgets()[0].text.includes('почти'), '10a: full is shown when the app opens, in its own words -> ' + JSON.stringify(noticeWidgets()[0].text))
-ok(noticeWidgets()[0].text !== STORAGE_TEXT_NEARLY(), '10a: the two warnings differ')
-stubs.setStorageState('ok'); stubs.created.length = 0; page = mk(); page.build()
-ok(noticeWidgets()[0].text === '', '10a: a stray "ok" shows nothing')
-stubs.setStorageState('weird'); stubs.created.length = 0; page = mk(); page.build()
-ok(noticeWidgets()[0].text === '', '10a: an unknown state shows nothing')
-stubs.setStorageState(null)
-// 10b. it fits the round display like everything else on the page: all four corners inside the 230 px safe zone, above the buttons
-{ const w = noticeWidgets()[0]; const cx = 240, cy = 240
-  const far = [[w.x, w.y], [w.x + w.w, w.y], [w.x, w.y + w.h], [w.x + w.w, w.y + w.h]].map(([x, y]) => Math.hypot(x - cx, y - cy))
-  ok(Math.max(...far) <= 230, '10b: the label\'s corners are at most ' + Math.round(Math.max(...far)) + ' px from the centre (limit 230)')
-  ok(w.y + w.h <= 270 && w.text_style === 1, '10b: it ends where the first button starts and wraps its text -> bottom ' + (w.y + w.h)) }
-// 10c. what the server says during uploading
-page = mk(); page.build(); reset()
-stubs.listener({ state: 'done', pending: 0, storage: 'nearly_full' })
-ok(lastNotice().includes('почти заполнено') && last().startsWith('Отправлено'), '10c: "done" with nearly_full -> the warning appears, the status still says it was sent -> ' + JSON.stringify(lastNotice()))
-stubs.listener({ state: 'done', pending: 0, storage: 'full' })
-ok(lastNotice().includes('Хранилище заполнено') && !lastNotice().includes('почти'), '10c: ... and full replaces it')
-const shown = stubs.notices.length
-stubs.listener({ state: 'done', pending: 0, storage: null })
-stubs.listener({ state: 'done', pending: 1 })
-ok(stubs.notices.length === shown, '10c: "done" without a word about storage leaves the warning alone')
-stubs.listener({ state: 'done', pending: 0, storage: 'ok' })
-ok(lastNotice() === '', '10c: "ok" takes the warning away')
-reset(); stubs.listener({ state: 'done', pending: 0, storage: 'full' }); stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 1, total: 4 }); stubs.listener({ state: 'error', message: 'Timed out', pending: 1 })
-ok(stubs.notices.length === 1, '10c: sending and error never touch the warning')
-// 10d. a revoked watch: the warning was about the old account
-reset(); stubs.listener({ state: 'unpaired', pending: 1, revoked: false })
-ok(stubs.notices.length === 0, '10d: "never paired" does not touch the warning')
-stubs.listener({ state: 'unpaired', pending: 1, revoked: true })
-ok(lastNotice() === '', '10d: a refused token takes the warning away')
-// 10e. a recording is being made: the status label is not touched, the warning follows the server
+console.log('--- 10. the storage warning: a page of its own, opened when the server says so ---')
+const pushes = () => stubs.log.filter((l) => l.startsWith('push '))
+const WARNING = (state) => 'push page/storage {"state":"' + state + '"}'
+// 10a. nothing at app open, and the old label on this page is gone
+stubs.created.length = 0; page = mk(); reset(); page.build()
+ok(pushes().length === 0, '10a: opening the app does not open the warning page')
+ok(!stubs.created.some((o) => o.color === 0xffb74d) && stubs.created.filter((o) => o.type === 'TEXT').length === 1, '10a: the main page has one text label (the status), as before the warning existed')
+// 10b. what the upload queue reports
+page = mk(); page.build(); reset(); now = 12_000_000
+stubs.listener({ state: 'done', pending: 0, alert: 'full' })
+ok(JSON.stringify(pushes()) === JSON.stringify([WARNING('full')]), '10b: "done" with alert full opens the page with that state -> ' + JSON.stringify(pushes()))
+ok(last().startsWith('Отправлено'), '10b: the status still says it was sent -> ' + JSON.stringify(last().split('\n')[0]))
+reset(); stubs.listener({ state: 'done', pending: 0, alert: 'nearly_full' })
+ok(JSON.stringify(pushes()) === JSON.stringify([WARNING('nearly_full')]), '10b: nearly_full -> ' + JSON.stringify(pushes()))
+reset(); stubs.listener({ state: 'done', pending: 0, alert: null }); stubs.listener({ state: 'done', pending: 1 }); stubs.listener({ state: 'done', pending: 0, alert: undefined })
+ok(pushes().length === 0, '10b: no alert, no page')
+reset(); stubs.listener({ state: 'error', message: 'unreadable', pending: 1, alert: 'full' })
+ok(JSON.stringify(pushes()) === JSON.stringify([WARNING('full')]) && last().startsWith('Не удалось отправить'), '10b: an alert that comes with an error still opens the page, and the error is still shown')
+reset(); stubs.listener({ state: 'sending', index: 1, count: 1, chunk: 1, total: 4 }); stubs.listener({ state: 'unpaired', pending: 1, revoked: true }); stubs.listener({ state: 'unpaired', pending: 1, revoked: false })
+ok(pushes().length === 0, '10b: sending and unpaired events never open it')
+// 10c. never in the middle of a recording
 page = mk(); page.build(); page.toggleRecording(); reset()
-stubs.listener({ state: 'done', pending: 0, storage: 'full' })
-ok(stubs.texts.length === 0 && lastNotice().includes('Хранилище заполнено'), '10e: during a recording the stopwatch is left alone and the warning still updates')
-// 10f. the warning and the status are different labels
-ok(stubs.created.filter((o) => o.type === 'TEXT').length >= 2 && new Set(stubs.created.filter((o) => o.type === 'TEXT').map((o) => o.y)).size >= 2, '10f: two text labels at different heights')
-function STORAGE_TEXT_NEARLY() { stubs.setStorageState('nearly_full'); stubs.created.length = 0; const p = mk(); p.build(); stubs.setStorageState(null); return noticeWidgets()[0].text }
+stubs.listener({ state: 'done', pending: 0, alert: 'nearly_full' })
+ok(pushes().length === 0 && stubs.texts.length === 0, '10c: during a recording nothing opens and the stopwatch is left alone')
+page.toggleRecording()
+ok(JSON.stringify(pushes()) === JSON.stringify([WARNING('nearly_full')]), '10c: once the recording ends, the page opens with what was said -> ' + JSON.stringify(pushes()))
+reset(); page.toggleRecording(); page.toggleRecording()
+ok(pushes().length === 0, '10c: ...once, not at every later recording')
+page = mk(); page.build(); page.toggleRecording(); reset()
+stubs.listener({ state: 'done', pending: 0, alert: 'full' }); stubs.listener({ state: 'done', pending: 0, alert: 'nearly_full' })
+page.toggleRecording()
+ok(JSON.stringify(pushes()) === JSON.stringify([WARNING('full')]), '10c: if several arrive during a recording, the stronger one wins -> ' + JSON.stringify(pushes()))
+page = mk(); page.build(); page.toggleRecording(); reset()
+stubs.listener({ state: 'done', pending: 0, alert: 'nearly_full' }); stubs.listener({ state: 'done', pending: 0, alert: 'full' })
+page.toggleRecording()
+ok(JSON.stringify(pushes()) === JSON.stringify([WARNING('full')]), '10c: whichever order they come in -> ' + JSON.stringify(pushes()))

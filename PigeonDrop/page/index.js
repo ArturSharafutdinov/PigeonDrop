@@ -24,7 +24,6 @@ import {
   onUploadState,
 } from '../utils/uploadQueue'
 import { isPaired } from '../utils/device'
-import { getStorageState } from '../utils/storageState'
 import { MAX_RECORDING_SECONDS } from '../config'
 
 // How long the screen is kept awake for an upload, so it can be sent to the
@@ -37,20 +36,6 @@ const UPLOAD_SCREEN_HOLD_MS = 60 * 1000
 // Extra time on the page-brightness timeout beyond a hold: the stopwatch ticks
 // once a second, so an auto-stop can land a moment after the recording limit.
 const SCREEN_SLACK_MS = 5 * 1000
-
-// The warning about the account's storage on the server (utils/storageState.js), shown in its own small label
-// under the status text so that it neither replaces nor is replaced by it. The server deletes the oldest
-// recordings once the storage is full; this tells the person before and while that happens, and where to
-// clear it themselves (the web page opened by pairing). Anything else, 'ok' included, shows nothing.
-const STORAGE_NOTICE_COLOR = 0xffb74d
-const STORAGE_NOTICES = {
-  nearly_full: 'Хранилище почти заполнено. Очистите его на сайте или старые записи начнут удаляться сами',
-  full: 'Хранилище заполнено. Очистите его на сайте или старые записи удаляются сами',
-}
-
-function storageNoticeText(state) {
-  return STORAGE_NOTICES[state] || ''
-}
 
 // 75 -> "01:15", 3725 -> "1:02:05". Elapsed time shown on the recording screen.
 function formatElapsed(totalSeconds) {
@@ -68,7 +53,7 @@ Page({
     recorder: null, // active Recorder instance, or null when idle
     player: null, // lazily created Player instance, reused across plays (see getPlayer)
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
-    noticeText: null, // reference to the storage-warning TEXT widget (empty when there is nothing to warn about)
+    pendingAlert: null, // a storage warning that arrived during a recording, shown once it ends
     startedAt: null, // Date.now() when the current recording began (drives the stopwatch)
     ticker: null, // setInterval id of the once-a-second stopwatch refresh, or null when idle
     uploadHoldTimer: null, // setTimeout id that ends the upload screen hold, or null when no hold is active
@@ -88,22 +73,6 @@ Page({
       text: this.idleText(),
       text_size: px(28),
       color: 0xffffff,
-      align_h: align.CENTER_H,
-      align_v: align.CENTER_V,
-      text_style: text_style.WRAP,
-    })
-
-    // The storage warning, in the band between the status text and the buttons: up to three lines of small
-    // text, kept inside the round display's safe zone like everything else on this page. It shows what the
-    // server last said, so it is already there when the app opens (see utils/storageState.js).
-    this.state.noticeText = createWidget(widget.TEXT, {
-      x: px(40),
-      y: px(196),
-      w: px(400),
-      h: px(74),
-      text: storageNoticeText(getStorageState()),
-      text_size: px(20),
-      color: STORAGE_NOTICE_COLOR,
       align_h: align.CENTER_H,
       align_v: align.CENTER_V,
       text_style: text_style.WRAP,
@@ -251,6 +220,9 @@ Page({
       status = pendingCount > 0 ? sending : 'Отправлено\n\n' + this.idleText()
     }
     this.updateStatus(status)
+
+    // A storage warning that came in while this was being recorded.
+    if (this.state.pendingAlert) this.alertStorage(this.state.pendingAlert)
   },
 
   // Keeps the display awake for `durationMs`. By default Zepp OS puts the
@@ -369,11 +341,9 @@ Page({
   // Reflects the upload queue on the status label (see onUploadState). The status is ignored
   // while recording, so a background upload can never overwrite the stopwatch.
   showUploadState(state) {
-    // The storage warning has a label of its own, so it follows the server whatever the status label is showing,
-    // a recording in progress included. "Nothing said" keeps what is shown; a refused token makes it moot, since
-    // it was about the account this watch was paired with.
-    if (state.state === 'done' && state.storage) this.showStorageNotice(state.storage)
-    if (state.state === 'unpaired' && state.revoked) this.showStorageNotice(null)
+    // The storage warning is a page of its own (page/storage.js). It must not interrupt a recording: it waits
+    // until the recording has ended.
+    if (state.alert) this.alertStorage(state.alert)
 
     if (this.state.recording) return
 
@@ -452,7 +422,14 @@ Page({
     this.state.statusText.setProperty(prop.MORE, { text })
   },
 
-  showStorageNotice(state) {
-    this.state.noticeText.setProperty(prop.MORE, { text: storageNoticeText(state) })
+  // Opens the storage warning page, which buzzes, stays up for a few seconds and goes back here by itself.
+  // 'full' (old recordings are being deleted) outranks 'nearly_full' if both arrive while a recording runs.
+  alertStorage(alert) {
+    if (this.state.recording) {
+      if (this.state.pendingAlert !== 'full') this.state.pendingAlert = alert
+      return
+    }
+    this.state.pendingAlert = null
+    push({ url: 'page/storage', params: JSON.stringify({ state: alert }) })
   },
 })

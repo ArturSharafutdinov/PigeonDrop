@@ -7,11 +7,9 @@ export const px = (n) => n
 export const KEY_SHORTCUT = 'S', KEY_EVENT_CLICK = 'C', KEY_EVENT_LONG_PRESS = 'L'
 export const id = { RECORDER: 'REC', PLAYER: 'PLY' }, codec = { OPUS: 'OPUS' }
 export const created = []                   // the options of every widget created
-export const notices = []                   // every text shown in the storage-warning label (the one in this colour)
-const NOTICE_COLOR = 0xffb74d
-export const createWidget = (type, opts) => { created.push({ type, ...opts }); return { setProperty: (_p, v) => (opts.color === NOTICE_COLOR ? notices : texts).push(v.text) } }
+export const createWidget = (type, opts) => { created.push({ type, ...opts }); return { setProperty: (_p, v) => texts.push(v.text) } }
 export const onKey = () => {}
-export const push = () => {}
+export const push = (o) => log.push('push ' + o.url + ' ' + (o.params || ''))
 export const create = (what) => ({ setFormat: () => log.push('recorder.setFormat'), start: () => log.push('recorder.start'), stop: () => log.push('recorder.stop') })
 export const setPageBrightTime = (o) => { log.push('setPageBrightTime ' + o.brightTime); return displayResult }
 export const resetPageBrightTime = () => { log.push('resetPageBrightTime'); return 0 }
@@ -33,6 +31,3 @@ export const MAX_RECORDING_SECONDS = 5
 export let paired = true
 export const setPaired = (v) => { paired = v }
 export const isPaired = () => paired
-export let storageState = null
-export const setStorageState = (v) => { storageState = v }
-export const getStorageState = () => storageState
