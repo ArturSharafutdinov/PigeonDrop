@@ -19,7 +19,10 @@
 // was paired. The watch sends the token with its chunks; this module keeps none of it
 // (it has no dependable storage) and presents it as `Authorization: Bearer` with the
 // final request, POST /v1/messages { messageId, audio: base64 } (API_SPEC.md). A token
-// the server refuses is reported as `unauthorized` so the watch can forget it.
+// the server refuses is reported as `unauthorized` so the watch can forget it. Other answers the watch
+// must tell apart: `fileError` (413, the recording is over the size limit and no retry will change that),
+// `rateLimited` (429, this watch uploads too often; later is fine), and on success `storage`, how full the
+// account is, which the watch turns into a warning (utils/storageState.js).
 //
 // State is held in memory only: the Side Service has no dependable persistent
 // storage or lifetime. If it is restarted mid-upload, the next chunk is answered
@@ -64,15 +67,21 @@ function forwardToServer(fileName, audio, baseUrl, deviceToken) {
       // The status says so where the runtime reports one (checked before the body is read: a proxy's own 401
       // page is not JSON), and so does the server's error code.
       const refused = { ok: false, unauthorized: true, error: 'server: device is not paired' }
+      const tooLarge = { ok: false, fileError: true, error: 'server: recording too large' }
+      const tooOften = { ok: false, rateLimited: true, error: 'server: too many uploads' }
       if (res.status === 401) return refused
+      if (res.status === 413) return tooLarge
+      if (res.status === 429) return tooOften
       const data = parseBody(res)
       if (data && data.code === 'unauthorized') return refused
+      if (data && data.code === 'payload_too_large') return tooLarge
+      if (data && data.code === 'too_many_attempts') return tooOften
       // fetch() resolves for any HTTP status, so the server's own { ok } flag is
       // what says whether the recording was really accepted.
       if (!data || data.ok !== true) {
         return { ok: false, error: 'server: ' + ((data && data.error) || 'rejected') }
       }
-      return { ok: true, done: true, bytesReceived: data.bytesReceived, id: data.id, duplicate: data.duplicate }
+      return { ok: true, done: true, bytesReceived: data.bytesReceived, id: data.id, duplicate: data.duplicate, storage: data.storage }
     })
     .catch((err) => ({ ok: false, error: 'server: ' + String(err) }))
 }

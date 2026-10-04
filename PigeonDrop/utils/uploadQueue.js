@@ -21,6 +21,12 @@
 // the screen can say how to fix it. If the server refuses the token (the device was revoked)
 // the token is forgotten and the same thing happens: it can never work again.
 //
+// Every answer to an upload says how full the account's storage is; the last one of a sweep is remembered
+// (utils/storageState.js) and reported with 'done', so the screen can warn that old recordings will be (or
+// are being) deleted on the server. A server that says "too many uploads" (429) stops the sweep like any other
+// server problem and the screen says so; a recording the server calls too large (413) is skipped like an
+// unreadable one, since sending it again changes nothing.
+//
 // A recording that cannot be read (file won't open, stat fails, short read) is a
 // problem of that one file, not of the phone or the server: the sweep skips it,
 // keeps sending the recordings behind it, and reports the failure at the end. It
@@ -32,6 +38,7 @@
 import { readFileSync, writeFileSync, rmSync, openSync, readSync, closeSync, statSync, O_RDONLY } from '@zos/fs'
 import { RECORDINGS_DIR, listRecordings } from './recordings'
 import { getDeviceToken, isPaired, clearDevice } from './device'
+import { storageStateOf, saveStorageState, clearStorageState } from './storageState'
 import { MAX_RECORDINGS, MAX_PENDING_RECORDINGS } from '../config'
 
 const UPLOADS_INDEX_FILE = 'uploads.json'
@@ -48,6 +55,7 @@ const RETRY_PACING_MS = 300 // pause between two recordings in one sweep
 let sweepInFlight = false
 let activeRecording = null // file name of the recording still being written, if any
 let stateListener = null
+let sweepStorage = null // how full the storage was, by the last answer of the running sweep (null: not told yet)
 
 function readIndex() {
   const raw = readFileSync({ path: UPLOADS_INDEX_FILE, options: { encoding: 'utf8' } })
@@ -110,7 +118,9 @@ export function pendingRecordings() {
 
 // One listener at most (the main page). Receives:
 //   { state: 'sending', index, count, chunk, total }  recording `index` of `count`, chunk `chunk` of `total`
-//   { state: 'done', pending }                        the sweep finished
+//   { state: 'done', pending, storage }               the sweep finished; storage is what the server last said
+//                                                     about the account's storage ('ok', 'nearly_full', 'full')
+//                                                     or null if it said nothing this time
 //   { state: 'error', message, pending }              the sweep stopped on a failure
 //   { state: 'unpaired', pending, revoked }           nothing was sent because the watch is not paired;
 //                                                     revoked is true when the server just refused its token
@@ -240,8 +250,8 @@ function requestChunk(messageBuilder, message, retriesLeft) {
 // Sends one recording chunk by chunk. Resolves with the phone's final reply, or
 // { skip: true } for an empty file (nothing to send). Rejects on failure; the error
 // has .restart = true if the phone lost its partial copy of the upload,
-// .local = true if the problem is with this file itself, and .unauthorized = true if
-// the server refused the device token.
+// .local = true if the problem is with this file itself, .unauthorized = true if
+// the server refused the device token, and .rateLimited = true if it asked the watch to slow down.
 function sendRecording(item, onChunk) {
   const { messageBuilder } = getApp()._options.globalData
   const path = item.filePath.replace('data://', '')
@@ -288,6 +298,8 @@ function sendRecording(item, onChunk) {
         err.local = !!(reply && reply.fileError)
         // The server refused the device token: this watch is no longer paired.
         err.unauthorized = !!(reply && reply.unauthorized)
+        // The server says this watch uploads too often: nothing is wrong with the file or the token.
+        err.rateLimited = !!(reply && reply.rateLimited)
         throw err
       }
       if (index < total - 1) return sendFrom(index + 1)
@@ -317,6 +329,19 @@ function sendWithRestart(item, onChunk, restartsLeft) {
   })
 }
 
+// Remembers how full the server says the account's storage is (the answer to an upload carries it).
+function noteStorage(storage) {
+  const state = storageStateOf(storage)
+  if (state === null) return
+  sweepStorage = state
+  try {
+    saveStorageState(state)
+  } catch (e) {
+    // The warning is a courtesy; a storage problem on the watch must never stop uploading.
+    console.log('upload queue: could not keep the storage state:', e)
+  }
+}
+
 function shortReason(err) {
   const text = String((err && err.message) || err)
   return text.length > 44 ? text.slice(0, 44) + '...' : text
@@ -342,6 +367,7 @@ export function retryPendingUploads() {
   }
 
   sweepInFlight = true
+  sweepStorage = null
   const unreadable = [] // files this sweep could not read, reported when it ends
 
   const sendFrom = (i) => {
@@ -363,6 +389,7 @@ export function retryPendingUploads() {
           forgetUpload(item.fileName)
         } else {
           markUploaded(item.fileName)
+          noteStorage(reply && reply.storage)
         }
         return next()
       },
@@ -381,7 +408,7 @@ export function retryPendingUploads() {
       if (unreadable.length > 0) {
         emit({ state: 'error', message: shortReason(unreadable[0]), pending: pendingRecordings().length })
       } else {
-        emit({ state: 'done', pending: pendingRecordings().length })
+        emit({ state: 'done', pending: pendingRecordings().length, storage: sweepStorage })
       }
       // A recording finished while this sweep was running wasn't in its snapshot,
       // so give those (and only those) their own pass. Anything that was in the
@@ -394,11 +421,16 @@ export function retryPendingUploads() {
       console.log('retryPendingUploads: sweep stopped:', err)
       if (err && err.unauthorized) {
         clearDevice()
+        clearStorageState() // it was about the account this watch was paired with
         emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: true })
         return
       }
       if (err && err.unpaired) {
         emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: false })
+        return
+      }
+      if (err && err.rateLimited) {
+        emit({ state: 'error', message: 'Слишком много загрузок.\nПовторите позже', pending: pendingRecordings().length })
         return
       }
       emit({ state: 'error', message: shortReason(err), pending: pendingRecordings().length })
