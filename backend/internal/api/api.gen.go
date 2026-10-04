@@ -30,6 +30,7 @@ const (
 	ErrorCodeInvalidRequest     ErrorCode = "invalid_request"
 	ErrorCodeInvalidUserCode    ErrorCode = "invalid_user_code"
 	ErrorCodeNotFound           ErrorCode = "not_found"
+	ErrorCodePayloadTooLarge    ErrorCode = "payload_too_large"
 	ErrorCodeTooManyAttempts    ErrorCode = "too_many_attempts"
 	ErrorCodeUnauthorized       ErrorCode = "unauthorized"
 	ErrorCodeWeakPassword       ErrorCode = "weak_password"
@@ -58,6 +59,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeInvalidUserCode:
 		return true
 	case ErrorCodeNotFound:
+		return true
+	case ErrorCodePayloadTooLarge:
 		return true
 	case ErrorCodeTooManyAttempts:
 		return true
@@ -102,6 +105,27 @@ func (e PollPairingResultStatus) Valid() bool {
 	case Approved:
 		return true
 	case Pending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StorageState.
+const (
+	Full       StorageState = "full"
+	NearlyFull StorageState = "nearly_full"
+	Ok         StorageState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the StorageState enum.
+func (e StorageState) Valid() bool {
+	switch e {
+	case Full:
+		return true
+	case NearlyFull:
+		return true
+	case Ok:
 		return true
 	default:
 		return false
@@ -163,6 +187,13 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"newPassword"`
 }
 
+// DeleteAllResult defines model for DeleteAllResult.
+type DeleteAllResult struct {
+	// Deleted How many recordings were deleted.
+	Deleted int  `json:"deleted"`
+	Ok      bool `json:"ok"`
+}
+
 // Device defines model for Device.
 type Device struct {
 	CreatedAt time.Time          `json:"createdAt"`
@@ -217,7 +248,8 @@ type Message struct {
 	// DurationMs Length of the audio; null when the recording could not be decoded.
 	DurationMs *int `json:"durationMs"`
 
-	// HasWav Whether a WAV copy exists (the original, an Ogg/Opus file, always does).
+	// HasWav Whether the recording can be played as WAV: it decoded when it was received. The WAV is made when it is
+	// played and is not stored (the original, an Ogg/Opus file, always is).
 	HasWav     bool               `json:"hasWav"`
 	Id         openapi_types.UUID `json:"id"`
 	MessageId  string             `json:"messageId"`
@@ -319,6 +351,23 @@ type StartPairingRequest struct {
 	ClientName *string `json:"clientName,omitempty"`
 }
 
+// StorageState `ok` below 90% of the limit, `nearly_full` from 90%, and `full` when an upload had to delete the account's
+// oldest recordings to make room (only an upload answer says `full`).
+type StorageState string
+
+// StorageStatus defines model for StorageStatus.
+type StorageStatus struct {
+	// LimitBytes The limit of the user's plan (100 MiB).
+	LimitBytes int64 `json:"limitBytes"`
+
+	// State `ok` below 90% of the limit, `nearly_full` from 90%, and `full` when an upload had to delete the account's
+	// oldest recordings to make room (only an upload answer says `full`).
+	State StorageState `json:"state"`
+
+	// UsedBytes What the user's recordings take.
+	UsedBytes int64 `json:"usedBytes"`
+}
+
 // UploadMessageRequest defines model for UploadMessageRequest.
 type UploadMessageRequest struct {
 	// Audio Base64 of the recording (Ogg/Opus).
@@ -343,8 +392,12 @@ type UploadMessageResult struct {
 	MessageId string             `json:"messageId"`
 
 	// Ok Always true. (The Side Service checks it, as it does for the older route.)
-	Ok         bool      `json:"ok"`
-	ReceivedAt time.Time `json:"receivedAt"`
+	Ok bool `json:"ok"`
+
+	// Pruned How many of the account's oldest recordings this upload deleted to make room (0 for a repeat).
+	Pruned     int           `json:"pruned"`
+	ReceivedAt time.Time     `json:"receivedAt"`
+	Storage    StorageStatus `json:"storage"`
 }
 
 // UploadRequest defines model for UploadRequest.
@@ -389,6 +442,9 @@ type User struct {
 
 // UserPlan defines model for User.Plan.
 type UserPlan string
+
+// PayloadTooLarge defines model for PayloadTooLarge.
+type PayloadTooLarge = Error
 
 // TooManyAttempts defines model for TooManyAttempts.
 type TooManyAttempts = Error
@@ -485,6 +541,9 @@ type ServerInterface interface {
 	// ChangePassword Change the password
 	// (POST /v1/me/password)
 	ChangePassword(w http.ResponseWriter, r *http.Request)
+	// DeleteAllMessages Delete all of the user's recordings and their files
+	// (DELETE /v1/messages)
+	DeleteAllMessages(w http.ResponseWriter, r *http.Request)
 	// ListMessages The user's recordings, newest first
 	// (GET /v1/messages)
 	ListMessages(w http.ResponseWriter, r *http.Request, params ListMessagesParams)
@@ -494,6 +553,9 @@ type ServerInterface interface {
 	// DeleteMessage Delete a recording and its files
 	// (DELETE /v1/messages/{id})
 	DeleteMessage(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// GetStorage How full the user's storage is
+	// (GET /v1/storage)
+	GetStorage(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -777,6 +839,20 @@ func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteAllMessages operation middleware
+func (siw *ServerInterfaceWrapper) DeleteAllMessages(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteAllMessages(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListMessages operation middleware
 func (siw *ServerInterfaceWrapper) ListMessages(w http.ResponseWriter, r *http.Request) {
 
@@ -854,6 +930,20 @@ func (siw *ServerInterfaceWrapper) DeleteMessage(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.DeleteMessage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetStorage operation middleware
+func (siw *ServerInterfaceWrapper) GetStorage(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetStorage(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -999,12 +1089,16 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/approve", wrapper.ApproveDevicePairing)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/devices", wrapper.ListDevices)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/devices/{id}", wrapper.RevokeDevice)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/messages", wrapper.DeleteAllMessages)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/messages", wrapper.ListMessages)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/messages", wrapper.UploadMessage)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/storage", wrapper.GetStorage)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/messages/{id}", wrapper.DeleteMessage)
 
 	return m
 }
+
+type PayloadTooLargeJSONResponse Error
 
 type TooManyAttemptsResponseHeaders struct {
 	RetryAfter *int
@@ -1881,6 +1975,41 @@ func (response ChangePassword429JSONResponse) VisitChangePasswordResponse(w http
 	return err
 }
 
+type DeleteAllMessagesRequestObject struct {
+}
+
+type DeleteAllMessagesResponseObject interface {
+	VisitDeleteAllMessagesResponse(w http.ResponseWriter) error
+}
+
+type DeleteAllMessages200JSONResponse DeleteAllResult
+
+func (response DeleteAllMessages200JSONResponse) VisitDeleteAllMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAllMessages401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteAllMessages401JSONResponse) VisitDeleteAllMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListMessagesRequestObject struct {
 	Params ListMessagesParams
 }
@@ -1981,7 +2110,7 @@ func (response UploadMessage401JSONResponse) VisitUploadMessageResponse(w http.R
 	return err
 }
 
-type UploadMessage413JSONResponse Error
+type UploadMessage413JSONResponse struct{ PayloadTooLargeJSONResponse }
 
 func (response UploadMessage413JSONResponse) VisitUploadMessageResponse(w http.ResponseWriter) error {
 
@@ -1991,6 +2120,23 @@ func (response UploadMessage413JSONResponse) VisitUploadMessageResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadMessage429JSONResponse struct{ TooManyAttemptsJSONResponse }
+
+func (response UploadMessage429JSONResponse) VisitUploadMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2035,6 +2181,41 @@ func (response DeleteMessage404JSONResponse) VisitDeleteMessageResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetStorageRequestObject struct {
+}
+
+type GetStorageResponseObject interface {
+	VisitGetStorageResponse(w http.ResponseWriter) error
+}
+
+type GetStorage200JSONResponse StorageStatus
+
+func (response GetStorage200JSONResponse) VisitGetStorageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetStorage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetStorage401JSONResponse) VisitGetStorageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2089,6 +2270,9 @@ type StrictServerInterface interface {
 	// ChangePassword Change the password
 	// (POST /v1/me/password)
 	ChangePassword(ctx context.Context, request ChangePasswordRequestObject) (ChangePasswordResponseObject, error)
+	// DeleteAllMessages Delete all of the user's recordings and their files
+	// (DELETE /v1/messages)
+	DeleteAllMessages(ctx context.Context, request DeleteAllMessagesRequestObject) (DeleteAllMessagesResponseObject, error)
 	// ListMessages The user's recordings, newest first
 	// (GET /v1/messages)
 	ListMessages(ctx context.Context, request ListMessagesRequestObject) (ListMessagesResponseObject, error)
@@ -2098,6 +2282,9 @@ type StrictServerInterface interface {
 	// DeleteMessage Delete a recording and its files
 	// (DELETE /v1/messages/{id})
 	DeleteMessage(ctx context.Context, request DeleteMessageRequestObject) (DeleteMessageResponseObject, error)
+	// GetStorage How full the user's storage is
+	// (GET /v1/storage)
+	GetStorage(ctx context.Context, request GetStorageRequestObject) (GetStorageResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -2594,6 +2781,30 @@ func (sh *strictHandler) ChangePassword(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// DeleteAllMessages operation middleware
+func (sh *strictHandler) DeleteAllMessages(w http.ResponseWriter, r *http.Request) {
+	var request DeleteAllMessagesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteAllMessages(ctx, request.(DeleteAllMessagesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteAllMessages")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteAllMessagesResponseObject); ok {
+		if err := validResponse.VisitDeleteAllMessagesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListMessages operation middleware
 func (sh *strictHandler) ListMessages(w http.ResponseWriter, r *http.Request, params ListMessagesParams) {
 	var request ListMessagesRequestObject
@@ -2670,6 +2881,30 @@ func (sh *strictHandler) DeleteMessage(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DeleteMessageResponseObject); ok {
 		if err := validResponse.VisitDeleteMessageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetStorage operation middleware
+func (sh *strictHandler) GetStorage(w http.ResponseWriter, r *http.Request) {
+	var request GetStorageRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetStorage(ctx, request.(GetStorageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetStorage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetStorageResponseObject); ok {
+		if err := validResponse.VisitGetStorageResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

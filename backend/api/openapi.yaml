@@ -508,7 +508,14 @@ paths:
 
         Idempotent by `messageId` within the device: repeating an upload returns the stored result and saves nothing
         new, while another device may use the same `messageId` without meeting it. A recording is kept even when it
-        cannot be converted to WAV (`hasWav` is then false in the list).
+        cannot be decoded (`hasWav` is then false in the list).
+
+        Limits. One recording is at most 512 KiB (a minute is about 140 KiB), refused with 413 beyond that. A device
+        may upload 60 times an hour (every request counts, repeats included), refused with 429 and `Retry-After`
+        beyond that. Each account has 100 MiB of storage: when a new recording does not fit, the account's oldest
+        recordings are deleted to make room and the new one is always accepted. `storage` in the answer says how
+        full the account is, so the watch can warn the person: `nearly_full` from 90%, `full` when this very upload
+        had to delete older recordings.
       security:
         - deviceAuth: []
       requestBody:
@@ -537,11 +544,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: The request body is larger than the server accepts.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
     get:
       operationId: listMessages
       tags: [messages]
@@ -577,6 +582,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      operationId: deleteAllMessages
+      tags: [messages]
+      summary: Delete all of the user's recordings and their files
+      description: |
+        The way to free the whole storage at once. Only the signed-in user's own recordings go; devices stay paired.
+        Deleting when there is nothing to delete is fine (`deleted` is then 0).
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The recordings are deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteAllResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/storage:
+    get:
+      operationId: getStorage
+      tags: [messages]
+      summary: How full the user's storage is
+      description: |
+        What the user's recordings take, against the limit of their plan. Only the recordings themselves count (the
+        original files); the WAV played in a browser is made when it is played and takes no room.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The usage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageStatus'
         '401':
           $ref: '#/components/responses/Unauthorized'
   /v1/messages/{id}:
@@ -615,7 +657,7 @@ paths:
           format: uuid
       - name: format
         in: query
-        description: '`wav` (the default when there is one) or `original` (the file as it was received, an Ogg/Opus file).'
+        description: '`wav` (the default when the recording can be decoded; it is made from the original on each request) or `original` (the file as it was received, an Ogg/Opus file).'
         schema:
           type: string
           enum: [wav, original]
@@ -744,8 +786,14 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    PayloadTooLarge:
+      description: The recording, or the request carrying it, is larger than the server accepts (`payload_too_large`). Sending it again will not help.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     TooManyAttempts:
-      description: Too many failed attempts for now (`too_many_attempts`).
+      description: Too many attempts for now (`too_many_attempts`).
       headers:
         Retry-After:
           description: Seconds until another attempt is allowed.
@@ -935,9 +983,38 @@ components:
         audio:
           type: string
           description: Base64 of the recording (Ogg/Opus).
+    StorageState:
+      type: string
+      enum: [ok, nearly_full, full]
+      description: |
+        `ok` below 90% of the limit, `nearly_full` from 90%, and `full` when an upload had to delete the account's
+        oldest recordings to make room (only an upload answer says `full`).
+    StorageStatus:
+      type: object
+      required: [usedBytes, limitBytes, state]
+      properties:
+        usedBytes:
+          type: integer
+          format: int64
+          description: What the user's recordings take.
+        limitBytes:
+          type: integer
+          format: int64
+          description: The limit of the user's plan (100 MiB).
+        state:
+          $ref: '#/components/schemas/StorageState'
+    DeleteAllResult:
+      type: object
+      required: [ok, deleted]
+      properties:
+        ok:
+          type: boolean
+        deleted:
+          type: integer
+          description: How many recordings were deleted.
     UploadMessageResult:
       type: object
-      required: [ok, id, messageId, bytesReceived, duplicate, receivedAt]
+      required: [ok, id, messageId, bytesReceived, duplicate, receivedAt, storage, pruned]
       properties:
         ok:
           type: boolean
@@ -958,6 +1035,11 @@ components:
         receivedAt:
           type: string
           format: date-time
+        storage:
+          $ref: '#/components/schemas/StorageStatus'
+        pruned:
+          type: integer
+          description: How many of the account's oldest recordings this upload deleted to make room (0 for a repeat).
     Message:
       type: object
       required: [id, messageId, deviceId, deviceName, bytesReceived, durationMs, hasWav, receivedAt]
@@ -981,7 +1063,9 @@ components:
           description: Length of the audio; null when the recording could not be decoded.
         hasWav:
           type: boolean
-          description: Whether a WAV copy exists (the original, an Ogg/Opus file, always does).
+          description: |
+            Whether the recording can be played as WAV: it decoded when it was received. The WAV is made when it is
+            played and is not stored (the original, an Ogg/Opus file, always is).
         receivedAt:
           type: string
           format: date-time
@@ -1015,6 +1099,7 @@ components:
         - invalid_device_code
         - expired_token
         - not_found
+        - payload_too_large
     AccountRequest:
       type: object
       required: [code]

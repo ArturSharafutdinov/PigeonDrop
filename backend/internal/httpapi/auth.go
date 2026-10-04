@@ -56,6 +56,10 @@ type AuthLimits struct {
 	DevicePollIP *auth.Limiter
 	// PairingUser counts a signed-in user's wrong user codes (looking up or approving a pairing).
 	PairingUser *auth.Limiter
+	// UploadDevice counts every upload a device makes (counted whatever the answer was, repeats included), so
+	// that a watch stuck in a loop, or a stolen token, cannot push a flood of files and, through the account's
+	// automatic cleanup, push the person's real recordings out.
+	UploadDevice *auth.Limiter
 }
 
 func defaultLimits(now func() time.Time) AuthLimits {
@@ -67,6 +71,8 @@ func defaultLimits(now func() time.Time) AuthLimits {
 		DeviceCodeIP: auth.NewLimiter(10, 10*time.Minute, now),
 		DevicePollIP: auth.NewLimiter(30, 15*time.Minute, now),
 		PairingUser:  auth.NewLimiter(10, 15*time.Minute, now),
+
+		UploadDevice: auth.NewLimiter(60, time.Hour, now),
 	}
 }
 
