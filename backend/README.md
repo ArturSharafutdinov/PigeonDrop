@@ -149,4 +149,4 @@ pigeondrop user set-password EMAIL   # новый пароль (спросит �
 docker build -t pigeondrop-backend backend
 ```
 
-Образ собирается в один статический бинарник, работает не от root; состояние (`STORAGE_DIR=/data`) нужно хранить на томе.
+Образ собирается в один статический бинарник, работает не от root; состояние (`STORAGE_DIR=/data`) нужно хранить на томе. Выкладка на VPS через Coolify и GitHub Actions (образ собирается в Actions и кладётся в GHCR): [`DEPLOY.md`](DEPLOY.md).
