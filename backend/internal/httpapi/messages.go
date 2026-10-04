@@ -28,6 +28,9 @@ func (s *Server) PostMessage(ctx context.Context, request api.PostMessageRequest
 	if len(body.FileName) > maxFileNameLength {
 		return badRequest("fileName is too long"), nil
 	}
+	if !plainText(body.FileName) {
+		return badRequest("fileName has invalid or control characters"), nil
+	}
 
 	// A repeat of an upload that already succeeded: the watch lost our answer, or a retry crossed it.
 	stored, err := s.DB.GetProcessedUpload(ctx, body.FileName)

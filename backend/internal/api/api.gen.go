@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -20,11 +21,15 @@ import (
 // Defines values for ErrorCode.
 const (
 	ErrorCodeEmailTaken         ErrorCode = "email_taken"
+	ErrorCodeExpiredToken       ErrorCode = "expired_token"
 	ErrorCodeForbiddenOrigin    ErrorCode = "forbidden_origin"
 	ErrorCodeInvalidCredentials ErrorCode = "invalid_credentials"
+	ErrorCodeInvalidDeviceCode  ErrorCode = "invalid_device_code"
 	ErrorCodeInvalidEmail       ErrorCode = "invalid_email"
 	ErrorCodeInvalidInvite      ErrorCode = "invalid_invite"
 	ErrorCodeInvalidRequest     ErrorCode = "invalid_request"
+	ErrorCodeInvalidUserCode    ErrorCode = "invalid_user_code"
+	ErrorCodeNotFound           ErrorCode = "not_found"
 	ErrorCodeTooManyAttempts    ErrorCode = "too_many_attempts"
 	ErrorCodeUnauthorized       ErrorCode = "unauthorized"
 	ErrorCodeWeakPassword       ErrorCode = "weak_password"
@@ -36,15 +41,23 @@ func (e ErrorCode) Valid() bool {
 	switch e {
 	case ErrorCodeEmailTaken:
 		return true
+	case ErrorCodeExpiredToken:
+		return true
 	case ErrorCodeForbiddenOrigin:
 		return true
 	case ErrorCodeInvalidCredentials:
+		return true
+	case ErrorCodeInvalidDeviceCode:
 		return true
 	case ErrorCodeInvalidEmail:
 		return true
 	case ErrorCodeInvalidInvite:
 		return true
 	case ErrorCodeInvalidRequest:
+		return true
+	case ErrorCodeInvalidUserCode:
+		return true
+	case ErrorCodeNotFound:
 		return true
 	case ErrorCodeTooManyAttempts:
 		return true
@@ -71,6 +84,24 @@ func (e Language) Valid() bool {
 	case En:
 		return true
 	case Ru:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PollPairingResultStatus.
+const (
+	Approved PollPairingResultStatus = "approved"
+	Pending  PollPairingResultStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the PollPairingResultStatus enum.
+func (e PollPairingResultStatus) Valid() bool {
+	switch e {
+	case Approved:
+		return true
+	case Pending:
 		return true
 	default:
 		return false
@@ -119,10 +150,32 @@ type AccountRequest struct {
 	Code string `json:"code"`
 }
 
+// ApprovePairingRequest defines model for ApprovePairingRequest.
+type ApprovePairingRequest struct {
+	// Name The device's name in the user's list. Defaults to the name the watch gave itself.
+	Name     *string `json:"name,omitempty"`
+	UserCode string  `json:"userCode"`
+}
+
 // ChangePasswordRequest defines model for ChangePasswordRequest.
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
+}
+
+// Device defines model for Device.
+type Device struct {
+	CreatedAt time.Time          `json:"createdAt"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// LastSeenAt When the device last called the API (recorded at most once an hour); null if it never has.
+	LastSeenAt *time.Time `json:"lastSeenAt"`
+	Name       string     `json:"name"`
+}
+
+// DeviceList defines model for DeviceList.
+type DeviceList struct {
+	Devices []Device `json:"devices"`
 }
 
 // Error defines model for Error.
@@ -155,6 +208,88 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+// Message defines model for Message.
+type Message struct {
+	BytesReceived int64              `json:"bytesReceived"`
+	DeviceId      openapi_types.UUID `json:"deviceId"`
+	DeviceName    string             `json:"deviceName"`
+
+	// DurationMs Length of the audio; null when the recording could not be decoded.
+	DurationMs *int `json:"durationMs"`
+
+	// HasWav Whether a WAV copy exists (the original, an Ogg/Opus file, always does).
+	HasWav     bool               `json:"hasWav"`
+	Id         openapi_types.UUID `json:"id"`
+	MessageId  string             `json:"messageId"`
+	ReceivedAt time.Time          `json:"receivedAt"`
+}
+
+// MessageList defines model for MessageList.
+type MessageList struct {
+	Messages []Message `json:"messages"`
+
+	// NextCursor Pass as `before` to get the next page; null when there is no more.
+	NextCursor *string `json:"nextCursor"`
+}
+
+// Pairing defines model for Pairing.
+type Pairing struct {
+	// DeviceCode The secret the watch polls with. Never shown to people.
+	DeviceCode string `json:"deviceCode"`
+
+	// ExpiresIn Seconds the pairing stays open.
+	ExpiresIn int `json:"expiresIn"`
+
+	// Interval Seconds the watch should wait between polls.
+	Interval int `json:"interval"`
+
+	// UserCode The short code to show, in the form BCDF-GHJK.
+	//
+	// Example: BCDF-GHJK
+	UserCode string `json:"userCode"`
+
+	// VerificationUri The page where the person approves, to be shown as text.
+	//
+	// Example: https://pigeon.example.com/pair
+	VerificationUri string `json:"verificationUri"`
+
+	// VerificationUriComplete The same page with the code filled in; the content of the QR code.
+	//
+	// Example: https://pigeon.example.com/pair?code=BCDF-GHJK
+	VerificationUriComplete string `json:"verificationUriComplete"`
+}
+
+// PairingInfo defines model for PairingInfo.
+type PairingInfo struct {
+	// ClientName What the watch calls itself. Chosen by the watch, so not to be trusted or rendered as markup.
+	ClientName *string   `json:"clientName"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+
+	// UserCode Example: BCDF-GHJK
+	UserCode string `json:"userCode"`
+}
+
+// PollPairingRequest defines model for PollPairingRequest.
+type PollPairingRequest struct {
+	DeviceCode string `json:"deviceCode"`
+}
+
+// PollPairingResult defines model for PollPairingResult.
+type PollPairingResult struct {
+	// DeviceId With `approved`, the new device's id.
+	DeviceId *openapi_types.UUID `json:"deviceId,omitempty"`
+
+	// DeviceToken With `approved`, the token to send in the Authorization header, as `Bearer <token>`. Shown this once.
+	DeviceToken *string `json:"deviceToken,omitempty"`
+
+	// Interval With `pending`, seconds to wait before the next poll.
+	Interval *int                    `json:"interval,omitempty"`
+	Status   PollPairingResultStatus `json:"status"`
+}
+
+// PollPairingResultStatus defines model for PollPairingResult.Status.
+type PollPairingResultStatus string
+
 // RegisterRequest defines model for RegisterRequest.
 type RegisterRequest struct {
 	// Email Example: alice@example.com
@@ -174,6 +309,42 @@ type RegisterRequest struct {
 type SetServerRequest struct {
 	// CustomServerUrl An http(s) URL, or null for this server (OpenAPI 3.0 cannot say "string or null" here without making the generated type indistinguishable from "missing"). Required, so that an empty body can never reset it by accident.
 	CustomServerUrl json.RawMessage `json:"customServerUrl"`
+}
+
+// StartPairingRequest defines model for StartPairingRequest.
+type StartPairingRequest struct {
+	// ClientName What the watch calls itself (for example its model). Shown to the person approving, and offered as the device's name.
+	//
+	// Example: Amazfit Balance
+	ClientName *string `json:"clientName,omitempty"`
+}
+
+// UploadMessageRequest defines model for UploadMessageRequest.
+type UploadMessageRequest struct {
+	// Audio Base64 of the recording (Ogg/Opus).
+	Audio string `json:"audio"`
+
+	// MessageId The client's own name for the recording (the watch uses its file name). The idempotency key, within the device.
+	//
+	// Example: voice_1791004922779.opus
+	MessageId string `json:"messageId"`
+}
+
+// UploadMessageResult defines model for UploadMessageResult.
+type UploadMessageResult struct {
+	// BytesReceived Size of the decoded recording in bytes.
+	BytesReceived int64 `json:"bytesReceived"`
+
+	// Duplicate True when this device had already uploaded this `messageId` and nothing new was stored.
+	Duplicate bool `json:"duplicate"`
+
+	// Id The message's id on the server.
+	Id        openapi_types.UUID `json:"id"`
+	MessageId string             `json:"messageId"`
+
+	// Ok Always true. (The Side Service checks it, as it does for the older route.)
+	Ok         bool      `json:"ok"`
+	ReceivedAt time.Time `json:"receivedAt"`
 }
 
 // UploadRequest defines model for UploadRequest.
@@ -225,6 +396,15 @@ type TooManyAttempts = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// ListMessagesParams defines parameters for ListMessages.
+type ListMessagesParams struct {
+	// Limit How many to return (1 to 100).
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Before The `nextCursor` of the previous page. Opaque.
+	Before *string `form:"before,omitempty" json:"before,omitempty"`
+}
+
 // PostAccountJSONRequestBody defines body for PostAccount for application/json ContentType.
 type PostAccountJSONRequestBody = AccountRequest
 
@@ -240,8 +420,20 @@ type LoginJSONRequestBody = LoginRequest
 // RegisterJSONRequestBody defines body for Register for application/json ContentType.
 type RegisterJSONRequestBody = RegisterRequest
 
+// ApproveDevicePairingJSONRequestBody defines body for ApproveDevicePairing for application/json ContentType.
+type ApproveDevicePairingJSONRequestBody = ApprovePairingRequest
+
+// StartDevicePairingJSONRequestBody defines body for StartDevicePairing for application/json ContentType.
+type StartDevicePairingJSONRequestBody = StartPairingRequest
+
+// PollDevicePairingJSONRequestBody defines body for PollDevicePairing for application/json ContentType.
+type PollDevicePairingJSONRequestBody = PollPairingRequest
+
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePasswordRequest
+
+// UploadMessageJSONRequestBody defines body for UploadMessage for application/json ContentType.
+type UploadMessageJSONRequestBody = UploadMessageRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -269,12 +461,39 @@ type ServerInterface interface {
 	// Register Create an account with an invitation code, and sign in
 	// (POST /v1/auth/register)
 	Register(w http.ResponseWriter, r *http.Request)
+	// ApproveDevicePairing Pair the watch that shows this code with the signed-in user
+	// (POST /v1/device/approve)
+	ApproveDevicePairing(w http.ResponseWriter, r *http.Request)
+	// StartDevicePairing A watch asks to be paired
+	// (POST /v1/device/code)
+	StartDevicePairing(w http.ResponseWriter, r *http.Request)
+	// GetDevicePairing What a user code is waiting for
+	// (GET /v1/device/pairing/{userCode})
+	GetDevicePairing(w http.ResponseWriter, r *http.Request, userCode string)
+	// PollDevicePairing The watch asks whether its pairing was approved
+	// (POST /v1/device/token)
+	PollDevicePairing(w http.ResponseWriter, r *http.Request)
+	// ListDevices The user's paired watches
+	// (GET /v1/devices)
+	ListDevices(w http.ResponseWriter, r *http.Request)
+	// RevokeDevice Revoke a watch
+	// (DELETE /v1/devices/{id})
+	RevokeDevice(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// GetMe The signed-in user
 	// (GET /v1/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
 	// ChangePassword Change the password
 	// (POST /v1/me/password)
 	ChangePassword(w http.ResponseWriter, r *http.Request)
+	// ListMessages The user's recordings, newest first
+	// (GET /v1/messages)
+	ListMessages(w http.ResponseWriter, r *http.Request, params ListMessagesParams)
+	// UploadMessage A watch uploads a recording
+	// (POST /v1/messages)
+	UploadMessage(w http.ResponseWriter, r *http.Request)
+	// DeleteMessage Delete a recording and its files
+	// (DELETE /v1/messages/{id})
+	DeleteMessage(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -422,6 +641,114 @@ func (siw *ServerInterfaceWrapper) Register(w http.ResponseWriter, r *http.Reque
 	handler.ServeHTTP(w, r)
 }
 
+// ApproveDevicePairing operation middleware
+func (siw *ServerInterfaceWrapper) ApproveDevicePairing(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ApproveDevicePairing(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartDevicePairing operation middleware
+func (siw *ServerInterfaceWrapper) StartDevicePairing(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartDevicePairing(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDevicePairing operation middleware
+func (siw *ServerInterfaceWrapper) GetDevicePairing(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userCode" -------------
+	var userCode string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userCode", r.PathValue("userCode"), &userCode, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "userCode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDevicePairing(w, r, userCode)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PollDevicePairing operation middleware
+func (siw *ServerInterfaceWrapper) PollDevicePairing(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PollDevicePairing(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListDevices(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDevices(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeDevice operation middleware
+func (siw *ServerInterfaceWrapper) RevokeDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeDevice(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetMe operation middleware
 func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
 
@@ -441,6 +768,92 @@ func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ChangePassword(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMessages operation middleware
+func (siw *ServerInterfaceWrapper) ListMessages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMessagesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "before" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "before", r.URL.Query(), &params.Before, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "before"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "before", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMessages(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UploadMessage operation middleware
+func (siw *ServerInterfaceWrapper) UploadMessage(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UploadMessage(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteMessage operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMessage(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -580,6 +993,15 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/auth/logout", wrapper.Logout)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/me/password", wrapper.ChangePassword)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/code", wrapper.StartDevicePairing)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/token", wrapper.PollDevicePairing)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/device/pairing/{userCode}", wrapper.GetDevicePairing)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/approve", wrapper.ApproveDevicePairing)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/devices", wrapper.ListDevices)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/devices/{id}", wrapper.RevokeDevice)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/messages", wrapper.ListMessages)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/messages", wrapper.UploadMessage)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/messages/{id}", wrapper.DeleteMessage)
 
 	return m
 }
@@ -1022,6 +1444,333 @@ func (response Register429JSONResponse) VisitRegisterResponse(w http.ResponseWri
 	return err
 }
 
+type ApproveDevicePairingRequestObject struct {
+	Body *ApproveDevicePairingJSONRequestBody
+}
+
+type ApproveDevicePairingResponseObject interface {
+	VisitApproveDevicePairingResponse(w http.ResponseWriter) error
+}
+
+type ApproveDevicePairing204Response struct {
+}
+
+func (response ApproveDevicePairing204Response) VisitApproveDevicePairingResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ApproveDevicePairing400JSONResponse Error
+
+func (response ApproveDevicePairing400JSONResponse) VisitApproveDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveDevicePairing401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ApproveDevicePairing401JSONResponse) VisitApproveDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveDevicePairing404JSONResponse Error
+
+func (response ApproveDevicePairing404JSONResponse) VisitApproveDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveDevicePairing429JSONResponse struct{ TooManyAttemptsJSONResponse }
+
+func (response ApproveDevicePairing429JSONResponse) VisitApproveDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartDevicePairingRequestObject struct {
+	Body *StartDevicePairingJSONRequestBody
+}
+
+type StartDevicePairingResponseObject interface {
+	VisitStartDevicePairingResponse(w http.ResponseWriter) error
+}
+
+type StartDevicePairing200JSONResponse Pairing
+
+func (response StartDevicePairing200JSONResponse) VisitStartDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartDevicePairing400JSONResponse Error
+
+func (response StartDevicePairing400JSONResponse) VisitStartDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartDevicePairing429JSONResponse struct{ TooManyAttemptsJSONResponse }
+
+func (response StartDevicePairing429JSONResponse) VisitStartDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevicePairingRequestObject struct {
+	UserCode string `json:"userCode"`
+}
+
+type GetDevicePairingResponseObject interface {
+	VisitGetDevicePairingResponse(w http.ResponseWriter) error
+}
+
+type GetDevicePairing200JSONResponse PairingInfo
+
+func (response GetDevicePairing200JSONResponse) VisitGetDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevicePairing401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetDevicePairing401JSONResponse) VisitGetDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevicePairing404JSONResponse Error
+
+func (response GetDevicePairing404JSONResponse) VisitGetDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevicePairing429JSONResponse struct{ TooManyAttemptsJSONResponse }
+
+func (response GetDevicePairing429JSONResponse) VisitGetDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PollDevicePairingRequestObject struct {
+	Body *PollDevicePairingJSONRequestBody
+}
+
+type PollDevicePairingResponseObject interface {
+	VisitPollDevicePairingResponse(w http.ResponseWriter) error
+}
+
+type PollDevicePairing200JSONResponse PollPairingResult
+
+func (response PollDevicePairing200JSONResponse) VisitPollDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PollDevicePairing400JSONResponse Error
+
+func (response PollDevicePairing400JSONResponse) VisitPollDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PollDevicePairing429JSONResponse struct{ TooManyAttemptsJSONResponse }
+
+func (response PollDevicePairing429JSONResponse) VisitPollDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDevicesRequestObject struct {
+}
+
+type ListDevicesResponseObject interface {
+	VisitListDevicesResponse(w http.ResponseWriter) error
+}
+
+type ListDevices200JSONResponse DeviceList
+
+func (response ListDevices200JSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDevices401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListDevices401JSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeDeviceRequestObject struct {
+	Id openapi_types.UUID `json:"id"`
+}
+
+type RevokeDeviceResponseObject interface {
+	VisitRevokeDeviceResponse(w http.ResponseWriter) error
+}
+
+type RevokeDevice204Response struct {
+}
+
+func (response RevokeDevice204Response) VisitRevokeDeviceResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RevokeDevice401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RevokeDevice401JSONResponse) VisitRevokeDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeDevice404JSONResponse Error
+
+func (response RevokeDevice404JSONResponse) VisitRevokeDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetMeRequestObject struct {
 }
 
@@ -1132,6 +1881,164 @@ func (response ChangePassword429JSONResponse) VisitChangePasswordResponse(w http
 	return err
 }
 
+type ListMessagesRequestObject struct {
+	Params ListMessagesParams
+}
+
+type ListMessagesResponseObject interface {
+	VisitListMessagesResponse(w http.ResponseWriter) error
+}
+
+type ListMessages200JSONResponse MessageList
+
+func (response ListMessages200JSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMessages400JSONResponse Error
+
+func (response ListMessages400JSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMessages401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListMessages401JSONResponse) VisitListMessagesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadMessageRequestObject struct {
+	Body *UploadMessageJSONRequestBody
+}
+
+type UploadMessageResponseObject interface {
+	VisitUploadMessageResponse(w http.ResponseWriter) error
+}
+
+type UploadMessage200JSONResponse UploadMessageResult
+
+func (response UploadMessage200JSONResponse) VisitUploadMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadMessage400JSONResponse Error
+
+func (response UploadMessage400JSONResponse) VisitUploadMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadMessage401JSONResponse Error
+
+func (response UploadMessage401JSONResponse) VisitUploadMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadMessage413JSONResponse Error
+
+func (response UploadMessage413JSONResponse) VisitUploadMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteMessageRequestObject struct {
+	Id openapi_types.UUID `json:"id"`
+}
+
+type DeleteMessageResponseObject interface {
+	VisitDeleteMessageResponse(w http.ResponseWriter) error
+}
+
+type DeleteMessage204Response struct {
+}
+
+func (response DeleteMessage204Response) VisitDeleteMessageResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteMessage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteMessage401JSONResponse) VisitDeleteMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteMessage404JSONResponse Error
+
+func (response DeleteMessage404JSONResponse) VisitDeleteMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// PostAccount Create an account for a device code, or return the existing one
@@ -1158,12 +2065,39 @@ type StrictServerInterface interface {
 	// Register Create an account with an invitation code, and sign in
 	// (POST /v1/auth/register)
 	Register(ctx context.Context, request RegisterRequestObject) (RegisterResponseObject, error)
+	// ApproveDevicePairing Pair the watch that shows this code with the signed-in user
+	// (POST /v1/device/approve)
+	ApproveDevicePairing(ctx context.Context, request ApproveDevicePairingRequestObject) (ApproveDevicePairingResponseObject, error)
+	// StartDevicePairing A watch asks to be paired
+	// (POST /v1/device/code)
+	StartDevicePairing(ctx context.Context, request StartDevicePairingRequestObject) (StartDevicePairingResponseObject, error)
+	// GetDevicePairing What a user code is waiting for
+	// (GET /v1/device/pairing/{userCode})
+	GetDevicePairing(ctx context.Context, request GetDevicePairingRequestObject) (GetDevicePairingResponseObject, error)
+	// PollDevicePairing The watch asks whether its pairing was approved
+	// (POST /v1/device/token)
+	PollDevicePairing(ctx context.Context, request PollDevicePairingRequestObject) (PollDevicePairingResponseObject, error)
+	// ListDevices The user's paired watches
+	// (GET /v1/devices)
+	ListDevices(ctx context.Context, request ListDevicesRequestObject) (ListDevicesResponseObject, error)
+	// RevokeDevice Revoke a watch
+	// (DELETE /v1/devices/{id})
+	RevokeDevice(ctx context.Context, request RevokeDeviceRequestObject) (RevokeDeviceResponseObject, error)
 	// GetMe The signed-in user
 	// (GET /v1/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
 	// ChangePassword Change the password
 	// (POST /v1/me/password)
 	ChangePassword(ctx context.Context, request ChangePasswordRequestObject) (ChangePasswordResponseObject, error)
+	// ListMessages The user's recordings, newest first
+	// (GET /v1/messages)
+	ListMessages(ctx context.Context, request ListMessagesRequestObject) (ListMessagesResponseObject, error)
+	// UploadMessage A watch uploads a recording
+	// (POST /v1/messages)
+	UploadMessage(ctx context.Context, request UploadMessageRequestObject) (UploadMessageResponseObject, error)
+	// DeleteMessage Delete a recording and its files
+	// (DELETE /v1/messages/{id})
+	DeleteMessage(ctx context.Context, request DeleteMessageRequestObject) (DeleteMessageResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -1436,6 +2370,175 @@ func (sh *strictHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ApproveDevicePairing operation middleware
+func (sh *strictHandler) ApproveDevicePairing(w http.ResponseWriter, r *http.Request) {
+	var request ApproveDevicePairingRequestObject
+
+	var body ApproveDevicePairingJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ApproveDevicePairing(ctx, request.(ApproveDevicePairingRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ApproveDevicePairing")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ApproveDevicePairingResponseObject); ok {
+		if err := validResponse.VisitApproveDevicePairingResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartDevicePairing operation middleware
+func (sh *strictHandler) StartDevicePairing(w http.ResponseWriter, r *http.Request) {
+	var request StartDevicePairingRequestObject
+
+	var body StartDevicePairingJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartDevicePairing(ctx, request.(StartDevicePairingRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartDevicePairing")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartDevicePairingResponseObject); ok {
+		if err := validResponse.VisitStartDevicePairingResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDevicePairing operation middleware
+func (sh *strictHandler) GetDevicePairing(w http.ResponseWriter, r *http.Request, userCode string) {
+	var request GetDevicePairingRequestObject
+
+	request.UserCode = userCode
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDevicePairing(ctx, request.(GetDevicePairingRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDevicePairing")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDevicePairingResponseObject); ok {
+		if err := validResponse.VisitGetDevicePairingResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PollDevicePairing operation middleware
+func (sh *strictHandler) PollDevicePairing(w http.ResponseWriter, r *http.Request) {
+	var request PollDevicePairingRequestObject
+
+	var body PollDevicePairingJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PollDevicePairing(ctx, request.(PollDevicePairingRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PollDevicePairing")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PollDevicePairingResponseObject); ok {
+		if err := validResponse.VisitPollDevicePairingResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListDevices operation middleware
+func (sh *strictHandler) ListDevices(w http.ResponseWriter, r *http.Request) {
+	var request ListDevicesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDevices(ctx, request.(ListDevicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDevices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDevicesResponseObject); ok {
+		if err := validResponse.VisitListDevicesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeDevice operation middleware
+func (sh *strictHandler) RevokeDevice(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	var request RevokeDeviceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeDevice(ctx, request.(RevokeDeviceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeDevice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeDeviceResponseObject); ok {
+		if err := validResponse.VisitRevokeDeviceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetMe operation middleware
 func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	var request GetMeRequestObject
@@ -1484,6 +2587,89 @@ func (sh *strictHandler) ChangePassword(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ChangePasswordResponseObject); ok {
 		if err := validResponse.VisitChangePasswordResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListMessages operation middleware
+func (sh *strictHandler) ListMessages(w http.ResponseWriter, r *http.Request, params ListMessagesParams) {
+	var request ListMessagesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListMessages(ctx, request.(ListMessagesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListMessages")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListMessagesResponseObject); ok {
+		if err := validResponse.VisitListMessagesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UploadMessage operation middleware
+func (sh *strictHandler) UploadMessage(w http.ResponseWriter, r *http.Request) {
+	var request UploadMessageRequestObject
+
+	var body UploadMessageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UploadMessage(ctx, request.(UploadMessageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UploadMessage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UploadMessageResponseObject); ok {
+		if err := validResponse.VisitUploadMessageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteMessage operation middleware
+func (sh *strictHandler) DeleteMessage(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	var request DeleteMessageRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteMessage(ctx, request.(DeleteMessageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteMessage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteMessageResponseObject); ok {
+		if err := validResponse.VisitDeleteMessageResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

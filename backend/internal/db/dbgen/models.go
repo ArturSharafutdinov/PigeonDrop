@@ -17,6 +17,30 @@ type Account struct {
 	UpdatedAt       time.Time
 }
 
+type Device struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	Name       string
+	TokenHash  []byte
+	CreatedAt  time.Time
+	LastSeenAt *time.Time
+	RevokedAt  *time.Time
+}
+
+type DevicePairing struct {
+	ID             uuid.UUID
+	DeviceCodeHash []byte
+	UserCode       string
+	ClientName     *string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+	LastPolledAt   *time.Time
+	UserID         *uuid.UUID
+	DeviceName     *string
+	ApprovedAt     *time.Time
+	RedeemedAt     *time.Time
+}
+
 type Invitation struct {
 	ID        uuid.UUID
 	CodeHash  []byte
@@ -25,6 +49,18 @@ type Invitation struct {
 	ExpiresAt time.Time
 	UsedAt    *time.Time
 	UsedBy    *uuid.UUID
+}
+
+type Message struct {
+	ID              uuid.UUID
+	UserID          uuid.UUID
+	DeviceID        uuid.UUID
+	ClientMessageID string
+	Format          string
+	BytesReceived   int64
+	DurationMs      *int32
+	HasWav          bool
+	ReceivedAt      time.Time
 }
 
 type ProcessedUpload struct {

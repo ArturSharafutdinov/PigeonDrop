@@ -26,6 +26,8 @@ const (
 	sessionIdleTTL     = 30 * 24 * time.Hour
 	sessionAbsoluteTTL = 90 * 24 * time.Hour
 	sessionTouchEvery  = time.Hour
+	// A device's last_seen_at is refreshed at most this often, so a busy watch does not write on every request.
+	deviceSeenEvery = time.Hour
 )
 
 // The cookie's name. Over HTTPS it carries the __Host- prefix, which makes browsers refuse to accept it from
@@ -47,6 +49,13 @@ type AuthLimits struct {
 	LoginIP *auth.Limiter
 	// RegisterIP counts rejected invitation codes per client address.
 	RegisterIP *auth.Limiter
+	// DeviceCodeIP counts every request for a pairing per client address: unlike the others, a success is
+	// what is being limited, since each one leaves a row behind.
+	DeviceCodeIP *auth.Limiter
+	// DevicePollIP counts polls with a device code that does not exist, per client address.
+	DevicePollIP *auth.Limiter
+	// PairingUser counts a signed-in user's wrong user codes (looking up or approving a pairing).
+	PairingUser *auth.Limiter
 }
 
 func defaultLimits(now func() time.Time) AuthLimits {
@@ -54,6 +63,10 @@ func defaultLimits(now func() time.Time) AuthLimits {
 		LoginEmail: auth.NewLimiter(5, 15*time.Minute, now),
 		LoginIP:    auth.NewLimiter(20, 15*time.Minute, now),
 		RegisterIP: auth.NewLimiter(10, time.Hour, now),
+
+		DeviceCodeIP: auth.NewLimiter(10, 10*time.Minute, now),
+		DevicePollIP: auth.NewLimiter(30, 15*time.Minute, now),
+		PairingUser:  auth.NewLimiter(10, 15*time.Minute, now),
 	}
 }
 
@@ -61,6 +74,7 @@ type ctxKey int
 
 const (
 	ctxPrincipal ctxKey = iota
+	ctxDevice
 	ctxClient
 )
 
@@ -74,6 +88,18 @@ type principal struct {
 func principalFrom(ctx context.Context) *principal {
 	p, _ := ctx.Value(ctxPrincipal).(*principal)
 	return p
+}
+
+// device is the paired watch behind a request's device token.
+type device struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+	Name   string
+}
+
+func deviceFrom(ctx context.Context) *device {
+	d, _ := ctx.Value(ctxDevice).(*device)
+	return d
 }
 
 // clientFrom returns the key the request's sender is counted under (see clientKey).
@@ -177,8 +203,9 @@ func (s *Server) crossOriginGuard(next http.Handler) http.Handler {
 	})
 }
 
-// authContext prepares every /v1 request: it notes who is sending it (for the limits) and, if the request
-// carries a valid session cookie, who is signed in. Handlers that need a user check for one themselves.
+// authContext prepares every /v1 request: it notes who is sending it (for the limits), who is signed in if
+// the request carries a valid session cookie, and which watch it is if it carries a valid device token.
+// Handlers that need a user or a device check for one themselves.
 func (s *Server) authContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/v1/") {
@@ -187,39 +214,75 @@ func (s *Server) authContext(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), ctxClient, s.clientKey(r))
 
-		if c, err := r.Cookie(s.cookieName()); err == nil && len(c.Value) == auth.SessionTokenLength {
-			now := s.now()
-			hash := auth.HashSessionToken(c.Value)
-			row, err := s.DB.GetSessionByTokenHash(ctx, dbgen.GetSessionByTokenHashParams{TokenHash: hash, Now: now})
-			switch {
-			case err == nil:
-				ctx = context.WithValue(ctx, ctxPrincipal, &principal{
-					SessionID: row.SessionID,
-					TokenHash: hash,
-					User: api.User{
-						Id: row.UserID, Email: row.Email, Plan: api.UserPlan(row.Plan),
-						Language: api.Language(row.Language), CreatedAt: row.UserCreatedAt,
-					},
-				})
-				// A session in use keeps sliding forward, and the browser's copy of the cookie with it.
-				if now.Sub(row.LastSeenAt) >= sessionTouchEvery {
-					expires := now.Add(sessionIdleTTL)
-					if err := s.DB.TouchSession(ctx, dbgen.TouchSessionParams{ID: row.SessionID, Now: now, NewExpiresAt: expires}); err != nil {
-						s.Logger.Warn("renew session", "error", err) // not worth failing the request over
-					} else {
-						w.Header().Add("Set-Cookie", s.sessionCookie(c.Value, min(sessionIdleTTL, row.AbsoluteExpiresAt.Sub(now))))
-					}
-				}
-			case errors.Is(err, pgx.ErrNoRows):
-				// An unknown or expired session is the same as none; the handler answers 401 where it matters.
-			default:
-				s.Logger.Error("look up session", "error", err)
-				writeError(w, http.StatusInternalServerError, "internal error")
-				return
-			}
+		ctx, err := s.withSession(ctx, w, r)
+		if err == nil {
+			ctx, err = s.withDevice(ctx, r)
+		}
+		if err != nil {
+			s.Logger.Error("look up credentials", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// withSession adds the signed-in user to ctx if the request has a valid session cookie. An unknown or expired
+// session is the same as none: the handler answers 401 where it matters.
+func (s *Server) withSession(ctx context.Context, w http.ResponseWriter, r *http.Request) (context.Context, error) {
+	c, err := r.Cookie(s.cookieName())
+	if err != nil || len(c.Value) != auth.SessionTokenLength {
+		return ctx, nil
+	}
+	now := s.now()
+	hash := auth.HashSessionToken(c.Value)
+	row, err := s.DB.GetSessionByTokenHash(ctx, dbgen.GetSessionByTokenHashParams{TokenHash: hash, Now: now})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ctx, nil
+	}
+	if err != nil {
+		return ctx, fmt.Errorf("session: %w", err)
+	}
+
+	// A session in use keeps sliding forward, and the browser's copy of the cookie with it.
+	if now.Sub(row.LastSeenAt) >= sessionTouchEvery {
+		expires := now.Add(sessionIdleTTL)
+		if err := s.DB.TouchSession(ctx, dbgen.TouchSessionParams{ID: row.SessionID, Now: now, NewExpiresAt: expires}); err != nil {
+			s.Logger.Warn("renew session", "error", err) // not worth failing the request over
+		} else {
+			w.Header().Add("Set-Cookie", s.sessionCookie(c.Value, min(sessionIdleTTL, row.AbsoluteExpiresAt.Sub(now))))
+		}
+	}
+	return context.WithValue(ctx, ctxPrincipal, &principal{
+		SessionID: row.SessionID,
+		TokenHash: hash,
+		User: api.User{
+			Id: row.UserID, Email: row.Email, Plan: api.UserPlan(row.Plan),
+			Language: api.Language(row.Language), CreatedAt: row.UserCreatedAt,
+		},
+	}), nil
+}
+
+// withDevice adds the paired watch to ctx if the request has a valid, unrevoked device token.
+func (s *Server) withDevice(ctx context.Context, r *http.Request) (context.Context, error) {
+	token, ok := auth.ParseBearer(r.Header.Get("Authorization"))
+	if !ok {
+		return ctx, nil
+	}
+	row, err := s.DB.GetDeviceByTokenHash(ctx, auth.HashDeviceToken(token))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ctx, nil
+	}
+	if err != nil {
+		return ctx, fmt.Errorf("device: %w", err)
+	}
+
+	if now := s.now(); row.LastSeenAt == nil || now.Sub(*row.LastSeenAt) >= deviceSeenEvery {
+		if err := s.DB.TouchDevice(ctx, dbgen.TouchDeviceParams{ID: row.ID, Now: now, RecentAfter: now.Add(-deviceSeenEvery)}); err != nil {
+			s.Logger.Warn("record device activity", "device_id", row.ID, "error", err)
+		}
+	}
+	return context.WithValue(ctx, ctxDevice, &device{ID: row.ID, UserID: row.UserID, Name: row.Name}), nil
 }
 
 // startSession stores a new session for the user and returns the cookie that carries it.

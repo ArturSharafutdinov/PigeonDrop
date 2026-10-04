@@ -33,8 +33,10 @@ type Pinger interface {
 type Server struct {
 	Pinger Pinger
 	DB     dbgen.Querier
-	Files  storage.Store
-	Logger *slog.Logger
+	// Files holds the prototype's recordings (the older /messages route); Messages the /v1 ones.
+	Files    storage.Store
+	Messages storage.Store
+	Logger   *slog.Logger
 	// DefaultServerURL is this server's own public address: what an account resolves to when it has no server of its own.
 	DefaultServerURL string
 	// Now supplies the time used to name stored files and to date sessions; nil means time.Now. Tests set it.
@@ -52,6 +54,9 @@ type Server struct {
 	AllowedOrigins []string
 	// TrustProxyHeaders reads the client's address from X-Forwarded-For (only behind a proxy that sets it).
 	TrustProxyHeaders bool
+
+	// userCodes draws the short code of a pairing; nil means auth.NewUserCode. Tests replace it to force collisions.
+	userCodes func() (display, canonical string, err error)
 }
 
 func (s *Server) now() time.Time {
@@ -115,6 +120,10 @@ func NewHandler(s *Server) http.Handler {
 	mux.HandleFunc("GET /setup", s.handleSetup)
 	mux.HandleFunc("GET /uploads", s.handleListUploads)
 	mux.HandleFunc("GET /uploads/{name}", s.handleDownload)
+	mux.HandleFunc("GET /v1/messages/{id}/audio", s.handleMessageAudio)
+	mux.HandleFunc("GET /pair", servePage("text/html; charset=utf-8", pairHTML))
+	mux.HandleFunc("GET /pair.js", servePage("text/javascript; charset=utf-8", pairJS))
+	mux.HandleFunc("GET /pair.css", servePage("text/css; charset=utf-8", pairCSS))
 	// Anything the generated routes do not claim - unknown path or wrong method alike -
 	// is a JSON 404, the same answer the Node prototype gave.
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {

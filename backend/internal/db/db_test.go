@@ -22,7 +22,7 @@ func TestMigrationsApplyAndAreIdempotent(t *testing.T) {
 		t.Fatalf("second MigrateUp applied %d, %v", applied, err)
 	}
 
-	for _, table := range []string{"accounts", "processed_uploads", "users", "invitations", "sessions"} {
+	for _, table := range []string{"accounts", "processed_uploads", "users", "invitations", "sessions", "devices", "device_pairings"} {
 		var exists bool
 		if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, "public."+table).Scan(&exists); err != nil || !exists {
 			t.Errorf("table %s missing (%v)", table, err)
@@ -100,5 +100,65 @@ func TestUserSchemaConstraints(t *testing.T) {
 	pool.QueryRow(ctx, `SELECT count(*) FROM invitations WHERE used_at IS NOT NULL AND used_by IS NULL`).Scan(&orphaned)
 	if sessions != 0 || orphaned != 1 {
 		t.Fatalf("after deleting the user: %d sessions left, %d invitations kept as used", sessions, orphaned)
+	}
+}
+
+func TestDeviceSchemaConstraints(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	exec := func(query string, args ...any) error {
+		_, err := pool.Exec(ctx, query, args...)
+		return err
+	}
+	if err := exec(`INSERT INTO users (email, password_hash) VALUES ('alice@example.com', 'x')`); err != nil {
+		t.Fatal(err)
+	}
+	var user string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM users`).Scan(&user); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec(`INSERT INTO devices (user_id, name, token_hash) VALUES ($1, 'watch', '\x01')`, user); err != nil {
+		t.Fatal(err)
+	}
+	pairing := func(extra string) string {
+		return `INSERT INTO device_pairings (device_code_hash, user_code, expires_at` + extra + `) VALUES `
+	}
+	if err := exec(pairing("") + `('\x10', 'BCDFGHJK', now())`); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, query := range map[string]string{
+		"the same token twice":         `INSERT INTO devices (user_id, name, token_hash) VALUES ('` + user + `', 'again', '\x01')`,
+		"an empty device name":         `INSERT INTO devices (user_id, name, token_hash) VALUES ('` + user + `', '', '\x02')`,
+		"a device name over 64":        `INSERT INTO devices (user_id, name, token_hash) VALUES ('` + user + `', '` + strings.Repeat("x", 65) + `', '\x03')`,
+		"a device of nobody":           `INSERT INTO devices (user_id, name, token_hash) VALUES (gen_random_uuid(), 'x', '\x04')`,
+		"the same user code twice":     pairing("") + `('\x11', 'BCDFGHJK', now())`,
+		"the same device code twice":   pairing("") + `('\x10', 'BBBBBBBB', now())`,
+		"a user code with a vowel":     pairing("") + `('\x12', 'ABCDFGHJ', now())`,
+		"a user code too short":        pairing("") + `('\x13', 'BCDFGHJ', now())`,
+		"a lower-case user code":       pairing("") + `('\x14', 'bcdfghjk', now())`,
+		"a client name over 64":        pairing(", client_name") + `('\x15', 'CCCCCCCC', now(), '` + strings.Repeat("x", 65) + `')`,
+		"approved without a user":      pairing(", approved_at, device_name") + `('\x16', 'DDDDDDDD', now(), now(), 'w')`,
+		"approved without a name":      pairing(", approved_at, user_id") + `('\x17', 'FFFFFFFF', now(), now(), '` + user + `')`,
+		"a user without an approval":   pairing(", user_id, device_name") + `('\x18', 'GGGGGGGG', now(), '` + user + `', 'w')`,
+		"redeemed without an approval": pairing(", redeemed_at") + `('\x19', 'HHHHHHHH', now(), now())`,
+	} {
+		if err := exec(query); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+
+	// A complete approval and its redemption are fine, and both go with the user.
+	if err := exec(pairing(", user_id, device_name, approved_at, redeemed_at") + `('\x20', 'JJJJJJJJ', now(), '` + user + `', 'w', now(), now())`); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec(`DELETE FROM users WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	var devices, approved int
+	pool.QueryRow(ctx, `SELECT count(*) FROM devices`).Scan(&devices)
+	pool.QueryRow(ctx, `SELECT count(*) FROM device_pairings WHERE approved_at IS NOT NULL`).Scan(&approved)
+	if devices != 0 || approved != 0 {
+		t.Fatalf("after deleting the user: %d devices and %d approved pairings left", devices, approved)
 	}
 }

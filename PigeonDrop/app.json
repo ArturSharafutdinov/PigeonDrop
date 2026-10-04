@@ -30,7 +30,7 @@
             "page/index",
             "page/list",
             "page/settings",
-            "page/qrcode"
+            "page/pair"
           ]
         },
         "app-side": {

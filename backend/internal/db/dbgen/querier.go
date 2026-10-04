@@ -12,17 +12,27 @@ import (
 )
 
 type Querier interface {
+	// Approval also gives the watch a few more minutes to collect its token: a code approved in its last
+	// seconds must not expire before the next poll.
+	ApprovePairing(ctx context.Context, arg ApprovePairingParams) (uuid.UUID, error)
 	// Spends the invitation. No row means it was unknown, expired, or already used (possibly a moment ago
 	// by someone else) - the caller cannot and need not tell which.
 	ConsumeInvitation(ctx context.Context, arg ConsumeInvitationParams) (uuid.UUID, error)
 	// Returns no row when the account already exists: creating twice is harmless, the caller then reads it.
 	CreateAccount(ctx context.Context, code string) (Account, error)
+	CreateDevice(ctx context.Context, arg CreateDeviceParams) (CreateDeviceRow, error)
 	CreateInvitation(ctx context.Context, arg CreateInvitationParams) (CreateInvitationRow, error)
+	// Device pairing and paired devices. Times come from the caller (never now()).
+	// A unique violation on user_code means the random code collided with a live one: the caller draws another.
+	CreatePairing(ctx context.Context, arg CreatePairingParams) (uuid.UUID, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (uuid.UUID, error)
 	// Users, invitations and sessions. Times come from the caller (never now()) so the server and its
 	// tests share one clock.
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DeleteExpiredPairings(ctx context.Context, now time.Time) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
+	// No row when the user has no such message. The files are removed by the caller afterwards.
+	DeleteMessage(ctx context.Context, arg DeleteMessageParams) (DeleteMessageRow, error)
 	// Used after a password change: every other session of the user ends, the current one stays.
 	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
@@ -30,20 +40,43 @@ type Querier interface {
 	// Read-only look, to refuse an unusable code before spending a password hash on it.
 	FindUsableInvitation(ctx context.Context, arg FindUsableInvitationParams) (uuid.UUID, error)
 	GetAccount(ctx context.Context, code string) (Account, error)
+	// The device behind a token. No row for an unknown token or a revoked device.
+	GetDeviceByTokenHash(ctx context.Context, tokenHash []byte) (GetDeviceByTokenHashRow, error)
+	GetMessage(ctx context.Context, arg GetMessageParams) (GetMessageRow, error)
+	// Recordings received from paired watches. Everything a person can reach is scoped by user_id here, in
+	// the query, so a handler cannot forget the ownership check.
+	GetMessageByClientID(ctx context.Context, arg GetMessageByClientIDParams) (GetMessageByClientIDRow, error)
+	// Only a pairing that can still be approved: unknown, expired and already approved codes are all "no row".
+	GetOpenPairingByUserCode(ctx context.Context, arg GetOpenPairingByUserCodeParams) (GetOpenPairingByUserCodeRow, error)
+	GetPairingByDeviceCodeHash(ctx context.Context, deviceCodeHash []byte) (GetPairingByDeviceCodeHashRow, error)
 	GetProcessedUpload(ctx context.Context, fileName string) (ProcessedUpload, error)
 	// The session behind a cookie, with its user. No row when it is unknown or has expired.
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	// Returns no row when this device already uploaded this name: a request with the same name won the race.
+	InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error)
 	// Returns no row when file_name is already taken: another request with the same name won the race.
 	InsertProcessedUpload(ctx context.Context, arg InsertProcessedUploadParams) (ProcessedUpload, error)
+	ListDevices(ctx context.Context, userID uuid.UUID) ([]ListDevicesRow, error)
 	ListInvitations(ctx context.Context) ([]ListInvitationsRow, error)
+	// The caller's messages, newest first, starting after the cursor (the received_at and id of the last message
+	// of the previous page; both null for the first page).
+	ListMessages(ctx context.Context, arg ListMessagesParams) ([]ListMessagesRow, error)
 	ListUsers(ctx context.Context) ([]ListUsersRow, error)
+	// Hands out the approval exactly once: no row means someone else collected it first, or it was never approved.
+	RedeemPairing(ctx context.Context, arg RedeemPairingParams) (RedeemPairingRow, error)
+	// No row means the user has no such device. Revoking twice is fine: the second time changes nothing.
+	RevokeDevice(ctx context.Context, arg RevokeDeviceParams) (uuid.UUID, error)
 	// Only an unused invitation can be withdrawn; a used one stays as the record of who came through it.
 	RevokeInvitation(ctx context.Context, id uuid.UUID) (int64, error)
 	// Returns no row when there is no such account: this never creates one.
 	SetAccountServerURL(ctx context.Context, arg SetAccountServerURLParams) (Account, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
+	// Records that the device was seen, at most once per interval: the caller passes the oldest last_seen_at
+	// that still counts as recent.
+	TouchDevice(ctx context.Context, arg TouchDeviceParams) error
+	TouchPairingPoll(ctx context.Context, arg TouchPairingPollParams) error
 	// Slides the expiry forward, but never past the absolute limit.
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
 }

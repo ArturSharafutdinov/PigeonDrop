@@ -130,12 +130,17 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	queries := dbgen.New(pool)
-	go purgeSessions(ctx, queries, logger)
+	go purgeExpired(ctx, queries, logger)
+
+	messages, err := storage.NewDisk(filepath.Join(cfg.StorageDir, "messages"))
+	if err != nil {
+		return err
+	}
 
 	srv := &http.Server{
 		Addr: ":" + strconv.Itoa(cfg.Port),
 		Handler: httpapi.NewHandler(&httpapi.Server{
-			Pinger: pool, DB: queries, Files: files, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
+			Pinger: pool, DB: queries, Files: files, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -167,9 +172,9 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	return nil
 }
 
-// purgeSessions deletes expired sessions once an hour until ctx ends. Expired sessions are already refused
-// at sign-in; this only keeps the table from growing.
-func purgeSessions(ctx context.Context, q dbgen.Querier, logger *slog.Logger) {
+// purgeExpired deletes expired sessions and pairings once an hour until ctx ends. Expired ones are already
+// refused wherever they are used; this only keeps the tables from growing.
+func purgeExpired(ctx context.Context, q dbgen.Querier, logger *slog.Logger) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
@@ -177,11 +182,17 @@ func purgeSessions(ctx context.Context, q dbgen.Querier, logger *slog.Logger) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			removed, err := q.DeleteExpiredSessions(ctx, time.Now())
+			now := time.Now()
+			sessions, err := q.DeleteExpiredSessions(ctx, now)
 			if err != nil && ctx.Err() == nil {
 				logger.Warn("purge expired sessions", "error", err)
-			} else if removed > 0 {
-				logger.Info("expired sessions removed", "count", removed)
+			}
+			pairings, err := q.DeleteExpiredPairings(ctx, now)
+			if err != nil && ctx.Err() == nil {
+				logger.Warn("purge expired pairings", "error", err)
+			}
+			if sessions > 0 || pairings > 0 {
+				logger.Info("expired entries removed", "sessions", sessions, "pairings", pairings)
 			}
 		}
 	}

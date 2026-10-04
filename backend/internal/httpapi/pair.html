@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>PigeonDrop</title>
+<link rel="stylesheet" href="/pair.css">
+</head>
+<body>
+<main>
+  <h1>PigeonDrop</h1>
+  <p id="notice" role="status" hidden></p>
+
+  <!-- Not signed in -->
+  <section id="guest" hidden>
+    <nav class="tabs" aria-label="Вход или регистрация">
+      <button type="button" id="tab-login" aria-pressed="true">Вход</button>
+      <button type="button" id="tab-register" aria-pressed="false">Регистрация</button>
+    </nav>
+
+    <form id="login-form">
+      <label>Почта <input name="email" type="email" autocomplete="username" required></label>
+      <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Войти</button>
+    </form>
+
+    <form id="register-form" hidden>
+      <label>Код приглашения <input name="inviteCode" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" required></label>
+      <label>Почта <input name="email" type="email" autocomplete="username" required></label>
+      <label>Пароль <input name="password" type="password" autocomplete="new-password" minlength="12" required>
+        <small>Не короче 12 символов.</small></label>
+      <button type="submit">Зарегистрироваться</button>
+    </form>
+  </section>
+
+  <!-- Signed in -->
+  <section id="user" hidden>
+    <p class="who">Вы вошли как <strong id="who"></strong> <button type="button" id="logout" class="link">Выйти</button></p>
+
+    <section id="pairing">
+      <h2>Привязать часы</h2>
+      <form id="lookup-form">
+        <label>Код с экрана часов <input name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" required></label>
+        <button type="submit">Найти</button>
+      </form>
+      <form id="approve-form" hidden>
+        <p>Часы <strong id="pairing-client"></strong> просят доступ.</p>
+        <p>Код на их экране:</p>
+        <p class="code" id="pairing-code"></p>
+        <p class="warn">Сверьте его с кодом на часах. Если он другой, не привязывайте: ссылку могли подменить.</p>
+        <label>Название в списке <input name="name" type="text" maxlength="64" autocomplete="off"></label>
+        <button type="submit">Привязать эти часы</button>
+        <button type="button" id="approve-cancel" class="link">Отмена</button>
+      </form>
+    </section>
+
+    <section id="devices">
+      <h2>Устройства</h2>
+      <ul id="device-list" class="rows"></ul>
+      <p id="device-empty" class="hint" hidden>Ни одних часов пока не привязано.</p>
+    </section>
+
+    <section id="messages">
+      <h2>Записи</h2>
+      <ul id="message-list" class="rows"></ul>
+      <p id="message-empty" class="hint" hidden>Записей пока нет.</p>
+      <button type="button" id="more" hidden>Показать ещё</button>
+    </section>
+  </section>
+</main>
+<script src="/pair.js"></script>
+</body>
+</html>
