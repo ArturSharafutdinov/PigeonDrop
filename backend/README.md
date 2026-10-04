@@ -6,7 +6,7 @@
 
 ## Быстрый старт
 
-Нужны Go 1.26+ и серверные программы PostgreSQL (`brew install postgresql@16`).
+Нужны Go 1.26+ и серверные программы PostgreSQL (`brew install postgresql@16`). Сервер требует PostgreSQL 13 или новее (`gen_random_uuid()`); на VPS стоит 17, в CI тесты идут против 17, локально достаточно 16.
 
 ```bash
 cd backend

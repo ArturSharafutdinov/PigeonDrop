@@ -13,9 +13,13 @@
 //
 // That file is Zepp's private recording format. Once it is complete it is wrapped
 // into a standard Ogg/Opus file (../utils/oggOpus.js, no re-encoding) before
-// being sent, so that every server - the SaaS and any server a user supplies -
-// receives something ordinary tools can play. The request is still
-// { fileName, audio: base64 } (API_SPEC.md); only what `audio` holds changed.
+// being sent, so that every server receives something ordinary tools can play.
+//
+// The server knows whose recording it is from the device token the watch got when it
+// was paired. The watch sends the token with its chunks; this module keeps none of it
+// (it has no dependable storage) and presents it as `Authorization: Bearer` with the
+// final request, POST /v1/messages { messageId, audio: base64 } (API_SPEC.md). A token
+// the server refuses is reported as `unauthorized` so the watch can forget it.
 //
 // State is held in memory only: the Side Service has no dependable persistent
 // storage or lifetime. If it is restarted mid-upload, the next chunk is answered
@@ -44,36 +48,47 @@ export function clearPendingUploads() {
   pending = {}
 }
 
-function forwardToServer(fileName, audio, baseUrl) {
+function parseBody(res) {
+  return typeof res.body === 'string' ? JSON.parse(res.body) : res.body
+}
+
+function forwardToServer(fileName, audio, baseUrl, deviceToken) {
   return fetch({
-    url: baseUrl + '/messages',
+    url: baseUrl + '/v1/messages',
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fileName: fileName, audio: audio }),
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + deviceToken },
+    body: JSON.stringify({ messageId: fileName, audio: audio }),
   })
     .then((res) => {
-      const data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body
+      // The token is unknown or revoked: nothing this watch sends will be accepted until it is paired again.
+      // The status says so where the runtime reports one (checked before the body is read: a proxy's own 401
+      // page is not JSON), and so does the server's error code.
+      const refused = { ok: false, unauthorized: true, error: 'server: device is not paired' }
+      if (res.status === 401) return refused
+      const data = parseBody(res)
+      if (data && data.code === 'unauthorized') return refused
       // fetch() resolves for any HTTP status, so the server's own { ok } flag is
       // what says whether the recording was really accepted.
       if (!data || data.ok !== true) {
         return { ok: false, error: 'server: ' + ((data && data.error) || 'rejected') }
       }
-      return { ok: true, done: true, bytesReceived: data.bytesReceived, savedAs: data.savedAs, wavFile: data.wavFile }
+      return { ok: true, done: true, bytesReceived: data.bytesReceived, id: data.id, duplicate: data.duplicate }
     })
     .catch((err) => ({ ok: false, error: 'server: ' + String(err) }))
 }
 
-// message: { fileName, uploadId, index, total, data, serverUrl }
+// message: { fileName, uploadId, index, total, data, deviceToken }
 // Returns a Promise of the reply object the watch will receive.
-export function handleUploadChunk(message, fallbackServerUrl) {
-  const { fileName, uploadId, index, total, data, serverUrl } = message || {}
+export function handleUploadChunk(message, serverUrl) {
+  const { fileName, uploadId, index, total, data, deviceToken } = message || {}
 
   const valid =
     typeof fileName === 'string' && fileName.length > 0 &&
     typeof uploadId === 'string' &&
     Number.isInteger(index) && Number.isInteger(total) &&
     total >= 1 && index >= 0 && index < total &&
-    typeof data === 'string' && data.length > 0
+    typeof data === 'string' && data.length > 0 &&
+    typeof deviceToken === 'string' && deviceToken.length > 0
   if (!valid) {
     return Promise.resolve({ ok: false, error: 'bad chunk' })
   }
@@ -118,5 +133,5 @@ export function handleUploadChunk(message, fallbackServerUrl) {
   } catch (err) {
     return Promise.resolve({ ok: false, fileError: true, error: 'cannot pack recording: ' + String((err && err.message) || err) })
   }
-  return forwardToServer(fileName, audio, serverUrl || fallbackServerUrl)
+  return forwardToServer(fileName, audio, serverUrl, deviceToken)
 }
