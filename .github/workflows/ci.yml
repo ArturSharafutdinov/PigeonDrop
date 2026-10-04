@@ -1,11 +1,15 @@
 name: CI/CD
 
 # Checks run on every push to main and on every pull request. Only a push to
-# main that touches server/, or a manual run ("Run workflow", which always
-# deploys), can deploy, and only the server is deployed: the watch app is
-# published through Zepp, not from here. The deploy job needs the three
-# Coolify secrets described in server/DEPLOY.md; without them it just says so
-# and finishes, so this workflow is safe to push before Coolify is set up.
+# main that touches backend/ (or the deploy script), or a manual run ("Run
+# workflow", which always deploys), can deploy, and only the Go server is
+# deployed: the watch app is published through Zepp, not from here, and the
+# Node prototype in server/ is not deployed at all. The image is built here and
+# pushed to GitHub's container registry; Coolify on the VPS only pulls and runs
+# it, so the build never competes with the other projects for the VPS. The
+# deploy job needs the three Coolify secrets described in backend/DEPLOY.md;
+# without them it still pushes the image, says that it did not deploy, and
+# finishes, so this workflow is safe to push before Coolify is set up.
 
 on:
   push:
@@ -163,12 +167,29 @@ jobs:
           ls dist
         working-directory: PigeonDrop
 
+  # The deploy script is the one part of the pipeline that can only fail on release day, so it is tested here
+  # against a fake Coolify API (every outcome: success, failure, refusal, unreachable, no secrets).
+  deploy-script:
+    name: Deploy script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run the tests against a fake Coolify
+        run: .github/scripts/test/test-coolify-deploy.sh
+
   deploy:
     name: Deploy to Coolify
-    needs: server
+    needs: [backend, backend-contract, deploy-script]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write # to push the image to ghcr.io
     env:
       COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
@@ -178,8 +199,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Pushes that only touch the watch app or the docs must not restart the server.
-      - name: Check whether the server changed
+      # Pushes that only touch the watch app or the docs must not rebuild or restart the server.
+      - name: Check whether the backend changed
         id: changed
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -188,59 +209,29 @@ jobs:
           # When the previous commit is unknown (first push, force push) deploy to be safe.
           deploy=true
           if [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            git diff --quiet "$BEFORE" "$GITHUB_SHA" -- server && deploy=false
+            git diff --quiet "$BEFORE" "$GITHUB_SHA" -- backend .github/scripts && deploy=false
           fi
           echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
-          echo "Deploy the server: $deploy"
+          echo "Deploy the backend: $deploy"
+
+      # The image is tagged with the commit (to roll back to, and to tell what is running: `pigeondrop version`
+      # prints it) and as latest (what the Coolify application runs).
+      - name: Build and push the image
+        if: steps.changed.outputs.deploy == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}-backend"
+          echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker build backend \
+            --build-arg VERSION="$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --tag "$image:$GITHUB_SHA" --tag "$image:latest"
+          docker push "$image:$GITHUB_SHA"
+          docker push "$image:latest"
+          echo "Pushed $image:$GITHUB_SHA and $image:latest"
 
       - name: Deploy and wait for Coolify
         if: steps.changed.outputs.deploy == 'true'
-        run: |
-          set -euo pipefail
-
-          if [ -z "$COOLIFY_URL" ] || [ -z "$COOLIFY_TOKEN" ] || [ -z "$COOLIFY_APP_UUID" ]; then
-            echo "::warning::The Coolify secrets are not set, so nothing was deployed (see server/DEPLOY.md)"
-            exit 0
-          fi
-
-          base="${COOLIFY_URL%/}"
-          auth="Authorization: Bearer $COOLIFY_TOKEN"
-          trigger() {
-            curl -sS -o response.json -w '%{http_code}' -X "$1" -H "$auth" -H 'Accept: application/json' \
-              "$base/api/v1/deploy?uuid=$COOLIFY_APP_UUID&force=false"
-          }
-
-          code=$(trigger POST)
-          # Older Coolify versions only accept GET on this route.
-          if [ "$code" = 405 ]; then code=$(trigger GET); fi
-          if [ "$code" != 200 ]; then
-            echo "::error::Coolify answered HTTP $code"
-            cat response.json
-            exit 1
-          fi
-
-          deployment=$(jq -r '.deployments[0].deployment_uuid // empty' response.json)
-          if [ -z "$deployment" ]; then
-            echo "::error::Coolify did not return a deployment id"
-            cat response.json
-            exit 1
-          fi
-          echo "Deployment $deployment queued"
-
-          # Up to 15 minutes. A failed deployment fails this job, so a broken release is visible.
-          for attempt in $(seq 1 90); do
-            status=$(curl -sS -H "$auth" "$base/api/v1/deployments/$deployment" | jq -r '.status // "unknown"' || echo unknown)
-            echo "[$attempt] $status"
-            case "$status" in
-              finished)
-                echo "Deployed."
-                exit 0
-                ;;
-              failed | error | cancelled*)
-                echo "::error::The deployment ended as '$status' - see its log in Coolify"
-                exit 1
-                ;;
-            esac
-            sleep 10
-          done
-          echo "::warning::The deployment had not finished after 15 minutes - check Coolify"
+        run: .github/scripts/coolify-deploy.sh
