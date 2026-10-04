@@ -105,6 +105,7 @@
     $('who').textContent = user.email
     loadDevices()
     loadMessages(true)
+    loadStorage()
     var code = new URLSearchParams(location.search).get('code')
     if (code) lookup(code)
   }
@@ -143,6 +144,22 @@
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0')
   }
 
+  // 1 МБ here is 1 MiB, the unit the limit is set in, so that the limit reads as a round number.
+  function size(bytes) {
+    if (bytes < 1048576) return Math.round(bytes / 1024) + ' КБ'
+    var mb = bytes / 1048576
+    return String(mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10).replace('.', ',') + ' МБ'
+  }
+
+  function loadStorage() {
+    api('GET', '/v1/storage').then(function (res) {
+      if (res.status !== 200) return
+      var percent = Math.floor(res.data.usedBytes * 100 / res.data.limitBytes)
+      $('storage-line').textContent = 'Занято ' + size(res.data.usedBytes) + ' из ' + size(res.data.limitBytes) + ' (' + percent + '%).'
+      $('storage-warning').hidden = res.data.state === 'ok'
+    })
+  }
+
   function loadMessages(fresh) {
     if (fresh) { state.cursor = null; $('message-list').textContent = '' }
     var q = '?limit=20' + (state.cursor ? '&before=' + encodeURIComponent(state.cursor) : '')
@@ -154,7 +171,7 @@
         remove.addEventListener('click', function () {
           if (!confirm('Удалить эту запись насовсем?')) return
           api('DELETE', '/v1/messages/' + m.id).then(function (r) {
-            if (r.status === 204) loadMessages(true)
+            if (r.status === 204) { loadMessages(true); loadStorage() }
             else notice(explain(r), 'error')
           })
         })
@@ -174,6 +191,7 @@
       state.cursor = res.data.nextCursor
       $('more').hidden = !state.cursor
       $('message-empty').hidden = list.children.length > 0
+      $('delete-all').hidden = list.children.length === 0
     })
   }
 
@@ -233,6 +251,19 @@
     api('POST', '/v1/auth/logout').then(function () { notice('Вы вышли.', 'ok'); showGuest() })
   })
   $('more').addEventListener('click', function () { loadMessages(false) })
+
+  $('delete-all').addEventListener('click', function () {
+    if (!confirm('Удалить все записи насовсем? Это нельзя отменить.')) return
+    api('DELETE', '/v1/messages').then(function (r) {
+      if (r.status === 200) {
+        notice('Удалено записей: ' + r.data.deleted + '.', 'ok')
+        loadMessages(true)
+        loadStorage()
+      } else if (r.status !== 401) {
+        notice(explain(r), 'error')
+      }
+    })
+  })
 
   api('GET', '/v1/me').then(function (res) {
     if (res.status === 200) showUser(res.data)
