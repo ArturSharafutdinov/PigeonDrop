@@ -34,11 +34,17 @@ _Актуально на: 2026-10-03. Для часов и Side Service: кон�
 
 **`POST /v1/messages`**, заголовок `Authorization: Bearer <deviceToken>`, тело `{ "messageId": "<имя файла на часах>", "audio": "<base64 стандартного файла Ogg/Opus>" }`. Формат файла тот же, что описан для `/messages` ниже (упаковка на телефоне, `OggS`, 16 кГц, моно); формат Zepp сервер тоже принимает.
 
-- **`200 { ok:true, id, messageId, bytesReceived, duplicate, receivedAt }`** — запись сохранена за владельцем устройства. **Идемпотентно в пределах устройства по `messageId`:** повтор возвращает сохранённый результат (`duplicate: true`) и ничего не сохраняет заново; у другого устройства может быть такой же `messageId`. Запись сохраняется, даже если WAV из неё получить не удалось.
+- **`200 { ok:true, id, messageId, bytesReceived, duplicate, receivedAt, storage, pruned }`** — запись сохранена за владельцем устройства. **Идемпотентно в пределах устройства по `messageId`:** повтор возвращает сохранённый результат (`duplicate: true`, `pruned: 0`) и ничего не сохраняет заново; у другого устройства может быть такой же `messageId`. Запись сохраняется, даже если из неё не получилось декодировать звук (на странице тогда нет проигрывателя, только «Скачать оригинал»).
+  - **`storage`** — `{ state, usedBytes, limitBytes }`: насколько заполнено хранилище аккаунта (учитываются только файлы записей). `state`: `ok` (меньше 90%), `nearly_full` (от 90%), `full` (эта самая загрузка не поместилась и удалила старые записи). Часы показывают по нему предупреждение. Неизвестное значение `state` клиент игнорирует.
+  - **`pruned`** — сколько самых старых записей аккаунта эта загрузка удалила, чтобы освободить место.
 - **`401 { ok:false, code:"unauthorized" }`** — токена нет, он неизвестен или устройство отозвано. Side Service отвечает часам `{ unauthorized: true }`, часы забывают токен и просят привязаться заново.
-- `400 invalid_request` — тело не JSON, нет полей, `audio` не base64, `messageId` длиннее 255 символов или с управляющими символами; `413` — тело больше 8 МиБ.
+- **`413 { ok:false, code:"payload_too_large" }`** — запись больше 512 КиБ (минута звука около 140 КиБ) или тело запроса больше допустимого для загрузки (около 770 КБ). Повтор не поможет. Side Service отвечает часам `{ fileError: true }`: часы пропускают эту запись и продолжают с остальными.
+- **`429 { ok:false, code:"too_many_attempts" }`** с `Retry-After` — с этого устройства больше 60 загрузок в час (считается каждый запрос, повторы тоже). Side Service отвечает `{ rateLimited: true }`: часы останавливают отправку, оставляют записи в очереди и пробуют при следующем запуске, подключении или записи.
+- `400 invalid_request` — тело не JSON, нет полей, `audio` не base64, `messageId` длиннее 255 символов или с управляющими символами.
 
-Просмотр, прослушивание и удаление записей человеком (`GET/DELETE /v1/messages`, `/v1/devices`, страница `/pair`) часов не касаются.
+**Хранилище аккаунта.** На аккаунт приходится 100 МиБ записей. Новая запись принимается всегда; если она не помещается, сервер удаляет самые старые записи аккаунта (по времени получения) ровно настолько, чтобы она поместилась, и сообщает об этом в `storage.state = "full"` и `pruned`. Удаляются и строки, и файлы. Сервер не может сам послать сообщение на часы, поэтому предупреждение приходит только в ответе на загрузку. Файл WAV для браузера на сервере не хранится: он делается из оригинала при воспроизведении, в лимит идёт только оригинал.
+
+Просмотр, прослушивание и удаление записей человеком (`GET/DELETE /v1/messages`, `GET /v1/storage`, `/v1/devices`, страница `/pair`) часов не касаются.
 
 ## Прежний контракт (Node-прототип)
 
@@ -214,7 +220,7 @@ _Актуально на: 2026-10-03. Для часов и Side Service: кон�
 |---|---|---|
 | `POST /v1/device/code`, `POST /v1/device/token` | Side Service по просьбе часов (`pairStart`, `pairPoll`) | `PigeonDrop/app-side/pairing.js` |
 | `POST /v1/messages` | Side Service, после получения всех частей записи от часов, с токеном устройства | `PigeonDrop/app-side/uploads.js` |
-| `POST /v1/device/approve`, `GET /v1/device/pairing/:code`, `GET/DELETE /v1/devices`, `GET/DELETE /v1/messages`, `GET /v1/messages/:id/audio`, `/v1/auth/*`, `/v1/me` | Человек, на странице `/pair` (не часы и не Side Service) | `backend/internal/httpapi/pair.js` |
+| `POST /v1/device/approve`, `GET /v1/device/pairing/:code`, `GET/DELETE /v1/devices`, `GET/DELETE /v1/messages` (`DELETE` без id удаляет все записи), `GET /v1/storage`, `GET /v1/messages/:id/audio`, `/v1/auth/*`, `/v1/me` | Человек, на странице `/pair` (не часы и не Side Service) | `backend/internal/httpapi/pair.js` |
 | `POST /messages` (прежний) | Side Service, после получения всех частей записи от часов | `PigeonDrop/app-side/uploads.js` |
 | `POST /accounts` | Side Service (`registerAccount`) и `setup.html` (защитный upsert) | `PigeonDrop/app-side/index.js`, `server/public/setup.html` |
 | `GET /accounts/:code` | Side Service (`sync`) | `PigeonDrop/app-side/index.js` |
