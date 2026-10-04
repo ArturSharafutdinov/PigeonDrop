@@ -1,6 +1,6 @@
 // Reference tools for the Ogg/Opus tests. The Ogg reader here is written from the
 // specs (RFC 3533 pages, RFC 7845 Opus mapping) and deliberately shares no code with
-// utils/oggOpus.js (the packer) or server/convert-to-wav.js (the server's reader), so
+// utils/oggOpus.js (the packer) or the server's reader (backend/internal/audio), so
 // that a mistake in one of them cannot hide behind the same mistake in its checker.
 
 import crypto from 'node:crypto'

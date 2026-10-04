@@ -1,13 +1,13 @@
 # Деплой Go-сервера на VPS через Coolify и CI/CD
 
-Сервер из `backend/` собирается в Docker-образ **в GitHub Actions**, образ кладётся в реестр GitHub (GHCR), а Coolify на вашем VPS только скачивает готовый образ и запускает его. Так сборка Go не нагружает общий VPS. Приложение для часов так не выкладывается: оно публикуется через Zepp. Node-прототип из `server/` не выкладывается совсем.
+Сервер из `backend/` собирается в Docker-образ **в GitHub Actions**, образ кладётся в реестр GitHub (GHCR), а Coolify на вашем VPS только скачивает готовый образ и запускает его. Так сборка Go не нагружает общий VPS. Приложение для часов так не выкладывается: оно публикуется через Zepp.
 
 ## Как это работает
 
 ```
 git push в main (затрагивает backend/ или .github/scripts/)
    └─ GitHub Actions (.github/workflows/ci.yml)
-        ├─ backend, backend-contract, deploy-script — проверки
+        ├─ backend, deploy-script — проверки
         └─ deploy — только если проверки прошли
              1. собирает backend/Dockerfile и кладёт образ в GHCR:
                 ghcr.io/artursharafutdinov/pigeondrop-backend:<коммит> и :latest
