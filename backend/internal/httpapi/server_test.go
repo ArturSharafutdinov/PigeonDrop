@@ -58,6 +58,14 @@ func TestUnknownRoutesAreJSON404(t *testing.T) {
 		{http.MethodGet, "/nope"},
 		{http.MethodPost, "/healthz"}, // known path, wrong method
 		{http.MethodDelete, "/"},
+		// The routes of the Node prototype were removed on 2026-10-04; they must not come back by accident.
+		{http.MethodPost, "/messages"},
+		{http.MethodPost, "/accounts"},
+		{http.MethodGet, "/accounts/abc"},
+		{http.MethodPut, "/accounts/abc"},
+		{http.MethodGet, "/setup"},
+		{http.MethodGet, "/uploads"},
+		{http.MethodGet, "/uploads/2026-10-03_07-23-36-048.opus"},
 	} {
 		status, body, contentType := do(t, h, tc.method, tc.path)
 		if status != http.StatusNotFound || body["ok"] != false || body["error"] != "not found" || !strings.HasPrefix(contentType, "application/json") {

@@ -13,7 +13,7 @@ RUN mkdir /data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/pigeondrop /pigeondrop
-# STORAGE_DIR must be a persistent volume mounted at /data (recordings go to /data/uploads); it is
+# STORAGE_DIR must be a persistent volume mounted at /data (recordings go to /data/messages); it is
 # created here and owned by the unprivileged user so that a fresh Docker volume is writable.
 COPY --from=build --chown=65532:65532 /data /data
 ENV PORT=3000 \

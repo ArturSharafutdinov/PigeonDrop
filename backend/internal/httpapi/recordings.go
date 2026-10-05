@@ -22,14 +22,16 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
 )
 
-// The /v1 recordings. Unlike the prototype's /messages, each one belongs to a user and was sent by one of that
-// user's devices. The file is named after the message id (<id>.opus, as received), so nothing a client chooses
-// ever becomes a path. The WAV a browser plays is made from it on each request and never stored: only the
-// original takes room, and that is what an account's limit counts.
+// The recordings. Each one belongs to a user and was sent by one of that user's devices. The file is named
+// after the message id (<id>.opus, as received), so nothing a client chooses ever becomes a path. The WAV a
+// browser plays is made from it on each request and never stored: only the original takes room, and that is
+// what an account's limit counts.
 
 const (
 	defaultPageSize = 50
 	maxPageSize     = 100
+	// maxFileNameLength is the longest messageId: the name the watch gave the recording.
+	maxFileNameLength = 255
 )
 
 // plainText reports whether text from a client can be stored as it is: valid UTF-8 without control characters.

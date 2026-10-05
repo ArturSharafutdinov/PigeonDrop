@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -668,6 +669,36 @@ func TestAFailedInsertLeavesNoFilesBehind(t *testing.T) {
 	}
 	if names := e.storedNames(t); len(names) != 0 {
 		t.Fatalf("a failed upload left %v behind", names)
+	}
+}
+
+// brokenStore refuses every write, as a full disk does.
+type brokenStore struct{ storage.Store }
+
+func (brokenStore) Put(string, []byte) error { return errors.New("disk full") }
+
+func TestAStorageFailureIsAnErrorAndRecordsNothing(t *testing.T) {
+	e := newEnv(t)
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+	e.server.Messages = brokenStore{e.messages}
+
+	rec := e.uploadAs(token, "x", fixture(t, "tone.ogg"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d %s", rec.Code, rec.Body.String())
+	}
+	// Nothing was recorded, so the watch's retry is a fresh attempt, not a "duplicate" of a failure.
+	var rows int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM messages`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("a failed upload left %d rows behind", rows)
+	}
+
+	e.server.Messages = e.messages
+	if rec := e.uploadAs(token, "x", fixture(t, "tone.ogg")); rec.Code != http.StatusOK {
+		t.Fatalf("the retry after the disk recovered: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
