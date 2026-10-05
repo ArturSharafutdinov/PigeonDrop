@@ -3,13 +3,13 @@ name: CI/CD
 # Checks run on every push to main and on every pull request. Only a push to
 # main that touches backend/ (or the deploy script), or a manual run ("Run
 # workflow", which always deploys), can deploy, and only the Go server is
-# deployed: the watch app is published through Zepp, not from here, and the
-# Node prototype in server/ is not deployed at all. The image is built here and
-# pushed to GitHub's container registry; Coolify on the VPS only pulls and runs
-# it, so the build never competes with the other projects for the VPS. The
-# deploy job needs the three Coolify secrets described in backend/DEPLOY.md;
-# without them it still pushes the image, says that it did not deploy, and
-# finishes, so this workflow is safe to push before Coolify is set up.
+# deployed: the watch app is published through Zepp, not from here. The image
+# is built here and pushed to GitHub's container registry; Coolify on the VPS
+# only pulls and runs it, so the build never competes with the other projects
+# for the VPS. The deploy job needs the three Coolify secrets described in
+# backend/DEPLOY.md; without them it still pushes the image, says that it did
+# not deploy, and finishes, so this workflow is safe to push before Coolify is
+# set up.
 
 on:
   push:
@@ -25,27 +25,6 @@ permissions:
   contents: read
 
 jobs:
-  server:
-    name: Server tests and image
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-        working-directory: server
-      - name: Run tests
-        run: npm test
-        working-directory: server
-      # Catches a broken Dockerfile or lockfile before Coolify tries to build it.
-      - name: Build the Docker image
-        run: docker build --tag pigeondrop-server server
-
   backend:
     name: Go backend
     runs-on: ubuntu-latest
@@ -87,52 +66,6 @@ jobs:
         run: go test -race ./...
       - name: Build the Docker image
         run: docker build --tag pigeondrop-backend .
-
-  # Until the Node prototype is retired, the Go backend must keep answering exactly as the contract
-  # tests in server/test expect: those tests only use HTTP and the files in STORAGE_DIR/uploads, so
-  # they run unchanged against any implementation named in SERVER_CMD.
-  backend-contract:
-    name: Go backend passes the contract tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-      - name: Build the backend
-        run: go build -o bin/pigeondrop ./cmd/pigeondrop
-        working-directory: backend
-      - name: Create an empty database
-        run: PGPASSWORD=postgres psql -h localhost -U postgres -c 'CREATE DATABASE pigeon_contract'
-      - name: Install the test dependencies
-        run: npm ci
-        working-directory: server
-      - name: Run the contract tests against the Go binary
-        run: npm test
-        working-directory: server
-        env:
-          SERVER_CMD: ${{ github.workspace }}/backend/bin/pigeondrop serve
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/pigeon_contract?sslmode=disable
-          MIGRATE_ON_START: "true"
 
   watch-app:
     name: Watch app tests
@@ -183,7 +116,7 @@ jobs:
 
   deploy:
     name: Deploy to Coolify
-    needs: [backend, backend-contract, deploy-script]
+    needs: [backend, deploy-script]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 25

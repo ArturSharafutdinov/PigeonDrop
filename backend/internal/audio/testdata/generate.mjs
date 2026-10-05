@@ -10,8 +10,10 @@
 //   tone.ogg   the same packets wrapped as Ogg/Opus by PigeonDrop/utils/oggOpus.js (what the phone sends)
 //   tone.wav   libopus's decoding at 16 kHz, 16-bit mono (what the server must produce)
 //
-// Needs `npm install` in server/ (for opusscript). Once the Node prototype is removed, point it at another
-// copy of opusscript.
+// Needs opusscript 0.1.1 (libopus 1.4 compiled to WebAssembly), which is not a dependency of anything else in
+// the repository. Install it once without saving it anywhere, from the repository root (node_modules/ is ignored):
+//
+//   npm install --no-save opusscript@0.1.1
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -20,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..', '..', '..', '..')
-const OpusScript = createRequire(path.join(root, 'server', 'package.json'))('opusscript')
+const OpusScript = createRequire(import.meta.url)('opusscript') // found in the repository root's node_modules
 const { zeppToOggOpus } = await import(pathToFileURL(path.join(root, 'PigeonDrop', 'utils', 'oggOpus.js')).href)
 
 const SECONDS = 2
