@@ -20,24 +20,33 @@ run() { # mode, expected exit, expected output fragment, [extra env...]
   LAST_REQUESTS="$seen"
 }
 
+outfile="$(mktemp)"; trap 'rm -f "$outfile"' EXIT
+marked() { if grep -qx 'deployed=true' "$outfile"; then echo yes; else echo no; fi; }
+
 echo "success (queued, in progress, finished)"
-run ok 0 "Deployed."
+: > "$outfile"; run ok 0 "Deployed." GITHUB_OUTPUT="$outfile"
+check "ok: marks the deployment as deployed (for the image tag)" "$(marked)" yes
 case "$LAST_REQUESTS" in *"POST /api/v1/deploy?uuid=app-uuid&force=false auth=Bearer secret-token"*) check "ok: POST with the uuid, force=false and the bearer token" ok ok ;; *) check "ok: POST with the uuid, force=false and the bearer token" "$LAST_REQUESTS" ok ;; esac
 echo "older Coolify: POST refused with 405, GET works"
-run get-only 0 "Deployed."
+: > "$outfile"; run get-only 0 "Deployed." GITHUB_OUTPUT="$outfile"
+check "get-only: marks the deployment as deployed" "$(marked)" yes
 case "$LAST_REQUESTS" in *"GET /api/v1/deploy?uuid=app-uuid"*) check "get-only: falls back to GET" ok ok ;; *) check "get-only: falls back to GET" "$LAST_REQUESTS" ok ;; esac
 echo "failures are failures"
-run fail 1 "ended as 'failed'"
-run cancelled 1 "ended as 'cancelled-by-user'"
-run http500 1 "Coolify answered HTTP 500"
-run no-id 1 "did not return a deployment id"
+: > "$outfile"; run fail 1 "ended as 'failed'" GITHUB_OUTPUT="$outfile"
+check "fail: not marked as deployed" "$(marked)" no
+run cancelled 1 "ended as 'cancelled-by-user'" GITHUB_OUTPUT="$outfile"
+run http500 1 "Coolify answered HTTP 500" GITHUB_OUTPUT="$outfile"
+run no-id 1 "did not return a deployment id" GITHUB_OUTPUT="$outfile"
 echo "wrong token"
-run ok 1 "Coolify answered HTTP 401" COOLIFY_TOKEN=wrong
-echo "a deployment that never finishes is a warning, not a failure"
-run slow 0 "had not finished"
+run ok 1 "Coolify answered HTTP 401" COOLIFY_TOKEN=wrong GITHUB_OUTPUT="$outfile"
+check "wrong token: not marked as deployed" "$(marked)" no
+echo "a deployment that never finishes is a warning, not a failure, and does not count as deployed"
+run slow 0 "had not finished" GITHUB_OUTPUT="$outfile"
+check "slow: not marked as deployed" "$(marked)" no
 echo "no secrets: says so and exits 0"
-out=$(env -u COOLIFY_URL -u COOLIFY_TOKEN -u COOLIFY_APP_UUID "$SCRIPT" 2>&1); check "no secrets: exit code" "$?" 0
+: > "$outfile"; out=$(env -u COOLIFY_URL -u COOLIFY_TOKEN -u COOLIFY_APP_UUID GITHUB_OUTPUT="$outfile" "$SCRIPT" 2>&1); check "no secrets: exit code" "$?" 0
 case "$out" in *"secrets are not set"*) check "no secrets: warns" ok ok ;; *) check "no secrets: warns" "$out" ok ;; esac
+check "no secrets: not marked as deployed" "$(marked)" no
 out=$(env COOLIFY_URL=http://127.0.0.1:1 COOLIFY_TOKEN=x COOLIFY_APP_UUID= "$SCRIPT" 2>&1); check "one secret empty: exit code" "$?" 0
 echo "unreachable Coolify fails the job"
 if env COOLIFY_URL=http://127.0.0.1:1 COOLIFY_TOKEN=x COOLIFY_APP_UUID=u "$SCRIPT" >/dev/null 2>&1; then got=zero; else got=nonzero; fi

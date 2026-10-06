@@ -4,6 +4,8 @@
 # Needs COOLIFY_URL, COOLIFY_TOKEN and COOLIFY_APP_UUID in the environment (GitHub secrets, see
 # backend/DEPLOY.md). Without all three it says so and exits 0, so that the workflow is safe to push
 # before Coolify is set up. A deployment that fails, or that Coolify does not acknowledge, fails the job.
+# When Coolify reports the deployment as finished it also writes `deployed=true` to $GITHUB_OUTPUT; no
+# other outcome does, including the exits with a warning.
 #
 # POLL_SECONDS and POLL_ATTEMPTS only exist so that the script can be tested quickly against a fake Coolify.
 
@@ -51,6 +53,8 @@ for attempt in $(seq 1 "$poll_attempts"); do
   case "$status" in
     finished)
       echo "Deployed."
+      # Only this counts as deployed (not the warnings, which also exit 0): the workflow then marks the image.
+      echo "deployed=true" >> "${GITHUB_OUTPUT:-/dev/null}"
       exit 0
       ;;
     failed | error | cancelled*)
