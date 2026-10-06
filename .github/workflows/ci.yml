@@ -1,15 +1,18 @@
 name: CI/CD
 
 # Checks run on every push to main and on every pull request. Only a push to
-# main that touches backend/ (or the deploy script), or a manual run ("Run
-# workflow", which always deploys), can deploy, and only the Go server is
-# deployed: the watch app is published through Zepp, not from here. The image
-# is built here and pushed to GitHub's container registry; Coolify on the VPS
-# only pulls and runs it, so the build never competes with the other projects
-# for the VPS. The deploy job needs the three Coolify secrets described in
-# backend/DEPLOY.md; without them it still pushes the image, says that it did
-# not deploy, and finishes, so this workflow is safe to push before Coolify is
-# set up.
+# main after which backend/ (or the deploy script) differs from what is
+# deployed, or a manual run ("Run workflow", which always deploys), can deploy,
+# and only the Go server is deployed: the watch app is published through Zepp,
+# not from here. "What is deployed" is the commit in the image tagged
+# `deployed`, which this workflow sets after Coolify confirms a deployment (see
+# .github/scripts/backend-changed.sh for why it is not simply the previous
+# push). The image is built here and pushed to GitHub's container registry;
+# Coolify on the VPS only pulls and runs it, so the build never competes with
+# the other projects for the VPS. The deploy job needs the three Coolify
+# secrets described in backend/DEPLOY.md; without them it still pushes the
+# image, says that it did not deploy, and finishes, so this workflow is safe to
+# push before Coolify is set up.
 
 on:
   push:
@@ -113,6 +116,8 @@ jobs:
           node-version: 24
       - name: Run the tests against a fake Coolify
         run: .github/scripts/test/test-coolify-deploy.sh
+      - name: Run the tests of the check for backend changes
+        run: .github/scripts/test/test-backend-changed.sh
 
   deploy:
     name: Deploy to Coolify
@@ -132,39 +137,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Pushes that only touch the watch app or the docs must not rebuild or restart the server.
-      - name: Check whether the backend changed
-        id: changed
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          # When the previous commit is unknown (first push, force push) deploy to be safe.
-          deploy=true
-          if [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            git diff --quiet "$BEFORE" "$GITHUB_SHA" -- backend .github/scripts && deploy=false
-          fi
-          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
-          echo "Deploy the backend: $deploy"
-
-      # The image is tagged with the commit (to roll back to, and to tell what is running: `pigeondrop version`
-      # prints it) and as latest (what the Coolify application runs).
-      - name: Build and push the image
-        if: steps.changed.outputs.deploy == 'true'
+      - name: Log in to the registry
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          image="ghcr.io/${GITHUB_REPOSITORY,,}-backend"
           echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-backend" >> "$GITHUB_ENV"
+
+      # Pushes that only touch the watch app or the docs must not rebuild or restart the server, but a backend
+      # change that has not been deployed yet (its own run was cancelled or failed) must not be forgotten either.
+      - name: Check whether the backend changed since the last deployment
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEPLOYED_IMAGE: ${{ env.IMAGE }}:deployed
+        run: .github/scripts/backend-changed.sh
+
+      # The image is tagged with the commit (to roll back to, and to tell what is running: `pigeondrop version`
+      # prints it) and as latest (what the Coolify application runs). The label is how the next run finds out
+      # which commit an image was built from.
+      - name: Build and push the image
+        if: steps.changed.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
           docker build backend \
             --build-arg VERSION="$GITHUB_SHA" \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            --tag "$image:$GITHUB_SHA" --tag "$image:latest"
-          docker push "$image:$GITHUB_SHA"
-          docker push "$image:latest"
-          echo "Pushed $image:$GITHUB_SHA and $image:latest"
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$IMAGE:$GITHUB_SHA" --tag "$IMAGE:latest"
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+          echo "Pushed $IMAGE:$GITHUB_SHA and $IMAGE:latest"
 
       - name: Deploy and wait for Coolify
+        id: coolify
         if: steps.changed.outputs.deploy == 'true'
         run: .github/scripts/coolify-deploy.sh
+
+      # Only a deployment that Coolify confirmed counts: a failed or unconfirmed one leaves the tag where it was, so
+      # the next push deploys again, whatever it touches.
+      - name: Mark the commit as deployed
+        if: steps.coolify.outputs.deployed == 'true'
+        run: |
+          docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:deployed"
+          docker push "$IMAGE:deployed"
