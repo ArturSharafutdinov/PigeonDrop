@@ -18,6 +18,7 @@ import { getDeviceInfo } from '@zos/device'
 import { saveDevice } from '../utils/device'
 import { retryPendingUploads } from '../utils/uploadQueue'
 import { holdScreen, releaseScreen } from '../utils/screen'
+import { problemText, PHONE, SERVER } from '../utils/linkProblem'
 
 const REQUEST_TIMEOUT = 15000
 const DEFAULT_INTERVAL_S = 5
@@ -60,7 +61,7 @@ Page({
       y: px(355),
       w: px(480),
       h: px(110),
-      text: 'Соединение\nс сервером...',
+      text: 'Связь с телефоном\nи сервером...',
       text_size: px(24),
       color: 0xffffff,
       align_h: align.CENTER_H,
@@ -117,8 +118,17 @@ Page({
       .request({ type: 'pairStart', clientName: this.clientName() }, { timeout: REQUEST_TIMEOUT })
       .then(
         (reply) => this.onCode(reply),
-        (err) => this.onCode({ ok: false, error: String((err && err.message) || err) }),
+        (err) => this.onCode({ ok: false, noPhone: true, error: String((err && err.message) || err) }),
       )
+  },
+
+  // What to tell the person when no code could be had: the phone not answering and the phone not reaching the
+  // server need different things from them (utils/linkProblem.js); anything else the server said has its own words.
+  failureText(reply) {
+    if (reply && reply.code === 'too_many_attempts') return 'Слишком много попыток.\nПодождите'
+    if (reply && reply.noPhone) return problemText(PHONE)
+    if (reply && reply.noServer) return problemText(SERVER)
+    return 'Не удалось получить\nкод привязки'
   },
 
   onCode(reply) {
@@ -128,11 +138,12 @@ Page({
       console.log('pairStart failed:', reply && reply.error)
       this.state.failures++
       if (this.state.failures > START_RETRIES) {
-        this.setStatus('Не удалось начать\nпривязку.\nОткройте экран позже')
+        // It gives up, and says why in the words of the last failure, so the person knows what to fix.
+        this.setStatus(this.failureText(reply))
         releaseScreen()
         return
       }
-      this.setStatus(reply && reply.code === 'too_many_attempts' ? 'Слишком много попыток.\nПодождите' : 'Нет связи с телефоном\nили сервером...')
+      this.setStatus(this.failureText(reply))
       this.later(() => this.requestCode(), START_RETRY_DELAY_MS)
       return
     }

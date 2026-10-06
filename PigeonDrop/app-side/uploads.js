@@ -19,7 +19,9 @@
 // was paired. The watch sends the token with its chunks; this module keeps none of it
 // (it has no dependable storage) and presents it as `Authorization: Bearer` with the
 // final request, POST /v1/messages { messageId, audio: base64 } (API_SPEC.md). A token
-// the server refuses is reported as `unauthorized` so the watch can forget it. Other answers the watch
+// the server refuses is reported as `unauthorized` so the watch can forget it. A server that cannot be reached
+// (no internet on the phone, no answer in time, or a gateway error because the server behind the proxy is down) is
+// reported as `noServer`, so the watch can say that, and not "no answer from the phone". Other answers the watch
 // must tell apart: `fileError` (413, the recording is over the size limit and no retry will change that),
 // `rateLimited` (429, this watch uploads too often; later is fine), and on success `storage`, how full the
 // account is, which the watch turns into a warning (utils/storageState.js).
@@ -31,8 +33,13 @@
 
 import { zeppToOggOpus } from '../utils/oggOpus'
 import { base64ToBytes, bytesToBase64 } from './base64'
+import { withTimeout } from './timeout'
 
 const PENDING_TTL_MS = 10 * 60 * 1000 // abandoned partial uploads are dropped after this
+
+// How long the phone waits for the server before telling the watch it cannot reach it. The watch waits for the
+// reply to the last chunk for longer (LAST_CHUNK_TIMEOUT_MS in utils/uploadQueue.js), so this answer arrives in time.
+const SERVER_TIMEOUT_MS = 30 * 1000
 
 // fileName -> { uploadId, total, parts: string[], received, startedAt }
 let pending = {}
@@ -56,12 +63,15 @@ function parseBody(res) {
 }
 
 function forwardToServer(fileName, audio, baseUrl, deviceToken) {
-  return fetch({
-    url: baseUrl + '/v1/messages',
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + deviceToken },
-    body: JSON.stringify({ messageId: fileName, audio: audio }),
-  })
+  return withTimeout(
+    fetch({
+      url: baseUrl + '/v1/messages',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + deviceToken },
+      body: JSON.stringify({ messageId: fileName, audio: audio }),
+    }),
+    SERVER_TIMEOUT_MS,
+  )
     .then((res) => {
       // The token is unknown or revoked: nothing this watch sends will be accepted until it is paired again.
       // The status says so where the runtime reports one (checked before the body is read: a proxy's own 401
@@ -72,7 +82,16 @@ function forwardToServer(fileName, audio, baseUrl, deviceToken) {
       if (res.status === 401) return refused
       if (res.status === 413) return tooLarge
       if (res.status === 429) return tooOften
-      const data = parseBody(res)
+      // The proxy in front of the server answers when the server behind it is down (a restart, a deploy).
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        return { ok: false, noServer: true, error: 'server: HTTP ' + res.status }
+      }
+      let data
+      try {
+        data = parseBody(res)
+      } catch (e) {
+        return { ok: false, error: 'server: HTTP ' + res.status + ', not JSON' }
+      }
       if (data && data.code === 'unauthorized') return refused
       if (data && data.code === 'payload_too_large') return tooLarge
       if (data && data.code === 'too_many_attempts') return tooOften
@@ -83,7 +102,8 @@ function forwardToServer(fileName, audio, baseUrl, deviceToken) {
       }
       return { ok: true, done: true, bytesReceived: data.bytesReceived, id: data.id, duplicate: data.duplicate, storage: data.storage }
     })
-    .catch((err) => ({ ok: false, error: 'server: ' + String(err) }))
+    // Only the request itself can end up here now: no connection, or no answer in time.
+    .catch((err) => ({ ok: false, noServer: true, error: 'server: ' + String((err && err.message) || err) }))
 }
 
 // message: { fileName, uploadId, index, total, data, deviceToken }

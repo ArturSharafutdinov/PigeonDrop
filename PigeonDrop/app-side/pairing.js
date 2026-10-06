@@ -4,16 +4,26 @@
 // the server. Pairing follows RFC 8628: startPairing() gets a device code (the watch's secret) and a short user
 // code with the address to show as a QR code; pollPairing() asks whether the person has approved it yet and, once,
 // hands over the device token. Both return a Promise of the reply the watch receives. A reply is always
-// { ok: true, ... } or { ok: false, code, error }, and a transport failure is { ok: false, error } with no code.
+// { ok: true, ... } or { ok: false, code, error }, and a transport failure is { ok: false, noServer: true, error } with
+// no code: the phone could not reach the server, which the watch tells apart from a phone that does not answer at all.
 // Endpoint details are in API_SPEC.md.
 
+import { withTimeout } from './timeout'
+
+// Shorter than the watch's own wait for these requests (REQUEST_TIMEOUT in page/pair.js), so that "cannot reach
+// the server" comes back as an answer and is not mistaken for a phone that is not there.
+const SERVER_TIMEOUT_MS = 10 * 1000
+
 function post(url, body) {
-  return fetch({
-    url: url,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }).then((res) => (typeof res.body === 'string' ? JSON.parse(res.body) : res.body))
+  return withTimeout(
+    fetch({
+      url: url,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    SERVER_TIMEOUT_MS,
+  ).then((res) => (typeof res.body === 'string' ? JSON.parse(res.body) : res.body))
 }
 
 // The server's own error shape is { ok: false, code, error }; anything else is not an answer we understand.
@@ -24,8 +34,9 @@ function failure(data) {
   return { ok: false, error: 'unexpected answer from the server' }
 }
 
+// No connection, no answer in time, or an answer that is not JSON at all (a gateway's error page).
 function transportFailure(err) {
-  return { ok: false, error: 'server: ' + String((err && err.message) || err) }
+  return { ok: false, noServer: true, error: 'server: ' + String((err && err.message) || err) }
 }
 
 // message: { clientName }

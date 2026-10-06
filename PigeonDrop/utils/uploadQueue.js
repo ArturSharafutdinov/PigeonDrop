@@ -48,9 +48,17 @@ const UPLOADS_INDEX_FILE = 'uploads.json'
 // base64-encoded on its own without '=' padding, so the phone can join the
 // strings into the base64 of the whole file without decoding anything.
 const CHUNK_BYTES = 15 * 1024
-const CHUNK_TIMEOUT_MS = 60 * 1000
+// A chunk that is not the last is acknowledged by the phone at once, so a phone that is there answers within
+// seconds. The last chunk's reply carries the server's answer: the phone waits up to 30 s for the server
+// (app-side/uploads.js) before it answers "cannot reach it", so this wait must be longer than that.
+const CHUNK_TIMEOUT_MS = 30 * 1000
+const LAST_CHUNK_TIMEOUT_MS = 60 * 1000
 const CHUNK_RETRIES = 2 // extra attempts per chunk before the recording is given up on
 const CHUNK_RETRY_DELAY_MS = 1000
+// Before a sweep sends anything the phone is asked whether it is there at all (a request any reply to
+// satisfies), so that a Zepp app that does not answer is found in seconds, not after the first chunk's retries.
+const PING_TIMEOUT_MS = 10 * 1000
+const PING_RETRIES = 1
 const RETRY_PACING_MS = 300 // pause between two recordings in one sweep
 
 let sweepInFlight = false
@@ -123,7 +131,10 @@ export function pendingRecordings() {
 //                                                     'full' when the server's answers say the account's storage
 //                                                     just got nearly full (once), or that old recordings were
 //                                                     deleted to make room (every time): the screen warns about it
-//   { state: 'error', message, pending }              the sweep stopped on a failure
+//   { state: 'connecting', pending }                  a sweep started: the phone is being asked whether it is there
+//   { state: 'error', message, pending, kind }        the sweep stopped on a failure; kind is 'phone' (the phone did
+//                                                     not answer), 'server' (the phone could not reach the server)
+//                                                     or absent (anything else: `message` is the reason)
 //   { state: 'unpaired', pending, revoked }           nothing was sent because the watch is not paired;
 //                                                     revoked is true when the server just refused its token
 // Pass null to unsubscribe.
@@ -241,19 +252,36 @@ function openReader(path, size) {
   }
 }
 
-// One chunk, retried a couple of times on transport errors (timeout, BLE blip).
-function requestChunk(messageBuilder, message, retriesLeft) {
-  return messageBuilder.request(message, { timeout: CHUNK_TIMEOUT_MS }).catch((err) => {
-    if (retriesLeft <= 0) throw err
-    return delay(CHUNK_RETRY_DELAY_MS).then(() => requestChunk(messageBuilder, message, retriesLeft - 1))
+// One request to the phone, retried a couple of times on transport errors (timeout, BLE blip). When the retries
+// run out the error says the phone did not answer (`noPhone`): the phone is where the break is, not the server.
+function requestPhone(messageBuilder, message, timeoutMs, retriesLeft) {
+  return messageBuilder.request(message, { timeout: timeoutMs }).catch((err) => {
+    if (retriesLeft <= 0) {
+      const failure = err instanceof Error ? err : new Error(String(err))
+      failure.noPhone = true
+      throw failure
+    }
+    return delay(CHUNK_RETRY_DELAY_MS).then(() => requestPhone(messageBuilder, message, timeoutMs, retriesLeft - 1))
   })
+}
+
+function requestChunk(messageBuilder, message, isLast) {
+  return requestPhone(messageBuilder, message, isLast ? LAST_CHUNK_TIMEOUT_MS : CHUNK_TIMEOUT_MS, CHUNK_RETRIES)
+}
+
+// Is anybody there on the phone? Any reply is a yes (even an error: an older Side Service does not know `ping`);
+// only silence is a no.
+function checkPhone(messageBuilder) {
+  return requestPhone(messageBuilder, { type: 'ping' }, PING_TIMEOUT_MS, PING_RETRIES)
 }
 
 // Sends one recording chunk by chunk. Resolves with the phone's final reply, or
 // { skip: true } for an empty file (nothing to send). Rejects on failure; the error
 // has .restart = true if the phone lost its partial copy of the upload,
 // .local = true if the problem is with this file itself, .unauthorized = true if
-// the server refused the device token, and .rateLimited = true if it asked the watch to slow down.
+// the server refused the device token, .rateLimited = true if it asked the watch to slow down,
+// .noPhone = true if the phone did not answer, and .noServer = true if the phone answered that it
+// cannot reach the server.
 function sendRecording(item, onChunk) {
   const { messageBuilder } = getApp()._options.globalData
   const path = item.filePath.replace('data://', '')
@@ -292,7 +320,7 @@ function sendRecording(item, onChunk) {
     }
     onChunk(index, total)
 
-    return requestChunk(messageBuilder, message, CHUNK_RETRIES).then((reply) => {
+    return requestChunk(messageBuilder, message, index === total - 1).then((reply) => {
       if (!reply || reply.ok !== true) {
         const err = new Error((reply && reply.error) || 'phone rejected the chunk')
         err.restart = !!(reply && reply.restart)
@@ -302,6 +330,8 @@ function sendRecording(item, onChunk) {
         err.unauthorized = !!(reply && reply.unauthorized)
         // The server says this watch uploads too often: nothing is wrong with the file or the token.
         err.rateLimited = !!(reply && reply.rateLimited)
+        // The phone is there but cannot reach the server (no internet, no answer in time, the server is down).
+        err.noServer = !!(reply && reply.noServer)
         throw err
       }
       if (index < total - 1) return sendFrom(index + 1)
@@ -379,6 +409,7 @@ export function retryPendingUploads() {
   sweepInFlight = true
   sweepAlert = null
   const unreadable = [] // files this sweep could not read, reported when it ends
+  emit({ state: 'connecting', pending: pending.length })
 
   const sendFrom = (i) => {
     if (i >= pending.length) return Promise.resolve()
@@ -412,7 +443,15 @@ export function retryPendingUploads() {
     )
   }
 
-  sendFrom(0)
+  // The phone is asked before anything is read or sent; a phone that does not answer ends the sweep here.
+  let phoneCheck
+  try {
+    phoneCheck = checkPhone(getApp()._options.globalData.messageBuilder)
+  } catch (err) {
+    phoneCheck = Promise.reject(err)
+  }
+  phoneCheck
+    .then(() => sendFrom(0))
     .then(() => {
       sweepInFlight = false
       if (unreadable.length > 0) {
@@ -443,6 +482,8 @@ export function retryPendingUploads() {
         emit({ state: 'error', message: 'Слишком много загрузок.\nПовторите позже', pending: pendingRecordings().length })
         return
       }
-      emit({ state: 'error', message: shortReason(err), pending: pendingRecordings().length })
+      // Which link broke, for the screen (utils/linkProblem.js): `message` stays the technical reason.
+      const kind = err && err.noPhone ? 'phone' : err && err.noServer ? 'server' : undefined
+      emit({ state: 'error', kind: kind, message: shortReason(err), pending: pendingRecordings().length })
     })
 }
