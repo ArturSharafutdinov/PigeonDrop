@@ -1,0 +1,3 @@
+# shellcheck follows the sourced library next to each script (the CI job runs it without flags).
+source-path=SCRIPTDIR
+external-sources=true
