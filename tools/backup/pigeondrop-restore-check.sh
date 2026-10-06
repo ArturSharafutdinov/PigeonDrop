@@ -64,9 +64,13 @@ locate() { # name, override
 }
 db_dir="$(locate pigeondrop-db "${PIGEONDROP_RESTORED_DB_DIR:-}")"
 data_dir="$(locate pigeondrop-data "${PIGEONDROP_RESTORED_DATA_DIR:-}")"
-[ -n "$db_dir" ] && [ -f "$db_dir/$DB_NAME.sql" ] || die "no pigeondrop-db/$DB_NAME.sql under $restored (was the dump directory part of the snapshot?)"
+if [ -z "$db_dir" ] || [ ! -f "$db_dir/$DB_NAME.sql" ]; then
+  die "no pigeondrop-db/$DB_NAME.sql under $restored (was the dump directory part of the snapshot?)"
+fi
 [ -f "$db_dir/BACKUP_INFO" ] || die "no BACKUP_INFO next to the dump"
-[ -n "$data_dir" ] && [ -d "$data_dir/messages" ] || die "no pigeondrop-data/messages under $restored (was the recordings volume part of the snapshot?)"
+if [ -z "$data_dir" ] || [ ! -d "$data_dir/messages" ]; then
+  die "no pigeondrop-data/messages under $restored (was the recordings volume part of the snapshot?)"
+fi
 
 info() { sed -n "s/^$1=//p" "$db_dir/BACKUP_INFO" | head -n 1; }
 dumped_at="$(info dumped_at)"

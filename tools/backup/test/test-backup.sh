@@ -19,7 +19,7 @@ check() { if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1 (wante
 listing() { find "$work/backups" -mindepth 1 -maxdepth 1 | sed 's|.*/||' | sort | tr '\n' ' '; }
 contains() { case "$2" in *"$3"*) check "$1" ok ok ;; *) check "$1" "no: $(echo "$2" | tr '\n' '|' | cut -c1-300)" ok ;; esac; }
 
-# shellcheck disable=SC2329 # runs from the EXIT trap
+# shellcheck disable=SC2317,SC2329 # runs from the EXIT trap (which of the two codes is reported depends on the shellcheck version)
 cleanup() {
   docker rm -f "$pgname" "$pg2name" "$pg2name-notpg" > /dev/null 2>&1; docker rmi pd-backup-test-notpg:1 > /dev/null 2>&1
   [ -z "$hc_pid" ] || kill "$hc_pid" 2> /dev/null
@@ -192,7 +192,7 @@ fresh() { # a restored snapshot, laid out the way restic restores it
   cp "$work/backups/pigeondrop.sql" "$work/backups/BACKUP_INFO" "$work/restored/backup/pigeondrop-db/"
   cp -R "$work/data" "$work/restored/backup/pigeondrop-data"
 }
-scratch_exists() { docker exec -e PGPASSWORD=secret "$pgname" psql -U pg -h 127.0.0.1 -d postgres -Atc "select count(*) from pg_database where datname='${1:-pigeondrop_restore_test}'"; }
+scratch_exists() { docker exec -e PGPASSWORD=secret "$pgname" psql -U pg -h 127.0.0.1 -d postgres -Atc "select count(*) from pg_database where datname='pigeondrop_restore_test'"; }
 R="$work/restored/backup/pigeondrop-db"; F="$work/restored/backup/pigeondrop-data/messages"
 
 echo "restoring a good snapshot"
