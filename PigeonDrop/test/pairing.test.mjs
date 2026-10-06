@@ -7,7 +7,8 @@ let failures = 0
 const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failures++ }
 
 // ---- the phone's half ------------------------------------------------------------------------
-const PAIRING = generate('app-side/pairing.js', {})
+const TIMEOUT = generate('app-side/timeout.js', {})
+const PAIRING = generate('app-side/pairing.js', { './timeout': TIMEOUT })
 const P = await import(fileUrl(PAIRING))
 const fetches = []
 let serverAnswer = null
@@ -34,7 +35,18 @@ console.log('2. startPairing: failures come back as replies, never as exceptions
 { answer({ ok: false, code: 'too_many_attempts', error: 'too many failed attempts, try again later' }); const r = await P.startPairing({}, 'https://s.example')
   ok(r.ok === false && r.code === 'too_many_attempts' && /too many/.test(r.error), 'the server\'s refusal keeps its code -> ' + JSON.stringify(r)) }
 { answer(new Error('Network down')); const r = await P.startPairing({}, 'https://s.example')
-  ok(r.ok === false && r.code === undefined && /Network down/.test(r.error), 'unreachable server -> ok:false without a code -> ' + JSON.stringify(r)) }
+  ok(r.ok === false && r.code === undefined && /Network down/.test(r.error), 'unreachable server -> ok:false without a code -> ' + JSON.stringify(r))
+  ok(r.noServer === true, '...marked as "the phone cannot reach the server", which the watch tells from a phone that does not answer') }
+{ const realSetTimeout = globalThis.setTimeout, asked = []; globalThis.setTimeout = (fn, ms) => { asked.push(ms); return realSetTimeout(fn, 0) }   // the deadline passes at once
+  answer(() => new Promise(() => {})); const start = await P.startPairing({}, 'https://s.example'); const poll = await P.pollPairing({ deviceCode: 'x' }, 'https://s.example')
+  globalThis.setTimeout = realSetTimeout
+  ok(asked.length === 2 && asked.every((ms) => ms === 10000), 'the phone gives the server 10 s, less than the 15 s the watch waits for these requests (REQUEST_TIMEOUT in page/pair.js) -> ' + JSON.stringify(asked))
+  ok(start.ok === false && start.noServer === true && /no answer/.test(start.error), 'a request that never finishes ends at the phone\'s own deadline: no server, not silence -> ' + JSON.stringify(start))
+  ok(poll.ok === false && poll.noServer === true, 'polling too -> ' + JSON.stringify(poll)) }
+{ answer(() => ({ status: 502, body: '<html>Bad Gateway</html>' })); const r = await P.startPairing({}, 'https://s.example')
+  ok(r.ok === false && r.noServer === true, 'a gateway\'s error page is "no server" as well -> ' + JSON.stringify(r)) }
+{ answer({ ok: false, code: 'too_many_attempts', error: 'x' }); const r = await P.startPairing({}, 'https://s.example')
+  ok(r.noServer === undefined, 'a refusal from the server itself is not "no server" -> ' + JSON.stringify(r)) }
 for (const [label, body] of [['an HTML page', '<html>bad gateway</html>'], ['an empty body', ''], ['JSON of another shape', { hello: 'world' }], ['a code without the rest', { deviceCode: 'x' }]]) {
   answer(body); const r = await P.startPairing({}, 'https://s.example')
   ok(r.ok === false && typeof r.error === 'string', label + ' -> ok:false -> ' + JSON.stringify(r)) }
@@ -62,13 +74,14 @@ globalThis.setTimeout = (fn, ms) => { const id = nextId++; timers.push({ id, fn,
 globalThis.clearTimeout = (id) => { timers = timers.filter((t) => t.id !== id) }
 Date.now = () => now
 const S = stubPath('pair-page.mjs')
-const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/uploadQueue': S, '../utils/screen': S })
+const LINK = generate('utils/linkProblem.js', {})   // the real texts: what the screen says is what is tested
+const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': LINK })
 await import(fileUrl(PAGE))
 
 // A scripted phone: each request waits for the test to answer it.
 function scenario() {
-  const s = { requests: [], pending: [] }
-  globalThis.getApp = () => ({ _options: { globalData: { messageBuilder: { request: (msg) => new Promise((resolve, reject) => { s.requests.push(msg); s.pending.push({ resolve, reject }) }) } } } })
+  const s = { requests: [], timeouts: [], pending: [] }
+  globalThis.getApp = () => ({ _options: { globalData: { messageBuilder: { request: (msg, opts) => new Promise((resolve, reject) => { s.requests.push(msg); s.timeouts.push(opts && opts.timeout); s.pending.push({ resolve, reject }) }) } } } })
   s.reply = async (value) => { s.pending.shift().resolve(value); await flush() }
   s.fail = async (err) => { s.pending.shift().reject(err); await flush() }
   return s
@@ -86,7 +99,8 @@ console.log('4. the happy path: code, QR, polling, approval, token saved')
 { const ph = scenario(); const page = fresh(); page.build()
   ok(stubs.holds.length === 1 && stubs.holds[0] >= 10 * 60 * 1000 && stubs.holds[0] <= 15 * 60 * 1000, 'the screen is held for about the code\'s lifetime, no more -> ' + stubs.holds[0] + ' ms')
   ok(ph.requests.length === 1 && ph.requests[0].type === 'pairStart' && ph.requests[0].clientName === 'Amazfit Test', 'asks the phone for a code, naming the watch -> ' + JSON.stringify(ph.requests[0]))
-  ok(!qr() && status() === 'Соединение\nс сервером...', 'before the answer: no QR yet, "connecting" shown')
+  ok(ph.timeouts[0] === 15000 && ph.timeouts[0] > 10000, 'the watch waits 15 s for it: longer than the 10 s the phone gives the server, so "no server" always comes back as an answer -> ' + ph.timeouts[0])
+  ok(!qr() && status() === 'Связь с телефоном\nи сервером...', 'before the answer: no QR yet, "connecting" shown')
   await ph.reply({ ok: true, ...CODES })
   ok(qr() && qr().opts.content === 'https://s.example/pair?code=BCDF-GHJK', 'QR code points at the address the server gave -> ' + (qr() && qr().opts.content))
   ok(/BCDF-GHJK/.test(status()), 'the code is also shown as text -> ' + JSON.stringify(status()))
@@ -140,17 +154,33 @@ for (const code of ['expired_token', 'invalid_device_code']) {
 
 console.log('8. no code to start with')
 { const ph = scenario(); const page = fresh(); page.build()
-  await ph.reply({ ok: false, error: 'server: Network down' })
+  await ph.reply({ ok: false, noServer: true, error: 'server: Network down' })
   ok(/Нет связи/.test(status()) && JSON.stringify(timerDelays()) === '[4000]' && !qr(), 'the first failure is shown and retried after 4 s, with no QR -> ' + JSON.stringify(status()))
   await fire(4000); ok(ph.requests.length === 2 && ph.requests[1].type === 'pairStart', 'it asks for a code again')
   await ph.fail(new Error('Timed out')); await fire(4000); await ph.reply({ ok: true, ...CODES })
   ok(qr() && /BCDF-GHJK/.test(status()), 'once the phone answers, the code appears') }
 { const ph = scenario(); const page = fresh(); page.build()
-  for (let i = 0; i < 6; i++) { await ph.reply({ ok: false, error: 'server: Network down' }); if (timers.length) await fire(4000) }
+  for (let i = 0; i < 6; i++) { await ph.reply({ ok: false, error: 'rejected' }); if (timers.length) await fire(4000) }
   ok(ph.requests.length === 6 && timers.length === 0 && /Не удалось/.test(status()), 'after 6 failed attempts it gives up with a message instead of retrying forever -> ' + ph.requests.length + ' requests')
   ok(stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), 'and releases the screen') }
 { const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: false, code: 'too_many_attempts', error: 'x' })
   ok(/Слишком много/.test(status()) && timerDelays()[0] === 4000, 'too many attempts is explained, then retried') }
+
+console.log('8b. the two link problems are told apart, with what to do about each')
+{ const ph = scenario(); const page = fresh(); page.build(); await ph.fail(new Error('Timed out in 15000ms.'))
+  ok(status() === 'Нет связи с телефоном\nПерезапустите\nприложение Zepp', 'the phone does not answer (the request times out): restart Zepp -> ' + JSON.stringify(status()))
+  await fire(4000); await ph.reply({ ok: false, noServer: true, error: 'server: no answer in 10 s' })
+  ok(status() === 'Нет связи с сервером\nПроверьте интернет\nна телефоне', 'the phone answers that it cannot reach the server: check the internet -> ' + JSON.stringify(status()))
+  await fire(4000); await ph.reply({ ok: false, code: 'invalid_request', error: 'x' })
+  ok(status() === 'Не удалось получить\nкод привязки', 'any other refusal has neither piece of advice -> ' + JSON.stringify(status()))
+  await fire(4000); await ph.reply({ ok: true, ...CODES })
+  ok(qr() && /BCDF-GHJK/.test(status()), 'and when the phone is back, the code appears') }
+{ const ph = scenario(); const page = fresh(); page.build()
+  for (let i = 0; i < 6; i++) { await ph.fail(new Error('Timed out in 15000ms.')); if (timers.length) await fire(4000) }
+  ok(ph.requests.length === 6 && timers.length === 0 && status() === 'Нет связи с телефоном\nПерезапустите\nприложение Zepp', 'giving up keeps the reason on the screen, so the person knows what to fix -> ' + JSON.stringify(status())) }
+{ const ph = scenario(); const page = fresh(); page.build()
+  for (let i = 0; i < 6; i++) { await ph.reply({ ok: false, noServer: true, error: 'server: Network down' }); if (timers.length) await fire(4000) }
+  ok(timers.length === 0 && status() === 'Нет связи с сервером\nПроверьте интернет\nна телефоне', 'the same for a server that cannot be reached -> ' + JSON.stringify(status())) }
 
 console.log('9. leaving the screen')
 { const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: true, ...CODES }); page.onDestroy()

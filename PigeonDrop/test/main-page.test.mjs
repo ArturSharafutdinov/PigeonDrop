@@ -13,9 +13,10 @@ globalThis.clearTimeout = (id) => { timeouts = timeouts.filter((t) => t.id !== i
 const fireTimeouts = (ms) => { const due = timeouts.filter((t) => t.ms === ms); timeouts = timeouts.filter((t) => t.ms !== ms); due.forEach((t) => t.fn()) }
 Date.now = () => now
 const S = stubPath('main-page.mjs')
+const LINK = generate('utils/linkProblem.js', {})   // the real texts: what the screen says is what is tested
 const PAGE = generate('page/index.js', {
   '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S, '@zos/display': S,
-  '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S, '../config': S,
+  '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S, '../utils/linkProblem': LINK, '../config': S,
 })
 await import(fileUrl(PAGE))
 const mk = () => Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) })
@@ -93,6 +94,15 @@ stubs.listener({ state: 'done', pending: 2 }); ok(last() === 'В очереди:
 stubs.listener({ state: 'done', pending: 0 }); ok(last().startsWith('Отправлено'), 'done -> ' + JSON.stringify(last().split('\n')[0]))
 stubs.listener({ state: 'error', message: 'Timed out in 60000ms.', pending: 3 })
 ok(last() === 'Не удалось отправить\nTimed out in 60000ms.\nВ очереди: 3', 'error shown, not silent -> ' + JSON.stringify(last()))
+stubs.listener({ state: 'connecting', pending: 2 }); ok(last() === 'Связь с телефоном...\nВ очереди: 2', 'connecting -> ' + JSON.stringify(last()))
+// The two link problems get their own words, with what to do about each; every other failure keeps its own reason.
+stubs.listener({ state: 'error', kind: 'phone', message: 'Timed out in 10000ms.', pending: 3 })
+ok(last() === 'Нет связи с телефоном\nПерезапустите\nприложение Zepp\nВ очереди: 3', 'the phone does not answer: says so and tells to restart Zepp -> ' + JSON.stringify(last()))
+stubs.listener({ state: 'error', kind: 'server', message: 'server: no answer in 30 s', pending: 1 })
+ok(last() === 'Нет связи с сервером\nПроверьте интернет\nна телефоне\nВ очереди: 1', 'the phone cannot reach the server: says so -> ' + JSON.stringify(last()))
+ok(!last().includes('Zepp') && !last().includes('server:'), '...without the other problem\'s advice or the technical reason')
+stubs.listener({ state: 'error', kind: 'other', message: 'cannot open file', pending: 1 })
+ok(last() === 'Не удалось отправить\ncannot open file\nВ очереди: 1', 'an unknown kind falls back to the reason -> ' + JSON.stringify(last()))
 reset(); page.toggleRecording(); reset(); page.onDestroy()
 ok(stubs.log.includes('onUploadState null') && stubs.log.includes('setActive null') && stubs.log.includes('recorder.stop'), 'onDestroy unsubscribes, closes the recording and clears the active file')
 

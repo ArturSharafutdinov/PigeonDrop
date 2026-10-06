@@ -24,6 +24,7 @@ import {
   onUploadState,
 } from '../utils/uploadQueue'
 import { isPaired } from '../utils/device'
+import { problemText } from '../utils/linkProblem'
 import { MAX_RECORDING_SECONDS } from '../config'
 
 // How long the screen is kept awake for an upload, so it can be sent to the
@@ -347,7 +348,11 @@ Page({
 
     if (this.state.recording) return
 
-    if (state.state === 'sending') {
+    if (state.state === 'connecting') {
+      // The phone is being asked whether it is there. A phone that does not answer turns this into the
+      // "restart Zepp" error within about 20 seconds, so this text never stays for long.
+      this.updateStatus('Связь с телефоном...\nВ очереди: ' + state.pending)
+    } else if (state.state === 'sending') {
       this.extendUploadHold()
       this.updateStatus('Отправка ' + state.index + ' из ' + state.count + '\nчасть ' + state.chunk + ' из ' + state.total)
     } else if (state.state === 'done') {
@@ -358,7 +363,14 @@ Page({
       // can be read.
       if (state.pending === 0 && this.state.uploadHoldTimer !== null) this.endUploadHold()
     } else if (state.state === 'error') {
-      this.updateStatus('Не удалось отправить\n' + state.message + '\nВ очереди: ' + state.pending)
+      // A broken link between the phone and the watch, or between the phone and the server, is told in words
+      // the person can act on (utils/linkProblem.js); any other failure shows its own reason.
+      const problem = problemText(state.kind)
+      this.updateStatus(
+        problem
+          ? problem + '\nВ очереди: ' + state.pending
+          : 'Не удалось отправить\n' + state.message + '\nВ очереди: ' + state.pending,
+      )
     } else if (state.state === 'unpaired') {
       // Nothing was sent. The recordings are kept and go out as soon as the watch is paired.
       this.updateStatus(

@@ -13,9 +13,11 @@ const STORAGE = generate('utils/storageState.js', { '@zos/fs': FS })
 const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, './storageState': STORAGE, '../config': DEPS })
 const OGG = generate('utils/oggOpus.js', {})
 const BASE64 = generate('app-side/base64.js', {})
-const UPLOADS = generate('app-side/uploads.js', { '../utils/oggOpus': OGG, './base64': BASE64 })
+const TIMEOUT = generate('app-side/timeout.js', {})
+const UPLOADS = generate('app-side/uploads.js', { '../utils/oggOpus': OGG, './base64': BASE64, './timeout': TIMEOUT })
 const realSetTimeout = setTimeout
-globalThis.setTimeout = (fn) => realSetTimeout(fn, 0)           // collapse every pacing/retry delay
+const timerRequests = []                                         // how long each timer was asked to wait, before collapsing it
+globalThis.setTimeout = (fn, ms) => { timerRequests.push(ms); return realSetTimeout(fn, 0) }   // collapse every pacing/retry delay
 let T = 0, failures = 0
 const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failures++ }
 const tick = () => new Promise((r) => realSetTimeout(r, 25))
@@ -27,14 +29,19 @@ async function world() {
   ctl.root = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-')); ctl.shortRead = null; ctl.readCalls = 0; ctl.failOpen = ctl.failStat = ctl.failWhole = ctl.failWrite = null; resetFds()
   const Q = await import(fileUrl(QUEUE) + '?t=' + n)
   const U = await import(fileUrl(UPLOADS) + '?t=' + n)
-  const w = { Q, U, states: [], requests: [], posts: [], inflight: 0, maxInflight: 0, failRequests: new Set(), serverReply: null, serverStatus: 200, serverThrows: false, replyFor: null, hooks: {}, now: Date.now() }
+  const w = { Q, U, states: [], requests: [], pings: [], pingFails: new Set(), pingReply: null, posts: [], inflight: 0, maxInflight: 0, failRequests: new Set(), serverReply: null, serverStatus: 200, serverThrows: false, replyFor: null, hooks: {}, now: Date.now() }
   Q.onUploadState((s) => w.states.push(s))
   const builder = {
     request: async (msg, opts) => {
       w.inflight++; w.maxInflight = Math.max(w.maxInflight, w.inflight)
       try {
         const wire = JSON.parse(JSON.stringify(msg))                          // what actually crosses BLE
-        w.requests.push({ file: wire.fileName, index: wire.index, total: wire.total, id: wire.uploadId, bytes: wire.data.length, token: wire.deviceToken })
+        if (wire.type === 'ping') {                                            // "is anybody there?" before a sweep
+          w.pings.push(opts.timeout)
+          if (w.pingFails.has(w.pings.length)) throw new Error('Timed out in ' + opts.timeout + 'ms.')
+          return w.pingReply || { ok: true }
+        }
+        w.requests.push({ file: wire.fileName, index: wire.index, total: wire.total, id: wire.uploadId, bytes: wire.data.length, token: wire.deviceToken, timeout: opts.timeout })
         if (w.hooks.before) await w.hooks.before(wire, w)
         if (w.failRequests.has(w.requests.length)) throw new Error('Timed out in ' + opts.timeout + 'ms.')
         return JSON.parse(JSON.stringify(await U.handleUploadChunk(wire, 'https://default.example')))
@@ -70,7 +77,7 @@ console.log('1. 60 s recording (~160 KB): chunked, strictly sequential, the serv
   ok(w.posts.length === 1 && sameAudio(w.posts[0].audio, file), 'server received ONE POST whose audio is a clean Ogg/Opus file carrying exactly the recording\'s packets')
   ok(w.posts[0].url === 'https://default.example/v1/messages' && w.posts[0].messageId === 'voice_1000.opus', 'posted to the server at /v1/messages, the file name sent as messageId')
   ok(JSON.stringify(uploaded()) === '["voice_1000.opus"]', 'marked uploaded only after the server confirmed')
-  ok(w.states[0].state === 'sending' && w.states.at(-1).state === 'done' && w.states.at(-1).pending === 0, 'UI states: sending ... done(pending 0)')
+  ok(w.states[0].state === 'connecting' && w.states[1].state === 'sending' && w.states.at(-1).state === 'done' && w.states.at(-1).pending === 0, 'UI states: connecting, sending ... done(pending 0)')
   ok(w.states.filter((s) => s.state === 'sending').map((s) => s.chunk + '/' + s.total).join(' ') === Array.from({ length: 11 }, (_, i) => (i + 1) + '/11').join(' '), 'progress reports chunk 1/11 .. 11/11') }
 
 console.log('2. size edge cases: 1 B, 100 B, exactly 1 chunk, 3 chunks, one byte over')
@@ -87,6 +94,7 @@ console.log('3. transport failures: retried per chunk, then give up cleanly')
   w.Q.retryPendingUploads(); await finished(w)
   const last = w.states.at(-1)
   ok(last.state === 'error' && /Timed out/.test(last.message) && last.pending === 2, 'three failures -> error state with reason, pending=2 -> ' + JSON.stringify(last))
+  ok(last.kind === 'phone', 'and it is put as a problem with the PHONE (no answer), not with the server -> kind ' + last.kind)
   ok(w.posts.length === 0 && uploaded().length === 0, 'nothing posted, nothing marked uploaded')
   ok(!w.requests.some((r) => r.file === 'voice_9.opus'), 'sweep STOPPED: the second recording was not attempted')
   w.failRequests = new Set(); w.requests.length = 0; w.Q.retryPendingUploads(); await until(() => uploaded().length === 2)
@@ -102,10 +110,12 @@ console.log('4. phone lost its partial copy mid-upload (Side Service restarted)'
 console.log('5. server problems are not mistaken for success')
 { const w = await world(); addRecording(w, 'voice_12.opus', 30000); w.serverReply = { ok: false, error: 'invalid JSON body' }
   w.Q.retryPendingUploads(); await finished(w)
-  ok(w.states.at(-1).state === 'error' && /server: invalid JSON body/.test(w.states.at(-1).message) && uploaded().length === 0, 'HTTP-level rejection -> not marked uploaded; reason shown -> ' + w.states.at(-1).message) }
+  ok(w.states.at(-1).state === 'error' && /server: invalid JSON body/.test(w.states.at(-1).message) && uploaded().length === 0, 'HTTP-level rejection -> not marked uploaded; reason shown -> ' + w.states.at(-1).message)
+  ok(w.states.at(-1).kind === undefined, 'a server that answered with a refusal is neither "no phone" nor "no server" -> kind ' + w.states.at(-1).kind) }
 { const w = await world(); addRecording(w, 'voice_13.opus', 30000); w.serverThrows = true
   w.Q.retryPendingUploads(); await finished(w)
-  ok(w.states.at(-1).state === 'error' && /Network down/.test(w.states.at(-1).message) && uploaded().length === 0, 'server unreachable -> not marked uploaded -> ' + w.states.at(-1).message) }
+  ok(w.states.at(-1).state === 'error' && /Network down/.test(w.states.at(-1).message) && uploaded().length === 0, 'server unreachable -> not marked uploaded -> ' + w.states.at(-1).message)
+  ok(w.states.at(-1).kind === 'server', 'and it is put as a problem between the phone and the server -> kind ' + w.states.at(-1).kind) }
 
 console.log('6. a recording still being written is left alone')
 { const w = await world(); addRecording(w, 'voice_20.opus', 40000); addRecording(w, 'voice_21.opus', 40000)
@@ -350,6 +360,67 @@ console.log('26. the watch is unpaired (token refused): the storage warning is f
 { const w = await world(); device.token = null; addRecording(w, 'voice_630.opus', 20000); fs.writeFileSync(storageFile(), '{"state":"full"}')
   w.Q.retryPendingUploads(); await tick()
   ok(fs.existsSync(storageFile()), 'a watch that was merely never paired this session keeps what it knew') }
+
+console.log('27. a phone that does not answer is found by a ping, quickly, before anything is read or sent')
+{ const w = await world(); addRecording(w, 'voice_700.opus', 100000); w.pingFails = new Set([1, 2])             // the ping and its one retry
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(w.states[0].state === 'connecting' && w.states[0].pending === 1, 'the screen is told the phone is being asked -> ' + JSON.stringify(w.states[0]))
+  ok(last.state === 'error' && last.kind === 'phone' && last.pending === 1, 'then: error, kind phone, the recording still waiting -> ' + JSON.stringify(last))
+  ok(w.pings.length === 2 && w.pings.every((t) => t === 10000), 'two pings of 10 s (1 + 1 retry), so the answer comes in ~20 s, not minutes -> ' + JSON.stringify(w.pings))
+  ok(w.requests.length === 0 && w.posts.length === 0 && files().includes('voice_700.opus') && uploaded().length === 0, 'no chunk was sent, nothing posted, the recording is kept')
+  w.requests.length = 0; w.states.length = 0; w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'done' && w.posts.length === 1 && uploaded().length === 1, 'when the phone is back, the next trigger delivers it') }
+{ const w = await world(); addRecording(w, 'voice_701.opus', 100000); w.pingFails = new Set([1])                // one lost ping is retried
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'done' && w.pings.length === 2, 'one lost ping is retried and the upload goes on') }
+{ const w = await world(); addRecording(w, 'voice_702.opus', 30000); w.pingReply = { ok: false, error: 'unknown request type: ping' }
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.states.at(-1).state === 'done' && w.posts.length === 1, 'any reply to the ping means the phone is there (an older Side Service answers with an error) -> upload goes on') }
+{ const w = await world(); w.Q.retryPendingUploads(); await tick()
+  ok(w.pings.length === 0 && w.states.length === 0, 'with nothing to send the phone is not even asked') }
+{ const w = await world(); device.token = null; addRecording(w, 'voice_703.opus', 30000); w.Q.retryPendingUploads(); await tick()
+  ok(w.pings.length === 0 && w.states.at(-1).state === 'unpaired', 'an unpaired watch says so without asking the phone') }
+
+console.log('28. the phone dies in the middle of an upload')
+{ const w = await world(); addRecording(w, 'voice_710.opus', 100000); w.failRequests = new Set([3, 4, 5])                // chunk 2, three times
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(last.state === 'error' && last.kind === 'phone' && w.posts.length === 0, 'chunk 2 never answered: error, kind phone, nothing posted -> ' + JSON.stringify(last))
+  ok(w.requests.filter((r) => r.index === 2).length === 3 && w.requests.every((r) => r.index < 6 ? r.timeout === 30000 : true), 'ordinary chunks wait 30 s per attempt') }
+
+console.log('29. the last chunk waits long enough for the phone to reach the server, and not much longer')
+{ const w = await world(); addRecording(w, 'voice_720.opus', 40000); w.Q.retryPendingUploads(); await finished(w)
+  const last = w.requests.at(-1)
+  ok(w.requests.length === 3 && w.requests.slice(0, -1).every((r) => r.timeout === 30000) && last.timeout === 60000, 'chunks 0-1: 30 s, the last: 60 s (the phone gives the server 30 s before answering) -> ' + w.requests.map((r) => r.timeout / 1000).join(', ')) }
+
+console.log('30. the phone cannot reach the server: it says so, and the watch tells that apart from a dead phone')
+const hang = () => new Promise(() => {})                                                                          // a request that never finishes
+{ const w = await world(); addRecording(w, 'voice_729.opus', 40000); globalThis.fetch = hang; timerRequests.length = 0
+  w.Q.retryPendingUploads(); await finished(w)
+  const deadline = timerRequests.find((ms) => ms >= 20000 && ms < 60000)
+  ok(deadline === 30000, 'the phone gives the server 30 s (its own deadline) -> ' + JSON.stringify(timerRequests.filter((ms) => ms > 1000)))
+  ok(deadline < w.requests.at(-1).timeout, 'and the watch waits LONGER than that for the last chunk, so the phone\'s answer always arrives in time -> ' + deadline / 1000 + ' s < ' + w.requests.at(-1).timeout / 1000 + ' s') }
+for (const [label, setup] of [
+  ['no internet (the request fails)', (w) => { w.serverThrows = true }],
+  ['no answer in time (the request hangs)', () => { globalThis.fetch = hang }],
+  ['a gateway error: the proxy is up, the server behind it is not (502)', (w) => { w.serverStatus = 502; w.serverReply = '<html>Bad Gateway</html>' }],
+  ['503 while the server restarts', (w) => { w.serverStatus = 503; w.serverReply = 'no available server' }],
+  ['504', (w) => { w.serverStatus = 504; w.serverReply = '' }],
+]) {
+  const w = await world(); addRecording(w, 'voice_730.opus', 30000); setup(w)
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(last.state === 'error' && last.kind === 'server' && last.pending === 1 && uploaded().length === 0, label + ' -> kind server, kept -> ' + JSON.stringify(last)) }
+{ const w = await world(); addRecording(w, 'voice_731.opus', 30000); addRecording(w, 'voice_732.opus', 30000); w.serverThrows = true
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.posts.length === 1 && w.states.at(-1).kind === 'server' && w.states.at(-1).pending === 2, 'the sweep stops at the first failure: the server was tried once, not once per recording') }
+{ const w = await world(); addRecording(w, 'voice_733.opus', 30000); w.serverStatus = 500; w.serverReply = '<html>Internal Server Error</html>'
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(last.state === 'error' && last.kind === undefined && last.message === 'server: HTTP 500, not JSON', 'a 500 with a page that is not JSON is a plain failure with a readable reason, not a parse error -> ' + JSON.stringify(last)) }
+{ const w = await world(); const reply = await w.U.handleUploadChunk({ fileName: 'a.opus', uploadId: '1', index: 0, total: 1, data: 'AAAA', deviceToken: 't' }, 'https://x.example')
+  ok(reply.ok === false && reply.fileError === true && !reply.noServer, 'a recording that cannot be packed is the file\'s problem, not the server\'s') }
 
 console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'ALL CHECKS PASS'))
 process.exit(failures ? 1 : 0)
