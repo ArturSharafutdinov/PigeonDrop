@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -444,6 +445,83 @@ func (s *Server) handleMessageAudio(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "private, no-cache")
 	h.Set("Content-Disposition", fmt.Sprintf(`inline; filename="PigeonDrop-%s.%s"`, row.ReceivedAt.UTC().Format("2006-01-02_15-04-05"), extension))
 	http.ServeContent(w, r, "", row.ReceivedAt, content)
+}
+
+// handleMessagesArchive streams every recording of the user as one zip, each file as it was received and stored
+// without compression (recordings are already compressed audio). Files are named after the time they were received,
+// the zip after the time of the request, both in UTC like the single-file download. Written by hand because the
+// generated handlers speak JSON.
+func (s *Server) handleMessagesArchive(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if p == nil {
+		writeCodedError(w, http.StatusUnauthorized, api.ErrorCodeUnauthorized, "not signed in")
+		return
+	}
+	rows, err := s.DB.ListMessageFiles(r.Context(), p.User.Id)
+	if err != nil {
+		s.Logger.Error("list message files", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if len(rows) == 0 {
+		writeCodedError(w, http.StatusNotFound, api.ErrorCodeNotFound, "no recordings")
+		return
+	}
+
+	const stamp = "2006-01-02_15-04-05"
+	h := w.Header()
+	h.Set("Content-Type", "application/zip")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "private, no-store")
+	h.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="PigeonDrop-%s.zip"`, s.now().UTC().Format(stamp)))
+
+	// The archive can be the whole 100 MiB of an account, more than the server's write timeout allows on a slow link:
+	// the deadline is moved forward for each file instead.
+	rc := http.NewResponseController(w)
+	zw := zip.NewWriter(w)
+	taken := map[string]int{} // two recordings in one second would otherwise get one name
+	for _, row := range rows {
+		_ = rc.SetWriteDeadline(time.Now().Add(2 * time.Minute))
+		if err := s.addToArchive(zw, row.ID, row.ReceivedAt, taken); err != nil {
+			// The answer is already on its way, so all that is left is to cut the archive short: a zip without its
+			// directory is rejected by unzip tools, which tells the person it is incomplete.
+			s.Logger.Error("archive of recordings broke off", "user_id", p.User.Id, "message_id", row.ID, "error", err)
+			return
+		}
+	}
+	if err := zw.Close(); err != nil {
+		s.Logger.Warn("could not finish the archive", "user_id", p.User.Id, "error", err)
+	}
+}
+
+// addToArchive copies one stored recording into the zip. A file that is gone (deleted since the list was read) is
+// skipped; any other failure ends the archive.
+func (s *Server) addToArchive(zw *zip.Writer, id uuid.UUID, receivedAt time.Time, taken map[string]int) error {
+	file, err := s.Messages.Open(opusFile(id))
+	if errors.Is(err, storage.ErrNotFound) {
+		s.Logger.Warn("a message's file is missing, left out of the archive", "message_id", id)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer file.Close()
+
+	base := "PigeonDrop-" + receivedAt.UTC().Format("2006-01-02_15-04-05")
+	name := base + ".opus"
+	if n := taken[base]; n > 0 {
+		name = fmt.Sprintf("%s_%d.opus", base, n+1)
+	}
+	taken[base]++
+
+	out, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store, Modified: receivedAt})
+	if err != nil {
+		return fmt.Errorf("add %s: %w", name, err)
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		return fmt.Errorf("copy %s: %w", name, err)
+	}
+	return nil
 }
 
 // decodeToWAV reads a stored recording and makes the WAV that a browser plays. Few of these run at once.

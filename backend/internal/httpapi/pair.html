@@ -62,7 +62,10 @@
     </section>
 
     <section id="messages">
-      <h2>Записи</h2>
+      <div class="section-head">
+        <h2>Записи</h2>
+        <a id="download-all" class="button" href="/v1/messages/archive" download hidden>Скачать всё</a>
+      </div>
       <p id="storage-line" class="hint"></p>
       <p id="storage-warning" class="warn" hidden>Хранилище почти заполнено. Когда место кончится, самые старые записи будут удаляться сами, а новые принимаются как раньше. Удалите ненужные записи заранее, если хотите решить сами, что оставить.</p>
       <ul id="message-list" class="rows"></ul>

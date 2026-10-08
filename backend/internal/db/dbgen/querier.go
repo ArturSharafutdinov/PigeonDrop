@@ -55,6 +55,9 @@ type Querier interface {
 	InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error)
 	ListDevices(ctx context.Context, userID uuid.UUID) ([]ListDevicesRow, error)
 	ListInvitations(ctx context.Context) ([]ListInvitationsRow, error)
+	// Every message of the user, oldest first, for the archive of all recordings: only what is needed to find and
+	// name the files.
+	ListMessageFiles(ctx context.Context, userID uuid.UUID) ([]ListMessageFilesRow, error)
 	// The caller's messages, newest first, starting after the cursor (the received_at and id of the last message
 	// of the previous page; both null for the first page).
 	ListMessages(ctx context.Context, arg ListMessagesParams) ([]ListMessagesRow, error)

@@ -147,6 +147,7 @@ func NewHandler(s *Server) http.Handler {
 	})
 	// The hand-written routes: they serve files and pages, which the generated JSON handlers are not built for.
 	mux.HandleFunc("GET /v1/messages/{id}/audio", s.handleMessageAudio)
+	mux.HandleFunc("GET /v1/messages/archive", s.handleMessagesArchive)
 	mux.HandleFunc("GET /pair", servePage("text/html; charset=utf-8", pairHTML))
 	mux.HandleFunc("GET /pair.js", servePage("text/javascript; charset=utf-8", pairJS))
 	mux.HandleFunc("GET /pair.css", servePage("text/css; charset=utf-8", pairCSS))

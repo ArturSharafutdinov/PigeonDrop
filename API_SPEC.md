@@ -76,4 +76,4 @@ _Актуально на: 2026-10-04. Контракт `/v1`, которым п�
 |---|---|---|
 | `POST /v1/device/code`, `POST /v1/device/token` | Side Service по просьбе часов (`pairStart`, `pairPoll`) | `PigeonDrop/app-side/pairing.js` |
 | `POST /v1/messages` | Side Service, после получения всех частей записи от часов, с токеном устройства | `PigeonDrop/app-side/uploads.js` |
-| `POST /v1/device/approve`, `GET /v1/device/pairing/:code`, `GET/DELETE /v1/devices`, `GET/DELETE /v1/messages` (`DELETE` без id удаляет все записи), `GET /v1/storage`, `GET /v1/messages/:id/audio`, `/v1/auth/*`, `/v1/me` | Человек, на странице `/pair` (не часы и не Side Service) | `backend/internal/httpapi/pair.js` |
+| `POST /v1/device/approve`, `GET /v1/device/pairing/:code`, `GET/DELETE /v1/devices`, `GET/DELETE /v1/messages` (`DELETE` без id удаляет все записи), `GET /v1/storage`, `GET /v1/messages/:id/audio`, `GET /v1/messages/archive` (zip со всеми записями, без сжатия, оригиналы `.opus`), `/v1/auth/*`, `/v1/me` | Человек, на странице `/pair` (не часы и не Side Service) | `backend/internal/httpapi/pair.js` |

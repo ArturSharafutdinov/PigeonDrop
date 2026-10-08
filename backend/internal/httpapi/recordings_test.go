@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -704,3 +705,99 @@ func TestAStorageFailureIsAnErrorAndRecordsNothing(t *testing.T) {
 
 // newDeviceTokenForTest returns a well-formed token no device owns.
 func newDeviceTokenForTest() (token string, hash []byte, err error) { return auth.NewDeviceToken() }
+
+func (e *testEnv) archiveOf(c *http.Cookie, mods ...func(*http.Request)) *httptest.ResponseRecorder {
+	if c != nil {
+		mods = append(mods, withCookie(c))
+	}
+	return e.call(http.MethodGet, "/v1/messages/archive", "", mods...)
+}
+
+func TestArchiveHoldsEveryRecordingAsReceivedAndOnlyTheOwners(t *testing.T) {
+	e := newEnv(t)
+	alice, mallory := e.signUp(t, "alice@example.com"), e.signUp(t, "mallory@example.com")
+	aliceToken, _ := e.pairDevice(t, alice, "watch")
+	malloryToken, _ := e.pairDevice(t, mallory, "watch")
+	ogg, zepp := fixture(t, "tone.ogg"), fixture(t, "tone.zepp")
+	e.uploadAs(aliceToken, "one", ogg)
+	e.uploadAs(aliceToken, "two", zepp)
+	e.uploadAs(malloryToken, "secret", ogg[:len(ogg)-1])
+
+	res := e.archiveOf(alice)
+	h := res.Header()
+	if res.Code != http.StatusOK || h.Get("Content-Type") != "application/zip" || h.Get("X-Content-Type-Options") != "nosniff" ||
+		!strings.Contains(h.Get("Cache-Control"), "no-store") ||
+		!regexp.MustCompile(`^attachment; filename="PigeonDrop-\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d\.zip"$`).MatchString(h.Get("Content-Disposition")) {
+		t.Fatalf("answer: %d %v", res.Code, h)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(res.Body.Bytes()), int64(res.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zr.File) != 2 {
+		t.Fatalf("%d files in the archive, want 2 (and none of another user's)", len(zr.File))
+	}
+	// Oldest first, named after the time received, exactly the bytes that were received, stored without compression.
+	want := [][]byte{ogg, zepp}
+	namePattern := regexp.MustCompile(`^PigeonDrop-\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d(_\d+)?\.opus$`)
+	for i, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		buf.ReadFrom(rc)
+		rc.Close()
+		if !namePattern.MatchString(f.Name) || f.Method != zip.Store || !bytes.Equal(buf.Bytes(), want[i]) {
+			t.Errorf("file %d: %q method %d, %d bytes", i, f.Name, f.Method, buf.Len())
+		}
+	}
+	// Recordings received within one second must not overwrite each other when unpacked.
+	if zr.File[0].Name == zr.File[1].Name {
+		t.Errorf("two files are named %q", zr.File[0].Name)
+	}
+}
+
+func TestArchiveNamesRecordingsOfTheSameSecondApart(t *testing.T) {
+	e := newEnvWith(t, func(s *Server) {
+		fixed := time.Date(2026, 10, 8, 12, 30, 15, 0, time.UTC)
+		s.Now = func() time.Time { return fixed }
+	})
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+	ogg := fixture(t, "tone.ogg")
+	e.uploadAs(token, "one", ogg)
+	e.uploadAs(token, "two", ogg)
+
+	res := e.archiveOf(owner)
+	zr, err := zip.NewReader(bytes.NewReader(res.Body.Bytes()), int64(res.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	if !slices.Equal(names, []string{"PigeonDrop-2026-10-08_12-30-15.opus", "PigeonDrop-2026-10-08_12-30-15_2.opus"}) {
+		t.Fatalf("names: %v", names)
+	}
+	if got := res.Header().Get("Content-Disposition"); got != `attachment; filename="PigeonDrop-2026-10-08_12-30-15.zip"` {
+		t.Fatalf("zip name: %s", got)
+	}
+}
+
+func TestArchiveRefusesWhatItShould(t *testing.T) {
+	e := newEnv(t)
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+
+	if res := e.archiveOf(nil); res.Code != http.StatusUnauthorized || codeOf(t, res) != "unauthorized" {
+		t.Errorf("no session: %d %s", res.Code, res.Body.String())
+	}
+	if res := e.archiveOf(nil, bearer(token)); res.Code != http.StatusUnauthorized {
+		t.Errorf("device token: %d", res.Code)
+	}
+	if res := e.archiveOf(owner); res.Code != http.StatusNotFound || codeOf(t, res) != "not_found" {
+		t.Errorf("no recordings: %d %s", res.Code, res.Body.String())
+	}
+}
