@@ -23,6 +23,10 @@ button { font: inherit; padding: 10px 16px; border-radius: 8px; border: 1px soli
 button[type=submit] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
 button:disabled { opacity: .6; cursor: progress; }
 button.link { border: 0; background: none; color: var(--accent); padding: 4px 8px; text-decoration: underline; }
+a.button { display: inline-block; font: inherit; padding: 10px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); text-decoration: none; }
+a.button:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 8px; }
+.section-head h2 { margin: 0; }
 button.danger { color: var(--danger); }
 .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
 .tabs button { flex: 1; }

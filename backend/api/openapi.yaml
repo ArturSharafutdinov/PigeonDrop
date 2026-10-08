@@ -524,6 +524,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  # Written by hand (the tag "manual" keeps it out of code generation): it streams a zip file, which the
+  # generated JSON handlers are not built for.
+  /v1/messages/archive:
+    get:
+      operationId: getMessagesArchive
+      tags: [manual]
+      summary: Download all recordings in one zip
+      description: |
+        Every recording of the user as the files were received (`.opus`, named `PigeonDrop-<date>_<time>.opus`
+        after the time they were received, in UTC), stored in the zip without compression. The zip is named
+        after the time of the request (`PigeonDrop-<date>_<time>.zip`).
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The zip file.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The user has no recordings (`not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   # Written by hand (the tag "manual" keeps it out of code generation): it serves a file, with range
   # requests, which the generated JSON handlers are not built for.
   /v1/messages/{id}/audio:

@@ -195,6 +195,37 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (I
 	return i, err
 }
 
+const listMessageFiles = `-- name: ListMessageFiles :many
+SELECT id, received_at FROM messages WHERE user_id = $1 ORDER BY received_at, id
+`
+
+type ListMessageFilesRow struct {
+	ID         uuid.UUID
+	ReceivedAt time.Time
+}
+
+// Every message of the user, oldest first, for the archive of all recordings: only what is needed to find and
+// name the files.
+func (q *Queries) ListMessageFiles(ctx context.Context, userID uuid.UUID) ([]ListMessageFilesRow, error) {
+	rows, err := q.db.Query(ctx, listMessageFiles, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMessageFilesRow
+	for rows.Next() {
+		var i ListMessageFilesRow
+		if err := rows.Scan(&i.ID, &i.ReceivedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMessages = `-- name: ListMessages :many
 SELECT m.id, m.device_id, d.name AS device_name, m.client_message_id, m.bytes_received, m.duration_ms, m.has_wav, m.received_at
 FROM messages m

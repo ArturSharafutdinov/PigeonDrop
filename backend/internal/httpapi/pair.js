@@ -192,6 +192,7 @@
       $('more').hidden = !state.cursor
       $('message-empty').hidden = list.children.length > 0
       $('delete-all').hidden = list.children.length === 0
+      $('download-all').hidden = list.children.length === 0
     })
   }
 

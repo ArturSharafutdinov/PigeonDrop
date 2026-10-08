@@ -24,6 +24,11 @@ WHERE m.user_id = sqlc.arg(user_id)
 ORDER BY m.received_at DESC, m.id DESC
 LIMIT sqlc.arg(max_rows);
 
+-- Every message of the user, oldest first, for the archive of all recordings: only what is needed to find and
+-- name the files.
+-- name: ListMessageFiles :many
+SELECT id, received_at FROM messages WHERE user_id = $1 ORDER BY received_at, id;
+
 -- name: GetMessage :one
 SELECT id, device_id, client_message_id, format, bytes_received, duration_ms, has_wav, received_at
 FROM messages
