@@ -119,6 +119,19 @@ jobs:
       - name: Run the tests of the check for backend changes
         run: .github/scripts/test/test-backend-changed.sh
 
+  # The backup scripts (tools/backup) show their faults only on the day a restore is needed, so they are run here
+  # against a real PostgreSQL 17 in Docker: every way the dump can go wrong and every way a restore can be broken.
+  backup-scripts:
+    name: Backup scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck tools/backup/*.sh tools/backup/test/*.sh
+      - name: Run the scripts against PostgreSQL 17
+        run: tools/backup/test/test-backup.sh
+
   deploy:
     name: Deploy to Coolify
     needs: [backend, deploy-script]

@@ -1,0 +1,22 @@
+[Unit]
+Description=Dump the PigeonDrop database for Backrest to snapshot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pigeondrop-db-dump.sh
+
+# No settings here: the script reads /etc/pigeondrop-backup.env itself (the Coolify label of the PostgreSQL instance and
+# the watchdog URL), so that a run by hand sees the same as this unit. It is a file of its own rather than Environment=
+# lines because unit files in /etc/systemd/system are world-readable, and the watchdog URL is a capability: anyone
+# holding it can send a success ping and silence the alarm.
+
+# Deliberately light. Anything that can talk to the Docker socket can already start a privileged container, so it is
+# root-equivalent: dressing this unit in ProtectSystem=strict would buy nothing real, and a read-only mount over /run
+# is a good way to make the socket unreachable and the unit mysteriously fail.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

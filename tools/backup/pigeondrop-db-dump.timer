@@ -1,0 +1,18 @@
+[Unit]
+Description=Daily PigeonDrop database dump
+
+[Timer]
+# 03:15 UTC. The Backrest plan that snapshots it runs at 03:20 and the whole-server `vps` plan at 03:30, after
+# Coolify's own dump (02:00) and the another-project dump (03:00) and plan (03:15). The dump takes about a second.
+#
+# It goes right BEFORE its plan, not hours earlier, because the plan snapshots the recordings volume too and the two
+# must describe the same moment as closely as possible. The order inside the pair matters: the server writes a
+# recording's file before its row, so an upload between the two leaves a file without a row (harmless), while the
+# other order would leave rows whose files are missing.
+OnCalendar=*-*-* 03:15:00 UTC
+
+# Runs the job on boot if its scheduled time passed while the machine was down, instead of silently skipping the day.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
