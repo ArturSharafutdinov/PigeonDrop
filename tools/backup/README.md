@@ -37,6 +37,8 @@ Backrest, план `b2-pigeondrop` (03:20 UTC), репозиторий `b2`
 
 Репозиторий — источник правды, но на VPS файлы сами не попадают: после любой правки скриптов копируйте их заново.
 
+Команды ниже можно вставлять в терминал как есть, кроме двух мест, где стоят `<угловые скобки>` (адрес сервера в `scp` и значения в файле настроек): их надо заменить на своё *до* вставки. Оболочка принимает угловые скобки за перенаправление и отвечает `No such file or directory`.
+
 ### 1. Скрипты и юниты
 
 С вашего Mac, из корня репозитория:
@@ -63,11 +65,7 @@ grep -h DB_LABEL /usr/local/bin/another-project-db-dump.sh /etc/systemd/system/a
 docker ps --format '{{.Names}}\t{{.Image}}\t{{.Label "coolify.resourceName"}}' | grep postgres
 ```
 
-Нужна строка вида `coolify.resourceName=postgresql-database-<uuid>`. Убедитесь, что в этом PostgreSQL есть база `pigeondrop` (она создана по `backend/DEPLOY.md`, шаг 3):
-
-```bash
-docker exec <контейнер-postgres> sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -h 127.0.0.1 -lqtA' | cut -d'|' -f1
-```
+Нужна строка вида `coolify.resourceName=postgresql-database-<uuid>`. Есть ли в этом PostgreSQL база `pigeondrop` (она создана по `backend/DEPLOY.md`, шаг 3), проверит первый запуск дампа в шаге 3: если базы нет, он остановится с сообщением `has no database named 'pigeondrop'`.
 
 Создайте файл (права 600, адрес watchdog — это «ключ»: тот, у кого он есть, может прислать успешный пинг и заглушить тревогу, в чат его не присылайте):
 
@@ -94,12 +92,13 @@ cat /var/backups/pigeondrop/BACKUP_INFO
 
 ### 4. Подключить каталоги к Backrest
 
-Нужен путь тома с записями. Coolify обычно добавляет к имени тома UUID приложения, поэтому имя надо посмотреть (это моя оценка по виду Coolify, проверьте):
+Нужен путь тома с записями. Coolify добавляет к имени тома UUID приложения (получается что-то вроде `lysivnglgqwx3xbuhvccw2ny-pigeondrop-data`), поэтому путь ищется по имени, подставлять ничего не надо:
 
 ```bash
-docker volume ls --format '{{.Name}}' | grep pigeondrop-data
-docker volume inspect <имя-тома> --format '{{.Mountpoint}}'
+docker volume inspect "$(docker volume ls -q | grep 'pigeondrop-data$')" --format '{{.Name}}  {{.Mountpoint}}'
 ```
+
+В ответе одна строка: имя тома и путь вида `/var/lib/docker/volumes/<имя-тома>/_data`. Если строк две или больше (старый том от прежней установки), `docker volume inspect` ответит ошибкой: тогда выберите тот, что подключён к работающему приложению (`docker inspect <контейнер приложения> --format '{{range .Mounts}}{{.Name}} {{end}}'`).
 
 Монтирование добавляется через override-файл, чтобы не править основной `docker-compose.yml`. **Если `/opt/backrest/docker-compose.override.yml` уже есть** (в нём монтирование another-project), добавьте две строки в его список `volumes`, а второй файл не создавайте:
 
@@ -110,6 +109,8 @@ services:
       - /var/backups/pigeondrop:/backup/pigeondrop-db:ro
       - /var/lib/docker/volumes/<имя-тома>/_data:/backup/pigeondrop-data:ro
 ```
+
+(Это содержимое файла, а не команда: `<имя-тома>` замените на имя из ответа выше.)
 
 Проверьте слияние (эта команда ничего не запускает), все старые монтирования должны остаться в списке, затем примените:
 
