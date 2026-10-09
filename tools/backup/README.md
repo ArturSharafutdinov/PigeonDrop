@@ -100,22 +100,23 @@ docker volume inspect "$(docker volume ls -q | grep 'pigeondrop-data$')" --forma
 
 В ответе одна строка: имя тома и путь вида `/var/lib/docker/volumes/<имя-тома>/_data`. Если строк две или больше (старый том от прежней установки), `docker volume inspect` ответит ошибкой: тогда выберите тот, что подключён к работающему приложению (`docker inspect <контейнер приложения> --format '{{range .Mounts}}{{.Name}} {{end}}'`).
 
-Монтирование добавляется через override-файл, чтобы не править основной `docker-compose.yml`. **Если `/opt/backrest/docker-compose.override.yml` уже есть** (в нём монтирование another-project), добавьте две строки в его список `volumes`, а второй файл не создавайте:
+Backrest описан в `/opt/backrest/docker-compose.yaml`. Добавьте две строки в список `volumes` сервиса `backrest`, с тем же отступом (пробелами, не табами), что у соседних строк, и не удаляйте существующие: среди них должен остаться `/opt/backrest/restore:/restore`, он нужен для восстановления.
+
+```bash
+cd /opt/backrest && cp docker-compose.yaml docker-compose.yaml.bak
+```
 
 ```yaml
-services:
-  backrest:
-    volumes:
       - /var/backups/pigeondrop:/backup/pigeondrop-db:ro
       - /var/lib/docker/volumes/<имя-тома>/_data:/backup/pigeondrop-data:ro
 ```
 
-(Это содержимое файла, а не команда: `<имя-тома>` замените на имя из ответа выше.)
+(Это строки для файла, а не команды: `<имя-тома>` замените на имя из ответа выше. Если у вас всё-таки есть отдельный `docker-compose.override.yaml`, те же две строки можно положить туда: Compose сливает `volumes` по пути внутри контейнера.)
 
-Проверьте слияние (эта команда ничего не запускает), все старые монтирования должны остаться в списке, затем примените:
+Проверьте результат (эта команда ничего не запускает): все старые монтирования должны остаться в списке, плюс два новых. Пересоздание контейнера прерывает идущий снимок, поэтому применяйте не около 03:00–03:40 UTC:
 
 ```bash
-cd /opt/backrest && docker compose config
+docker compose config
 docker compose up -d
 docker exec backrest ls /backup/pigeondrop-db /backup/pigeondrop-data/messages
 ```
