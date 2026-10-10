@@ -81,6 +81,24 @@ type Session struct {
 	AbsoluteExpiresAt time.Time
 }
 
+type Transcription struct {
+	MessageID   uuid.UUID
+	State       string
+	Attempts    int32
+	RunAfter    time.Time
+	LockedUntil *time.Time
+	EnqueuedAt  time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+	Text        *string
+	Language    *string
+	Engine      *string
+	AudioMs     *int32
+	SttMs       *int32
+	ErrorCode   *string
+	LastError   *string
+}
+
 type User struct {
 	ID           uuid.UUID
 	Email        string

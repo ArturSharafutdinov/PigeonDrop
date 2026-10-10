@@ -41,7 +41,7 @@ func plainText(text string) bool {
 	return utf8.ValidString(text) && !strings.ContainsFunc(text, unicode.IsControl)
 }
 
-func opusFile(id uuid.UUID) string { return id.String() + ".opus" }
+func opusFile(id uuid.UUID) string { return storage.RecordingName(id) }
 
 // wavFile is the name an earlier version stored the converted copy under. Nothing writes it any more, but
 // deleting a message still removes one if it is there.
@@ -132,6 +132,13 @@ func (s *Server) UploadMessage(ctx context.Context, request api.UploadMessageReq
 			return fmt.Errorf("record message: %w", err)
 		}
 		fresh = true
+		if s.Transcription != nil {
+			// In this transaction, so that a recording is never accepted without its place in the queue
+			// (and, if the upload fails after this point, never queued without being accepted).
+			if err := s.Transcription.Enqueue(ctx, q, id, decodable, durationMs, s.now()); err != nil {
+				return fmt.Errorf("queue the recording for recognition: %w", err)
+			}
+		}
 		pruned, err = q.PruneMessages(ctx, dbgen.PruneMessagesParams{
 			Owner: dev.UserID, KeepID: id, Room: s.Storage.AccountBytes - int64(len(data)),
 		})
@@ -165,6 +172,9 @@ func (s *Server) UploadMessage(ctx context.Context, request api.UploadMessageReq
 		s.discardMessage(gone)
 	}
 	s.Logger.Info("saved recording", "message_id", id, "device_id", dev.ID, "bytes", len(data), "format", format, "decodable", decodable)
+	if s.Transcription != nil && s.TranscriptionWake != nil {
+		s.TranscriptionWake() // after the commit, so the worker finds the entry
+	}
 	if len(pruned) > 0 {
 		s.Logger.Info("storage was full: the account's oldest recordings were deleted", "user_id", dev.UserID, "deleted", len(pruned), "used_bytes", used)
 	}

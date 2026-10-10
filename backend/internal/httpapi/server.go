@@ -17,6 +17,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/auth"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/transcribe"
 )
 
 // MaxBodyBytes is the largest request body the server reads, whatever the route. Uploads of recordings have a
@@ -73,6 +74,11 @@ type Server struct {
 	AllowedOrigins []string
 	// TrustProxyHeaders reads the client's address from X-Forwarded-For (only behind a proxy that sets it).
 	TrustProxyHeaders bool
+	// Transcription puts each new recording in the speech recognition queue; nil means recognition is off and
+	// nothing is queued.
+	Transcription *transcribe.Intake
+	// TranscriptionWake tells the worker that there is something new in the queue (nil is fine).
+	TranscriptionWake func()
 
 	// userCodes draws the short code of a pairing; nil means auth.NewUserCode. Tests replace it to force collisions.
 	userCodes func() (display, canonical string, err error)

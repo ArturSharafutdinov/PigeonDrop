@@ -30,6 +30,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/httpapi"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/transcribe"
 )
 
 // version is set at build time: go build -ldflags "-X main.version=1.2.3".
@@ -130,10 +131,18 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 
+	intake, wake, stopWorker, err := startSpeechRecognition(ctx, cfg, queries, messages, logger)
+	if err != nil {
+		return err
+	}
+	// Stops the worker (it gives back the recording it holds) before the database pool is closed.
+	defer stopWorker()
+
 	srv := &http.Server{
 		Addr: ":" + strconv.Itoa(cfg.Port),
 		Handler: httpapi.NewHandler(&httpapi.Server{
 			Pinger: pool, DB: queries, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
+			Transcription: intake, TranscriptionWake: wake,
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 			Storage: httpapi.StorageLimits{
 				MaxAudioBytes: httpapi.DefaultStorageLimits.MaxAudioBytes, AccountBytes: cfg.AccountStorageBytes, WarnPercent: httpapi.DefaultStorageLimits.WarnPercent,
@@ -166,6 +175,47 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("shut down: %w", err)
 	}
 	return nil
+}
+
+// startSpeechRecognition starts the worker that turns recordings into text, if a service for it is configured.
+// It returns what the upload needs to queue a recording (nil if recognition is off), the function that wakes the
+// worker, and the function that stops it and waits until it has put its recording back in the queue.
+func startSpeechRecognition(ctx context.Context, cfg config.Config, q dbgen.Querier, files storage.Store, logger *slog.Logger) (*transcribe.Intake, func(), func(), error) {
+	if cfg.SpeechURL == "" {
+		return nil, nil, func() {}, nil
+	}
+	service, err := transcribe.NewHTTP(cfg.SpeechURL, cfg.SpeechToken, cfg.SpeechTimeout)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("speech recognition: %w", err)
+	}
+	if cfg.SpeechToken == "" {
+		logger.Warn("speech recognition is set up without a token: only a service started without one accepts that")
+	}
+	worker := transcribe.NewWorker(q, files, service, logger, transcribe.Settings{
+		MaxAttempts: cfg.SpeechMaxAttempts,
+		MaxAudio:    cfg.SpeechMaxAudio,
+		// A call may take its whole timeout, and the lease must outlast it or another worker could take the
+		// recording while the first is still waiting.
+		Lease: cfg.SpeechTimeout + 30*time.Second,
+	})
+
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.Run(workerCtx)
+	}()
+	logger.Info("speech recognition is on", "service", cfg.SpeechURL, "timeout", cfg.SpeechTimeout, "max_attempts", cfg.SpeechMaxAttempts, "max_audio", cfg.SpeechMaxAudio)
+
+	stop := func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			logger.Warn("the speech recognition worker did not stop in time")
+		}
+	}
+	return &transcribe.Intake{MaxAudio: cfg.SpeechMaxAudio}, worker.Wake, stop, nil
 }
 
 // purgeExpired deletes expired sessions and pairings once an hour until ctx ends. Expired ones are already
