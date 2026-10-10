@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -38,6 +39,18 @@ type Config struct {
 	TrustProxyHeaders bool
 	// AccountStorageBytes is the room one account's recordings may take; beyond it the oldest are deleted.
 	AccountStorageBytes int64
+
+	// SpeechURL is the address of the speech recognition service (scheme://host[:port]). Empty turns recognition
+	// off: nothing is queued and no worker runs.
+	SpeechURL string
+	// SpeechToken is the secret shared with that service; empty only for a service started without one.
+	SpeechToken string
+	// SpeechTimeout limits one call to the service, from sending the recording to getting the text.
+	SpeechTimeout time.Duration
+	// SpeechMaxAttempts is how many attempts that count a recording gets before it is given up on.
+	SpeechMaxAttempts int
+	// SpeechMaxAudio is the longest recording sent to the service. The model's memory was measured to 60 seconds.
+	SpeechMaxAudio time.Duration
 }
 
 // DefaultAccountStorageBytes is 100 MiB. MinAccountStorageBytes only guards against a typo (a limit in megabytes
@@ -63,6 +76,10 @@ func Load(getenv func(string) string) (Config, error) {
 
 		CookieSecure:        true,
 		AccountStorageBytes: DefaultAccountStorageBytes,
+
+		SpeechTimeout:     90 * time.Second,
+		SpeechMaxAttempts: 5,
+		SpeechMaxAudio:    65 * time.Second,
 	}
 
 	if c.DatabaseURL == "" {
@@ -130,6 +147,45 @@ func Load(getenv func(string) string) (Config, error) {
 			bad("STORAGE_ACCOUNT_BYTES must be a number of bytes, at least %d, got %q", MinAccountStorageBytes, v)
 		} else {
 			c.AccountStorageBytes = n
+		}
+	}
+
+	if v := strings.TrimSpace(getenv("STT_URL")); v != "" {
+		if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			bad("STT_URL must be an http(s) URL (scheme://host[:port]), got %q", v)
+		} else {
+			c.SpeechURL = strings.TrimRight(v, "/")
+		}
+	}
+	c.SpeechToken = strings.TrimSpace(getenv("STT_TOKEN"))
+	if c.SpeechURL == "" && c.SpeechToken != "" {
+		bad("STT_TOKEN is set but STT_URL is not: speech recognition would stay off")
+	}
+
+	if v := strings.TrimSpace(getenv("STT_TIMEOUT")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Second || d > 10*time.Minute {
+			bad("STT_TIMEOUT must be a duration from 1s to 10m (for example 90s), got %q", v)
+		} else {
+			c.SpeechTimeout = d
+		}
+	}
+
+	if v := strings.TrimSpace(getenv("STT_MAX_ATTEMPTS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 20 {
+			bad("STT_MAX_ATTEMPTS must be a number from 1 to 20, got %q", v)
+		} else {
+			c.SpeechMaxAttempts = n
+		}
+	}
+
+	if v := strings.TrimSpace(getenv("STT_MAX_AUDIO_SECONDS")); v != "" {
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil || n < 1 || n > 600 {
+			bad("STT_MAX_AUDIO_SECONDS must be a number of seconds from 1 to 600, got %q", v)
+		} else {
+			c.SpeechMaxAudio = time.Duration(n * float64(time.Second))
 		}
 	}
 

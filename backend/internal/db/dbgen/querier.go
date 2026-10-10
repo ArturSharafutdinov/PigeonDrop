@@ -15,6 +15,14 @@ type Querier interface {
 	// Approval also gives the watch a few more minutes to collect its token: a code approved in its last
 	// seconds must not expire before the next poll.
 	ApprovePairing(ctx context.Context, arg ApprovePairingParams) (uuid.UUID, error)
+	// Takes the oldest recording that is ready: waiting and past its pause, or running with a lease that has run out
+	// (its worker died). SKIP LOCKED lets several workers take different ones without waiting for each other.
+	// The attempt is counted here; the caller gives it back when the model was never reached.
+	// No row when nothing is ready.
+	ClaimTranscription(ctx context.Context, arg ClaimTranscriptionParams) (ClaimTranscriptionRow, error)
+	// Stores the text. Only the worker that took this attempt can: if the lease ran out and another worker took the
+	// recording, or the recording was deleted, no row matches and nothing changes (the caller sees 0 rows).
+	CompleteTranscription(ctx context.Context, arg CompleteTranscriptionParams) (int64, error)
 	// Spends the invitation. No row means it was unknown, expired, or already used (possibly a moment ago
 	// by someone else) - the caller cannot and need not tell which.
 	ConsumeInvitation(ctx context.Context, arg ConsumeInvitationParams) (uuid.UUID, error)
@@ -36,6 +44,15 @@ type Querier interface {
 	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
+	// A new recording that is not going to the model (it cannot be decoded, or it is too long); error_code says why.
+	EnqueueSkippedTranscription(ctx context.Context, arg EnqueueSkippedTranscriptionParams) error
+	// The queue of recordings waiting to be turned into text, and the text. The worker (internal/transcribe) is the
+	// only caller except the upload, which puts a new recording in the queue. Every time passed in is the caller's
+	// clock, not the database's, so that tests can move it.
+	// Puts a new recording in the queue. Does nothing if it is already there (an upload that ran twice).
+	EnqueueTranscription(ctx context.Context, arg EnqueueTranscriptionParams) error
+	// Gives up on the recording.
+	FailTranscription(ctx context.Context, arg FailTranscriptionParams) (int64, error)
 	// Read-only look, to refuse an unusable code before spending a password hash on it.
 	FindUsableInvitation(ctx context.Context, arg FindUsableInvitationParams) (uuid.UUID, error)
 	// The device behind a token. No row for an unknown token or a revoked device.
@@ -49,6 +66,9 @@ type Querier interface {
 	GetPairingByDeviceCodeHash(ctx context.Context, deviceCodeHash []byte) (GetPairingByDeviceCodeHashRow, error)
 	// The session behind a cookie, with its user. No row when it is unknown or has expired.
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
+	GetTranscription(ctx context.Context, messageID uuid.UUID) (Transcription, error)
+	// What the worker needs to know about a recording it took. No row: the recording was deleted meanwhile.
+	GetTranscriptionSubject(ctx context.Context, id uuid.UUID) (GetTranscriptionSubjectRow, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	// Returns no row when this device already uploaded this name: a request with the same name won the race.
@@ -71,11 +91,16 @@ type Querier interface {
 	PruneMessages(ctx context.Context, arg PruneMessagesParams) ([]uuid.UUID, error)
 	// Hands out the approval exactly once: no row means someone else collected it first, or it was never approved.
 	RedeemPairing(ctx context.Context, arg RedeemPairingParams) (RedeemPairingRow, error)
+	// Puts the recording back in the queue, to be taken again from run_after on. give_back is 1 when the attempt
+	// must not count (the model was not reached, or the server is stopping) and 0 when it must.
+	ReleaseTranscription(ctx context.Context, arg ReleaseTranscriptionParams) (int64, error)
 	// No row means the user has no such device. Revoking twice is fine: the second time changes nothing.
 	RevokeDevice(ctx context.Context, arg RevokeDeviceParams) (uuid.UUID, error)
 	// Only an unused invitation can be withdrawn; a used one stays as the record of who came through it.
 	RevokeInvitation(ctx context.Context, id uuid.UUID) (int64, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
+	// Decides, after the recording was taken, that it is not going to the model.
+	SkipTranscription(ctx context.Context, arg SkipTranscriptionParams) (int64, error)
 	// What the user's recordings take. Only the original files count; the WAV played in a browser is made on demand.
 	SumMessageBytes(ctx context.Context, userID uuid.UUID) (int64, error)
 	// Records that the device was seen, at most once per interval: the caller passes the oldest last_seen_at
