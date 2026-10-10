@@ -200,9 +200,12 @@ class StatsTest(unittest.TestCase):
         self.assertEqual(t["compared"], 0)
 
 
-def mem_row(peak, current=None, anon=None, status=200):
-    return {"status": status, "mem_peak": peak, "mem_current": current if current is not None else (peak or 0),
-            "mem_anon": anon if anon is not None else (peak or 0) // 2}
+def mem_row(peak, current=None, anon=None, status=200, file=None):
+    row = {"status": status, "mem_peak": peak, "mem_current": current if current is not None else (peak or 0),
+           "mem_anon": anon if anon is not None else (peak or 0) // 2}
+    if file is not None:
+        row["mem_file"] = file
+    return row
 
 
 class MemoryAnalysisTest(unittest.TestCase):
@@ -250,6 +253,18 @@ class MemoryAnalysisTest(unittest.TestCase):
         a = check.analyze_memory([mem_row(p * MIB) for p in peaks], self.LIMIT)
         self.assertEqual(a["last_raise"], 11)
         self.assertFalse(a["plateau"])
+
+    def test_own_memory_leaves_out_the_file_cache(self):
+        # 2800 charged, 700 of it the cache of the model's files: 2100 cannot be dropped.
+        rows = [mem_row(2800 * MIB, current=2800 * MIB, anon=2000 * MIB, file=700 * MIB),
+                mem_row(2800 * MIB, current=2700 * MIB, anon=2100 * MIB, file=700 * MIB)]
+        a = check.analyze_memory(rows, self.LIMIT)
+        self.assertEqual((a["own_max"], a["own_headroom"]), (2100 * MIB, 3 * GIB - 2100 * MIB))
+        self.assertEqual((a["peak"], a["headroom"]), (2800 * MIB, 3 * GIB - 2800 * MIB))  # with the cache, for the report
+
+    def test_own_memory_without_the_file_counter_is_the_processs(self):
+        a = check.analyze_memory([mem_row(2800 * MIB, current=2800 * MIB, anon=2000 * MIB)], self.LIMIT)
+        self.assertEqual(a["own_max"], 2000 * MIB)
 
     def test_without_the_kernels_peak_the_highest_current_is_used(self):
         a = check.analyze_memory([mem_row(None, current=c * MIB) for c in (1000, 2000, 1500)], self.LIMIT)
@@ -437,8 +452,9 @@ def speed_result(cpus=2, long60=(10.0, 12.0), failed=0, texts=None, host=4000 * 
 
 
 def memory_result(peak=2200 * MIB, calls=186, last_raise=40, plateau=True, killed=False, stopped=None, statuses=None,
-                  oom_events=0, host=4000 * MIB, tripped=None, lim=None, sampled=False):
+                  oom_events=0, host=4000 * MIB, tripped=None, lim=None, sampled=False, own=1500 * MIB):
     analysis = {"calls": calls, "peak": peak, "peak_sampled": sampled, "headroom": 3 * GIB - peak, "anon_max": 1500 * MIB,
+                "own_max": own, "own_headroom": 3 * GIB - own,
                 "current_max": peak, "raises": [last_raise] if last_raise else [], "last_raise": last_raise,
                 "growth_second_half": 0, "plateau": plateau}
     return {"cpus": 2, "limits": lim or limits(2), "limit": 3 * GIB, "passes": 6, "stopped": stopped,
@@ -540,8 +556,21 @@ class VerdictTest(unittest.TestCase):
         for headroom, want in ((600, OK), (512, OK), (511, WARN), (128, WARN), (127, FAIL)):
             with self.subTest(headroom=headroom):
                 r = good_results()
-                r["memory"] = memory_result(peak=3 * GIB - headroom * MIB)
+                r["memory"] = memory_result(own=3 * GIB - headroom * MIB)
                 self.assertEqual(self.judge(r)[title].status, want)
+
+    def test_a_peak_full_of_file_cache_is_not_a_danger(self):
+        # What the first real VPS showed: 2787 MiB charged of 3072, 2069 of it the process's own, the rest the cache.
+        title = "Память при лимите 3 ГБ"
+        r = good_results()
+        r["memory"] = memory_result(peak=2787 * MIB, own=2069 * MIB)
+        v = self.judge(r)[title]
+        self.assertEqual(v.status, OK)
+        self.assertIn("2787", v.detail)
+        self.assertIn("2069", v.detail)
+        # ... but the same peak made of memory that cannot be dropped is
+        r["memory"] = memory_result(peak=2787 * MIB, own=2787 * MIB)
+        self.assertEqual(self.judge(r)[title].status, WARN)
 
     def test_memory_killed_or_stopped(self):
         title = "Память при лимите 3 ГБ"
@@ -635,13 +664,45 @@ class ReportTest(unittest.TestCase):
         results["memory"]["samples"] = [{"t": 1.0, "current": 5}]
         with tempfile.TemporaryDirectory() as d:
             check.write_outputs(os.path.join(d, "out"), results, "REPORT")
-            read = lambda name: open(os.path.join(d, "out", name), encoding="utf-8").read()  # noqa: E731
+            def read(name):
+                with open(os.path.join(d, "out", name), encoding="utf-8") as f:
+                    return f.read()
+
             self.assertEqual(read("report.md"), "REPORT")
             lines = read("requests.jsonl").splitlines()
             self.assertEqual(len(lines), 2)
             self.assertIn("привет", lines[1])  # not escaped: readable
             self.assertEqual(json.loads(read("facts.json"))["machine"], "x86_64")
             self.assertTrue(os.path.exists(os.path.join(d, "out", "samples.jsonl")))
+
+
+class ContainerStartTest(unittest.TestCase):
+    def start(self, cpus, memory):
+        calls = []
+
+        def fake_docker(*args, **kwargs):
+            calls.append(args)
+            return mock.Mock(stdout="127.0.0.1:49153\n", returncode=0)
+
+        container = check.Container("img:latest", cpus, memory)
+        with mock.patch.object(check, "docker", side_effect=fake_docker), mock.patch.object(check, "get_status", return_value=200):
+            container.start()
+        return container, [c for c in calls if c[0] == "run"][0]
+
+    def test_it_is_started_the_way_coolify_will_start_it(self):
+        container, run = self.start(2, 3)
+        self.assertEqual(run[run.index("--memory") + 1], "3g")
+        self.assertEqual(run[run.index("--memory-swap") + 1], "3g")  # equal: no swap
+        self.assertEqual(run[run.index("--cpus") + 1], "2")          # a quota, not pinned cores
+        self.assertNotIn("--cpuset-cpus", run)
+        self.assertEqual(run[run.index("-p") + 1], "127.0.0.1::8000")  # reachable from this machine only
+        self.assertTrue(any(a.startswith("STT_TOKEN=") and len(a) > 20 for a in run))
+        self.assertEqual(run[-1], "img:latest")
+        self.assertEqual(container.base, "http://127.0.0.1:49153")
+
+    def test_a_fractional_limit_reaches_docker_as_it_is(self):
+        _, run = self.start(1, 2.5)
+        self.assertEqual((run[run.index("--memory") + 1], run[run.index("--memory-swap") + 1]), ("2.5g", "2.5g"))
 
 
 class StartTest(unittest.TestCase):
@@ -654,6 +715,20 @@ class StartTest(unittest.TestCase):
         with mock.patch.object(check, "docker", return_value=mock.Mock(stdout="")), \
                 mock.patch.object(check, "host_available", return_value=available):
             check.check_start(args, info or self.INFO)
+
+    def test_a_fractional_memory_limit(self):
+        self.assertEqual(self.args("--memory", "2.5").memory, 2.5)
+        self.assertEqual(self.args().memory, 3)
+        self.start(self.args("--memory", "2.5"), available=3 * GIB)  # 2.5 GiB + 512 MiB fit exactly
+        with self.assertRaises(check.CheckError):
+            self.start(self.args("--memory", "2.5"), available=3 * GIB - MIB)
+        results = good_results()
+        results["speed"][0] = speed_result(1, lim=limits(1, memory=int(2.5 * GIB)))
+        results["speed"][1] = speed_result(2, lim=limits(2, memory=int(2.5 * GIB)))
+        results["memory"] = memory_result(lim=limits(2, memory=int(2.5 * GIB)))
+        titles = by_title(check.judge(results, 2.5))
+        self.assertEqual(titles["Лимиты контейнера применяются"].status, OK)
+        self.assertIn("Память при лимите 2.5 ГБ", titles)
 
     def test_arguments(self):
         a = self.args()

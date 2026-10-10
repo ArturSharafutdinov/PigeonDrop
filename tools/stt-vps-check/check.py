@@ -340,7 +340,7 @@ class Container:
     """One container of the image, started the way Coolify will start it: a memory limit without swap, a CPU quota
     (not pinned cores), the token in the environment, the port reachable only from this machine."""
 
-    def __init__(self, image: str, cpus: int, memory_gib: int, name: str = CONTAINER):
+    def __init__(self, image: str, cpus: int, memory_gib: float, name: str = CONTAINER):
         self.image, self.cpus, self.memory_gib, self.name = image, cpus, memory_gib, name
         self.token = secrets.token_hex(16)
         self.base = ""
@@ -350,7 +350,7 @@ class Container:
 
     def start(self) -> None:
         docker("rm", "-f", self.name, check=False)
-        memory = f"{self.memory_gib}g"
+        memory = f"{self.memory_gib:g}g"
         docker("run", "-d", "--name", self.name, "--memory", memory, "--memory-swap", memory, "--cpus", str(self.cpus),
                "-p", "127.0.0.1::8000", "-e", f"STT_TOKEN={self.token}", self.image)
         started = time.monotonic()
@@ -463,7 +463,7 @@ def measured_request(container: Container, clip: Clip, step: str, **extra) -> di
         row.update(status=0, wall_s=0.0, error=str(error))
         return row
     row.update(status=reply.status, wall_s=round(reply.seconds, 3), cpu_s=round((after.cpu_usec - before.cpu_usec) / 1e6, 3),
-               mem_current=after.current, mem_anon=after.anon, mem_peak=after.peak)
+               mem_current=after.current, mem_anon=after.anon, mem_file=after.file, mem_peak=after.peak)
     if reply.status == 200:
         row.update(stt_s=round(reply.body.get("stt_ms", 0) / 1000, 3), text=str(reply.body.get("text", "")).strip())
     else:
@@ -532,7 +532,11 @@ def running_max(values: List[int]) -> List[int]:
 
 def analyze_memory(rows: List[dict], limit: int) -> dict:
     """What the memory did over the calls, in the terms of the stand's report: the container's peak, how far it is
-    from the limit, which calls raised it and whether it stopped rising."""
+    from the limit, which calls raised it and whether it stopped rising.
+
+    The container is charged for the cache of the files it read (the model's, about 700 MiB on a real Linux), and the
+    kernel drops that cache before it kills anything. So the verdict looks at `own`: what is charged minus the file
+    cache, which is what cannot be dropped (the process's memory and the kernel's)."""
     ok = [r for r in rows if r["status"] == 200 and "mem_current" in r]
     if not ok:
         return {"calls": 0}
@@ -542,7 +546,9 @@ def analyze_memory(rows: List[dict], limit: int) -> dict:
     raises = [i + 1 for i in range(1, len(peaks)) if peaks[i] - peaks[i - 1] >= RAISE_MIB * MIB]
     # `raises` compares neighbours, so a creep of many small steps is not lost: it is measured over the second half.
     half = len(peaks) // 2
+    own = [r["mem_current"] - r["mem_file"] if r.get("mem_file") is not None else r["mem_anon"] for r in ok]
     return {"calls": len(ok), "peak": peaks[-1], "peak_sampled": sampled, "headroom": limit - peaks[-1],
+            "own_max": max(own), "own_headroom": limit - max(own),
             "anon_max": max(r["mem_anon"] for r in ok), "current_max": max(r["mem_current"] for r in ok),
             "raises": raises, "last_raise": raises[-1] if raises else None,
             "growth_second_half": peaks[-1] - peaks[half - 1] if half >= 1 else 0,
@@ -595,7 +601,7 @@ def run_oom_test(image: str) -> dict:
 def run_speed(args, clips: List[Clip], max60: Clip, reference: Dict[str, str]) -> List[dict]:
     results = []
     for cpus in args.cpus:
-        say(f"скорость: новый контейнер, {args.memory} ГБ, ядер {cpus}")
+        say(f"скорость: новый контейнер, {args.memory:g} ГБ, ядер {cpus}")
         container = Container(args.image, cpus, args.memory)
         with running(container) as watchdog:
             say(f"  модель готова через {container.ready_seconds:.1f} с после запуска; лимиты: {container.limits}")
@@ -622,9 +628,9 @@ def run_speed(args, clips: List[Clip], max60: Clip, reference: Dict[str, str]) -
 def run_memory(args, clips: List[Clip], max60: Clip, varied: List[Clip], rtf: Optional[float]) -> dict:
     items = clips + varied + [max60]
     pass_audio = sum(c.seconds for c in items)
-    limit = args.memory * GIB
+    limit = int(args.memory * GIB)
     estimate = f"около {args.passes * pass_audio * rtf / 60:.0f} мин" if rtf else "неизвестно (шаг скорости не запускался)"
-    say(f"память: ядер {args.soak_cpus}, {args.memory} ГБ, до {args.passes} проходов по {len(items)} вызовов "
+    say(f"память: ядер {args.soak_cpus}, {args.memory:g} ГБ, до {args.passes} проходов по {len(items)} вызовов "
         f"({pass_audio:.0f} с звука в проходе), не дольше {args.soak_minutes} мин; ожидается {estimate}")
     container = Container(args.image, args.soak_cpus, args.memory)
     rows: List[dict] = []
@@ -680,7 +686,7 @@ def mib(value: Optional[int]) -> str:
     return "н/д" if value is None else f"{value // MIB} МиБ"
 
 
-def judge_limits(results: dict, memory_gib: int) -> Verdict:
+def judge_limits(results: dict, memory_gib: float) -> Verdict:
     title = "Лимиты контейнера применяются"
     containers = [(f"{r['cpus']} ядр.", r["cpus"], r["limits"]) for r in results.get("speed", [])]
     if results.get("memory"):
@@ -689,8 +695,8 @@ def judge_limits(results: dict, memory_gib: int) -> Verdict:
         return Verdict(SKIP, title, "контейнер не запускался")
     problems, warnings = [], []
     for label, cpus, limits in containers:
-        if limits["memory_max"] != memory_gib * GIB:
-            problems.append(f"{label}: memory.max {limits['memory_max']}, ждали {memory_gib * GIB}")
+        if limits["memory_max"] != int(memory_gib * GIB):
+            problems.append(f"{label}: memory.max {limits['memory_max']}, ждали {int(memory_gib * GIB)}")
         if limits["swap_max"] != 0:
             problems.append(f"{label}: memory.swap.max {limits['swap_max']}, ждали 0 (контейнер сможет уйти в подкачку)")
         quota, period = limits["cpu_quota_us"], limits["cpu_period_us"]
@@ -707,7 +713,7 @@ def judge_limits(results: dict, memory_gib: int) -> Verdict:
                               f"потоков столько же, сколько ядер по квоте (контейнер видит ядер: {seen['visible_cpus']})")
 
 
-def judge(results: dict, memory_gib: int) -> List[Verdict]:
+def judge(results: dict, memory_gib: float) -> List[Verdict]:
     verdicts = [judge_limits(results, memory_gib)]
 
     title = "Сверх лимита контейнер убивается"
@@ -750,16 +756,17 @@ def judge(results: dict, memory_gib: int) -> List[Verdict]:
                                                f"(сервер ждёт 90 с; в норме до {LATENCY_OK_S:.0f} с)"))
 
     if memory:
-        title = f"Память при лимите {memory_gib} ГБ"
+        title = f"Память при лимите {memory_gib:g} ГБ"
         a = memory["analysis"]
         killed = memory["final"].get("oom_killed") or (memory["oom_events"] or 0) > 0
         if not a["calls"]:
             verdicts.append(Verdict(FAIL, title, f"ни один вызов не удался ({memory['stopped'] or 'причина неизвестна'})"))
         else:
-            headroom = a["headroom"] // MIB
+            headroom = a["own_headroom"] // MIB
             status = FAIL if killed or headroom < HEADROOM_WARN_MIB else WARN if headroom < HEADROOM_OK_MIB else OK
-            notes = [f"пик {mib(a['peak'])}{' (по замерам, не меньше)' if a['peak_sampled'] else ''} из {mib(memory['limit'])}, "
-                     f"запас {headroom} МиБ, собственная память процесса (anon) до {mib(a['anon_max'])}",
+            notes = [f"пик с кэшем файлов {mib(a['peak'])}{' (по замерам, не меньше)' if a['peak_sampled'] else ''} из {mib(memory['limit'])}; "
+                     f"без кэша (его при нехватке сбрасывают) до {mib(a['own_max'])}, запас до лимита {headroom} МиБ, "
+                     f"из них собственная память процесса (anon) до {mib(a['anon_max'])}",
                      f"вызовов {a['calls']}, последний подъём на вызове {a['last_raise']}, рост во второй половине "
                      f"{a['growth_second_half'] // MIB} МиБ"]
             if killed:
@@ -829,11 +836,11 @@ def render_report(results: dict, verdicts: List[Verdict]) -> str:
     if memory and memory["analysis"]["calls"]:
         a = memory["analysis"]
         lines += ["", "## Память (на Mac: пик 2232 МиБ из 3072, последний подъём на вызове 54 из 1240)", "",
-                  "| Ядер | Проходов | Вызовов | Пик, МиБ | Запас, МиБ | Своя память (anon) макс., МиБ | Последний подъём (5+ МиБ) на вызове | Рост во второй половине, МиБ | Убит |",
-                  "|---|---|---|---|---|---|---|---|---|",
+                  "| Ядер | Проходов | Вызовов | Пик с кэшем файлов, МиБ | Без кэша, макс., МиБ | Запас без кэша, МиБ | Своя память (anon) макс., МиБ | Последний подъём (5+ МиБ) на вызове | Рост во второй половине, МиБ | Убит |",
+                  "|---|---|---|---|---|---|---|---|---|---|",
                   f"| {memory['cpus']} | {memory['passes']} | {a['calls']} | {a['peak'] // MIB}{'*' if a['peak_sampled'] else ''} | "
-                  f"{a['headroom'] // MIB} | {a['anon_max'] // MIB} | {a['last_raise']} | {a['growth_second_half'] // MIB} | "
-                  f"{'да' if memory['final'].get('oom_killed') else 'нет'} |"]
+                  f"{a['own_max'] // MIB} | {a['own_headroom'] // MIB} | {a['anon_max'] // MIB} | {a['last_raise']} | "
+                  f"{a['growth_second_half'] // MIB} | {'да' if memory['final'].get('oom_killed') else 'нет'} |"]
         if a["peak_sampled"]:
             lines.append("\n\\* в этом ядре нет `memory.peak`: пик это наибольшее значение, замеченное после вызова, то есть оценка снизу.")
     return "\n".join(lines) + "\n"
@@ -851,7 +858,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--out", default=None, help="куда писать отчёт и сырые результаты (по умолчанию out/<время>)")
     ap.add_argument("--cpus", default="1,2", help="сколько ядер давать контейнеру на шаге скорости, через запятую (1,2)")
     ap.add_argument("--soak-cpus", type=int, default=None, help="ядер на шаге памяти (по умолчанию наибольшее из --cpus)")
-    ap.add_argument("--memory", type=int, default=3, help="лимит памяти контейнера, ГБ (3)")
+    ap.add_argument("--memory", type=float, default=3, help="лимит памяти контейнера, ГБ, можно дробный (3)")
     ap.add_argument("--steps", default="oom,speed,memory", help="oom, speed, memory (по умолчанию все три)")
     ap.add_argument("--rounds", type=int, default=2, help="скорость: кругов по всем записям (2)")
     ap.add_argument("--long-repeats", type=int, default=3, help="скорость: вызовов с записью на 60 с (3)")
@@ -893,7 +900,7 @@ def check_start(args: argparse.Namespace, info: dict) -> None:
                          "не поддерживает. Пришлите факты выше, поддержку можно добавить.")
     docker("image", "inspect", args.image)  # a missing image is a clear error from Docker's own message
     available = host_available()
-    need = args.memory * GIB + HOST_START_MARGIN_MIB * MIB
+    need = int(args.memory * GIB) + HOST_START_MARGIN_MIB * MIB
     if available is not None and available < need and not args.force:
         raise CheckError(f"у машины доступно {available // MIB} МиБ, а контейнеру разрешено до {args.memory} ГиБ; чтобы "
                          f"остальные приложения сохранили свою память, нужно не меньше {need // MIB} МиБ. Остановите "
