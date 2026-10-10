@@ -57,6 +57,7 @@ pigeondrop invite list      # приглашения: свободно, испо
 pigeondrop invite revoke ID # отозвать неиспользованное
 pigeondrop user list        # пользователи
 pigeondrop user set-password EMAIL   # новый пароль (спросит дважды или прочтёт из stdin); все сессии пользователя закончатся
+pigeondrop stt check                 # расшифровка: отправить сервису (STT_URL, STT_TOKEN) секунду тишины и сказать, ответил ли он; базу не трогает
 pigeondrop stt status                # расшифровка: очередь по состояниям, сколько ждёт самая старая, неудачи, последняя ошибка
 pigeondrop stt enqueue -missing      # поставить в очередь записи, которые в неё никогда не попадали (до включения расшифровки); -max-audio 65s
 pigeondrop stt retry -failed         # вернуть в очередь все записи, на которых сдались (с нуля, в конец очереди)

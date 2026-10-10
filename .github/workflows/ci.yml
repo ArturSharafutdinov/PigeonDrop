@@ -1,10 +1,11 @@
 name: CI/CD
 
 # Checks run on every push to main and on every pull request. Only a push to
-# main after which backend/ (or the deploy script) differs from what is
+# main after which backend/ (or the deploy scripts) differs from what is
 # deployed, or a manual run ("Run workflow", which always deploys), can deploy,
-# and only the Go server is deployed: the watch app is published through Zepp,
-# not from here. "What is deployed" is the commit in the image tagged
+# and only two things are deployed: the Go server and the speech recognition
+# service (stt/), each as its own image to its own Coolify application. The
+# watch app is published through Zepp, not from here. "What is deployed" is the commit in the image tagged
 # `deployed`, which this workflow sets after Coolify confirms a deployment (see
 # .github/scripts/backend-changed.sh for why it is not simply the previous
 # push). The image is built here and pushed to GitHub's container registry;
@@ -45,6 +46,7 @@ jobs:
       backend: ${{ steps.areas.outputs.backend }}
       watch: ${{ steps.areas.outputs.watch }}
       scripts: ${{ steps.areas.outputs.scripts }}
+      stt: ${{ steps.areas.outputs.stt }}
     steps:
       # The checkout of a pull request is the merge of it into its base branch; two commits are enough to see what
       # the pull request changes (HEAD^1 is the base branch).
@@ -58,12 +60,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          all() { printf '%s=true\n' backend watch scripts >> "$GITHUB_OUTPUT"; exit 0; }
+          all() { printf '%s=true\n' backend watch scripts stt >> "$GITHUB_OUTPUT"; exit 0; }
           [ "$EVENT_NAME" = pull_request ] || all
           files=$(git diff --name-only HEAD^1 HEAD) || all # cannot tell: run everything
           echo "$files"
           this='\.github/workflows/ci\.yml'
-          for area in "backend:backend/" "watch:PigeonDrop/" "scripts:\.github/scripts/"; do
+          for area in "backend:backend/" "watch:PigeonDrop/" "scripts:\.github/scripts/" "stt:stt/"; do
             if grep -Eq "^(${area#*:}|${this}$)" <<< "$files"; then value=true; else value=false; fi
             echo "${area%%:*}=$value" | tee -a "$GITHUB_OUTPUT"
           done
@@ -169,8 +171,8 @@ jobs:
           node-version: 24
       - name: Run the tests against a fake Coolify
         run: .github/scripts/test/test-coolify-deploy.sh
-      - name: Run the tests of the check for backend changes
-        run: .github/scripts/test/test-backend-changed.sh
+      - name: Run the tests of the check for changes of an image
+        run: .github/scripts/test/test-image-changed.sh
 
   # The backup scripts (tools/backup) show their faults only on the day a restore is needed, so they are run here
   # against a real PostgreSQL 17 in Docker: every way the dump can go wrong and every way a restore can be broken.
@@ -185,12 +187,14 @@ jobs:
       - name: Run the scripts against PostgreSQL 17
         run: tools/backup/test/test-backup.sh
 
-  # The speech recognition service (stt/) is tested with a fake model, so the job needs no model, no Docker and no
-  # packages: only the standard library. The real model is tried by stt/smoke.sh.
+  # The speech recognition service (stt/) is tested with a fake model, so these tests need no model, no Docker and no
+  # packages: only the standard library. The real model is tried by stt/smoke.sh, here on made-up recordings, in the
+  # pull requests that touch stt/ (a push to main builds and tries the image in the deploy job anyway).
   stt:
     name: Speech recognition service
+    needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -202,6 +206,12 @@ jobs:
       # The one-off check of the image on the VPS (tools/stt-vps-check): a stub service, no Docker.
       - name: Run the tests of the VPS check
         run: python -m unittest discover -s tools/stt-vps-check -v
+      # The model (about 640 MB) is downloaded while the image is built, so this takes minutes: only when stt/ changed.
+      - name: Build the Docker image and try it with the production limits
+        if: github.event_name == 'pull_request' && needs.changes.outputs.stt == 'true'
+        run: |
+          docker build --tag pigeondrop-stt:ci stt
+          IMAGE=pigeondrop-stt:ci stt/smoke-synthetic.sh
 
   deploy:
     name: Deploy to Coolify
@@ -235,7 +245,9 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           DEPLOYED_IMAGE: ${{ env.IMAGE }}:deployed
-        run: .github/scripts/backend-changed.sh
+          CHANGE_PATHS: backend .github/scripts
+          WHAT: backend
+        run: .github/scripts/image-changed.sh
 
       # The image is tagged with the commit (to roll back to, and to tell what is running: `pigeondrop version`
       # prints it) and as latest (what the Coolify application runs). The label is how the next run finds out
@@ -260,6 +272,76 @@ jobs:
 
       # Only a deployment that Coolify confirmed counts: a failed or unconfirmed one leaves the tag where it was, so
       # the next push deploys again, whatever it touches.
+      - name: Mark the commit as deployed
+        if: steps.coolify.outputs.deployed == 'true'
+        run: |
+          docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:deployed"
+          docker push "$IMAGE:deployed"
+
+  # The speech recognition service is deployed the same way as the server, on its own: its own image, its own
+  # Coolify application (the secret COOLIFY_STT_APP_UUID) and its own `deployed` tag, so that a change of one never
+  # rebuilds or restarts the other. The image holds the model (about 1.6 GB); before it is pushed it is started with
+  # the production limits and asked to recognise something, so that an image that does not even answer never becomes
+  # `latest`. Its Coolify application is created by hand once (backend/DEPLOY.md); until the secret is set, the
+  # image is still built and pushed and the deploy step only warns.
+  deploy-stt:
+    name: Deploy the speech recognition service to Coolify
+    needs: [stt, deploy-script]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # to push the image to ghcr.io
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      COOLIFY_APP_UUID: ${{ secrets.COOLIFY_STT_APP_UUID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to the registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-stt" >> "$GITHUB_ENV"
+
+      # The deploy scripts count as part of the service too: a change to them is tried on both images.
+      - name: Check whether the service changed since the last deployment
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEPLOYED_IMAGE: ${{ env.IMAGE }}:deployed
+          CHANGE_PATHS: stt .github/scripts
+          WHAT: speech recognition service
+        run: .github/scripts/image-changed.sh
+
+      - name: Build the image and try it
+        if: steps.changed.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          docker build stt \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$IMAGE:$GITHUB_SHA" --tag "$IMAGE:latest"
+          IMAGE="$IMAGE:$GITHUB_SHA" stt/smoke-synthetic.sh
+
+      - name: Push the image
+        if: steps.changed.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+          echo "Pushed $IMAGE:$GITHUB_SHA and $IMAGE:latest"
+
+      - name: Deploy and wait for Coolify
+        id: coolify
+        if: steps.changed.outputs.deploy == 'true'
+        run: .github/scripts/coolify-deploy.sh
+
       - name: Mark the commit as deployed
         if: steps.coolify.outputs.deployed == 'true'
         run: |

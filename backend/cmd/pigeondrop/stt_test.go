@@ -3,7 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -270,5 +275,168 @@ func TestSttStatusShowsTheQueueAndTheLatestFailure(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+// --- stt check: the way to find out, from inside the server's container, that the service can be used
+
+// stubService is a service that answers as told and keeps what it was sent.
+type stubService struct {
+	*httptest.Server
+	mu      sync.Mutex
+	headers http.Header
+	body    []byte
+}
+
+func newStubService(t *testing.T, status int, reply string, wantToken string) *stubService {
+	t.Helper()
+	stub := &stubService{}
+	stub.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		stub.mu.Lock()
+		stub.headers, stub.body = r.Header.Clone(), body
+		stub.mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer "+wantToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"code":"unauthorized","message":"bad token"}`)
+			return
+		}
+		w.WriteHeader(status)
+		io.WriteString(w, reply)
+	}))
+	t.Cleanup(stub.Close)
+	return stub
+}
+
+// checkEnv is the environment of a server whose database cannot be reached at all: the check must not need it.
+func checkEnv(url, token string) func(string) string {
+	return envOf(map[string]string{"DATABASE_URL": "postgres://nobody@127.0.0.1:1/none", "STT_URL": url, "STT_TOKEN": token, "STT_TIMEOUT": "5s"})
+}
+
+func runCheck(t *testing.T, env func(string) string) (stdout string, err error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	err = run(context.Background(), []string{"stt", "check"}, env, strings.NewReader(""), &out, &errOut)
+	return out.String(), err
+}
+
+func TestSttCheckSaysOkWhenTheServiceAnswersAndSendsItASecondOfSilence(t *testing.T) {
+	stub := newStubService(t, 200, `{"text":"","language":null,"engine":"parakeet-test","audio_ms":1000,"stt_ms":12}`, "secret-token")
+
+	stdout, err := runCheck(t, checkEnv(stub.URL, "secret-token"))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ok:", stub.URL, "parakeet-test", "12 ms", "1000 ms of audio"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout lacks %q: %q", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "secret-token") {
+		t.Error("the token is in the output")
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.headers.Get("Content-Type") != "audio/wav" || stub.headers.Get("X-Request-Id") == "" {
+		t.Errorf("headers: %v", stub.headers)
+	}
+	// What was sent is what the service takes: a WAV, 16 kHz, 16-bit, mono, one second, all zeros.
+	if len(stub.body) != 44+32000 || string(stub.body[:4]) != "RIFF" || string(stub.body[8:12]) != "WAVE" {
+		t.Fatalf("the body is %d bytes starting %q", len(stub.body), stub.body[:12])
+	}
+	if rate := binary.LittleEndian.Uint32(stub.body[24:28]); rate != 16000 {
+		t.Errorf("sample rate %d", rate)
+	}
+	if channels, bits := binary.LittleEndian.Uint16(stub.body[22:24]), binary.LittleEndian.Uint16(stub.body[34:36]); channels != 1 || bits != 16 {
+		t.Errorf("%d channels, %d bits", channels, bits)
+	}
+	if !bytes.Equal(stub.body[44:], make([]byte, 32000)) {
+		t.Error("the second is not silence")
+	}
+}
+
+func TestSttCheckNamesTheLikelyCauseWhenTheTokenIsWrong(t *testing.T) {
+	stub := newStubService(t, 200, `{}`, "the-services-token")
+
+	stdout, err := runCheck(t, checkEnv(stub.URL, "other-token"))
+
+	if err == nil || stdout != "" {
+		t.Fatalf("stdout %q, error %v", stdout, err)
+	}
+	if !strings.Contains(err.Error(), "STT_TOKEN") || !strings.Contains(err.Error(), "401") {
+		t.Errorf("the error does not point at the token: %v", err)
+	}
+	for _, secret := range []string{"other-token", "the-services-token"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("the error contains a token: %v", err)
+		}
+	}
+}
+
+func TestSttCheckSaysWhenTheServiceCannotBeReached(t *testing.T) {
+	stub := newStubService(t, 200, `{}`, "t")
+	url := stub.URL
+	stub.Close() // nothing listens there any more
+
+	_, err := runCheck(t, checkEnv(url, "t"))
+
+	if err == nil || !strings.Contains(err.Error(), "cannot be used") || !strings.Contains(err.Error(), "Docker network") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestSttCheckSaysWhenTheModelIsStillLoading(t *testing.T) {
+	stub := newStubService(t, 503, `{"code":"loading","message":"the model is loading"}`, "t")
+
+	_, err := runCheck(t, checkEnv(stub.URL, "t"))
+
+	if err == nil || !strings.Contains(err.Error(), "finished loading") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestSttCheckCountsABusyServiceAsReachable(t *testing.T) {
+	stub := newStubService(t, 429, `{"code":"busy","message":"another recording is being recognised"}`, "t")
+
+	stdout, err := runCheck(t, checkEnv(stub.URL, "t"))
+
+	if err != nil || !strings.Contains(stdout, "busy") {
+		t.Fatalf("stdout %q, error %v", stdout, err)
+	}
+}
+
+func TestSttCheckReportsAServiceThatAnswersBadly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		reply  string
+	}{{"an error of the model", 500, `{"code":"internal","message":"boom"}`}, {"a refusal", 400, `{"code":"bad_audio","message":"no"}`}, {"nonsense", 200, `<html>`}} {
+		stub := newStubService(t, tc.status, tc.reply, "very-secret-token")
+
+		stdout, err := runCheck(t, checkEnv(stub.URL, "very-secret-token"))
+
+		if err == nil || !strings.Contains(err.Error(), "answered badly") || stdout != "" {
+			t.Errorf("%s: stdout %q, error %v", tc.name, stdout, err)
+		} else if strings.Contains(err.Error(), "very-secret-token") {
+			t.Errorf("%s: the token is in the error: %v", tc.name, err)
+		}
+	}
+}
+
+func TestSttCheckWithoutAServiceConfiguredSaysSo(t *testing.T) {
+	_, err := runCheck(t, envOf(map[string]string{"DATABASE_URL": "postgres://nobody@127.0.0.1:1/none"}))
+
+	if err == nil || !strings.Contains(err.Error(), "STT_URL is not set") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestSttCheckTakesNoArguments(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := run(context.Background(), []string{"stt", "check", "now"}, checkEnv("http://127.0.0.1:1", "t"), strings.NewReader(""), &out, &errOut)
+
+	if err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+		t.Fatalf("error: %v", err)
 	}
 }

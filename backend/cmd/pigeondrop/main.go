@@ -45,7 +45,7 @@ commands:
   migrate status    list migrations and whether they are applied
   invite create     print a new invitation code        (also: invite list, invite revoke <id>)
   user list         list users                         (also: user set-password <email>)
-  stt status        speech recognition queue           (also: stt enqueue -missing, stt retry -failed)
+  stt status        speech recognition queue           (also: stt check, stt enqueue -missing, stt retry -failed)
   healthcheck       exit 0 if the local server answers /healthz
   version           print the version
 `
