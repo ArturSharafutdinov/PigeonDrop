@@ -185,6 +185,21 @@ jobs:
       - name: Run the scripts against PostgreSQL 17
         run: tools/backup/test/test-backup.sh
 
+  # The speech recognition service (stt/) is tested with a fake model, so the job needs no model, no Docker and no
+  # packages: only the standard library. The real model is tried by stt/smoke.sh.
+  stt:
+    name: Speech recognition service
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run the tests
+        working-directory: stt
+        run: python -m unittest discover -s tests -t . -v
+
   deploy:
     name: Deploy to Coolify
     needs: [backend, deploy-script]
