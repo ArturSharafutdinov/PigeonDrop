@@ -13,6 +13,11 @@ name: CI/CD
 # secrets described in backend/DEPLOY.md; without them it still pushes the
 # image, says that it did not deploy, and finishes, so this workflow is safe to
 # push before Coolify is set up.
+#
+# Actions minutes are a limit, so the workflow spends as few as it can: a pull request runs only the checks for the
+# parts of the repository it touches (the `changes` job decides), a push to a branch without a pull request runs
+# nothing (only main is listed under `push`), a newer push to a pull request cancels the older run, and dependencies
+# are cached. A push to main and a manual run always run every check: they gate the deployment.
 
 on:
   push:
@@ -28,8 +33,45 @@ permissions:
   contents: read
 
 jobs:
+  # Which parts of the repository a pull request touches. Every check of a part is skipped when the pull request does
+  # not touch it (a documentation-only pull request runs this job and nothing else). A job skipped like that counts
+  # as passed for branch protection. Anything but a pull request runs everything. The workflow file itself belongs
+  # to every part: a change to it must be tried on all of them.
+  changes:
+    name: Changed parts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.areas.outputs.backend }}
+      watch: ${{ steps.areas.outputs.watch }}
+      scripts: ${{ steps.areas.outputs.scripts }}
+    steps:
+      # The checkout of a pull request is the merge of it into its base branch; two commits are enough to see what
+      # the pull request changes (HEAD^1 is the base branch).
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - name: Find the parts that changed
+        id: areas
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          all() { printf '%s=true\n' backend watch scripts >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$EVENT_NAME" = pull_request ] || all
+          files=$(git diff --name-only HEAD^1 HEAD) || all # cannot tell: run everything
+          echo "$files"
+          this='\.github/workflows/ci\.yml'
+          for area in "backend:backend/" "watch:PigeonDrop/" "scripts:\.github/scripts/"; do
+            if grep -Eq "^(${area#*:}|${this}$)" <<< "$files"; then value=true; else value=false; fi
+            echo "${area%%:*}=$value" | tee -a "$GITHUB_OUTPUT"
+          done
+
   backend:
     name: Go backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -56,7 +98,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          # The module and build caches are restored by the hash of these files. The code generators
+          # (`make generate`) have their own modules in tools/ and are slow to compile from scratch.
+          cache-dependency-path: |
+            backend/go.sum
+            backend/tools/go.sum
       - name: Generated code is up to date
         run: |
           make generate
@@ -67,13 +113,23 @@ jobs:
         run: go vet ./...
       - name: Tests (with the race detector)
         run: go test -race ./...
+      # A push to main builds the image in the deploy job anyway (when it is needed at all), so this is only for
+      # pull requests: does the Dockerfile still build.
       - name: Build the Docker image
+        if: github.event_name == 'pull_request'
         run: docker build --tag pigeondrop-backend .
 
-  watch-app:
-    name: Watch app tests
+  # Tests and build of the watch app in one job: the minutes are billed per job, rounded up, and each job pays for
+  # its own start and checkout.
+  watch:
+    name: Watch app
+    needs: changes
+    if: needs.changes.outputs.watch == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: PigeonDrop
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -82,17 +138,13 @@ jobs:
       # The tests load the app's real source with the Zepp OS modules stubbed, so nothing needs installing.
       - name: Run tests
         run: npm test
-        working-directory: PigeonDrop
-
-  watch-build:
-    name: Watch app build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # The CLI is installed globally, so there is no lock file for setup-node to cache by: npm's download cache is
+      # kept under the CLI's version instead.
+      - name: Cache the npm downloads
+        uses: actions/cache@v4
         with:
-          node-version: 24
+          path: ~/.npm
+          key: npm-zeus-cli-1.9.3-${{ runner.os }}
       - name: Install the Zepp OS CLI
         run: npm install --global @zeppos/zeus-cli@1.9.3
       # config.js is gitignored (it holds the real server URL); the example is enough to compile.
@@ -101,12 +153,13 @@ jobs:
           cp config.example.js config.js
           zeus build < /dev/null
           ls dist
-        working-directory: PigeonDrop
 
   # The deploy script is the one part of the pipeline that can only fail on release day, so it is tested here
   # against a fake Coolify API (every outcome: success, failure, refusal, unreachable, no secrets).
   deploy-script:
     name: Deploy script tests
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
