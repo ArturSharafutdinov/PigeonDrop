@@ -108,6 +108,10 @@ def make_handler(service: Service):
 
         def _answer(self, status: int, payload: dict, headers: Optional[dict] = None, **fields) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            # Logged before the answer goes out, so that the line exists by the time the client has the answer: a
+            # client (or a test) that reads the log right after its response must find the request in it.
+            log(logging.INFO if status < 500 else logging.ERROR, "request", request_id=self.request_id, method=self.command,
+                path=self.path, status=status, ms=round((time.perf_counter() - self.started) * 1000), **fields)
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -116,8 +120,6 @@ def make_handler(service: Service):
                 self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
-            log(logging.INFO if status < 500 else logging.ERROR, "request", request_id=self.request_id, method=self.command,
-                path=self.path, status=status, ms=round((time.perf_counter() - self.started) * 1000), **fields)
 
         def _error(self, status: int, code: str, message: str, headers: Optional[dict] = None, **fields) -> None:
             self._answer(status, {"code": code, "message": message}, headers, **fields)
