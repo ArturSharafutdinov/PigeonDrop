@@ -118,16 +118,20 @@ INTERESTING_FLAGS = ("avx2", "fma", "avx512f", "avx512_vnni", "avx_vnni", "asimd
 
 
 def cpu_description(cpuinfo: str) -> Tuple[str, List[str]]:
-    model, flags = "unknown", []
+    """The processor's name and the interesting instruction sets. On x86 `model` is a number (the line before
+    `model name`); on some ARM boards `Model` is the board's name, so it is a fallback, and only when it is not a number."""
+    names, fallback, flags = [], "", []
     for line in cpuinfo.splitlines():
         key, _, value = line.partition(":")
         key, value = key.strip().lower(), value.strip()
-        if key in ("model name", "model") and model == "unknown" and value:
-            model = value
-        if key in ("flags", "features") and not flags:
+        if key == "model name" and value:
+            names.append(value)
+        elif key in ("model", "hardware") and value and not value.isdigit() and not fallback:
+            fallback = value
+        elif key in ("flags", "features") and not flags:
             have = value.split()
             flags = [f for f in INTERESTING_FLAGS if f in have]
-    return model, flags
+    return (names[0] if names else fallback or "unknown"), flags
 
 
 def docker(*args: str, timeout: Optional[float] = 120, check: bool = True) -> subprocess.CompletedProcess:

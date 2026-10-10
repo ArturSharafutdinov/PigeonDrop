@@ -81,6 +81,16 @@ class MachineTest(unittest.TestCase):
         self.assertEqual(check.cpu_description(arm), ("unknown", ["asimd"]))
         self.assertEqual(check.cpu_description(""), ("unknown", []))
 
+    def test_the_x86_model_number_is_not_the_name(self):
+        # Real /proc/cpuinfo of an x86 VPS: "model : 1" comes before "model name".
+        x86 = ("processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 1\n"
+               "model name\t: AMD EPYC 7B13\nflags\t\t: fpu avx2 fma\n")
+        self.assertEqual(check.cpu_description(x86), ("AMD EPYC 7B13", ["avx2", "fma"]))
+
+    def test_a_board_name_on_arm(self):
+        board = "processor : 0\nFeatures : fp asimd\nHardware : BCM2711\nModel : Raspberry Pi 4 Model B\n"
+        self.assertEqual(check.cpu_description(board), ("BCM2711", ["asimd"]))
+
 
 class ContainerReadingTest(unittest.TestCase):
     def test_snapshot(self):
