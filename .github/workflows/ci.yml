@@ -199,6 +199,9 @@ jobs:
       - name: Run the tests
         working-directory: stt
         run: python -m unittest discover -s tests -t . -v
+      # The one-off check of the image on the VPS (tools/stt-vps-check): a stub service, no Docker.
+      - name: Run the tests of the VPS check
+        run: python -m unittest discover -s tools/stt-vps-check -v
 
   deploy:
     name: Deploy to Coolify

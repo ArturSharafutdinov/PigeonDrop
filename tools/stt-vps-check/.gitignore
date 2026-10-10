@@ -1,0 +1,6 @@
+# Your voice and the raw results of a run stay on the disk (README.md).
+data/
+image/
+out/
+__pycache__/
+*.tar.gz
