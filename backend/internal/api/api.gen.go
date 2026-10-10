@@ -20,6 +20,7 @@ import (
 
 // Defines values for ErrorCode.
 const (
+	ErrorCodeConflict           ErrorCode = "conflict"
 	ErrorCodeEmailTaken         ErrorCode = "email_taken"
 	ErrorCodeExpiredToken       ErrorCode = "expired_token"
 	ErrorCodeForbiddenOrigin    ErrorCode = "forbidden_origin"
@@ -40,6 +41,8 @@ const (
 // Valid indicates whether the value is a known member of the ErrorCode enum.
 func (e ErrorCode) Valid() bool {
 	switch e {
+	case ErrorCodeConflict:
+		return true
 	case ErrorCodeEmailTaken:
 		return true
 	case ErrorCodeExpiredToken:
@@ -95,16 +98,16 @@ func (e Language) Valid() bool {
 
 // Defines values for PollPairingResultStatus.
 const (
-	Approved PollPairingResultStatus = "approved"
-	Pending  PollPairingResultStatus = "pending"
+	PollPairingResultStatusApproved PollPairingResultStatus = "approved"
+	PollPairingResultStatusPending  PollPairingResultStatus = "pending"
 )
 
 // Valid indicates whether the value is a known member of the PollPairingResultStatus enum.
 func (e PollPairingResultStatus) Valid() bool {
 	switch e {
-	case Approved:
+	case PollPairingResultStatusApproved:
 		return true
-	case Pending:
+	case PollPairingResultStatusPending:
 		return true
 	default:
 		return false
@@ -126,6 +129,60 @@ func (e StorageState) Valid() bool {
 	case NearlyFull:
 		return true
 	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TranscriptErrorCode.
+const (
+	FileMissing     TranscriptErrorCode = "file_missing"
+	NotDecodable    TranscriptErrorCode = "not_decodable"
+	Rejected        TranscriptErrorCode = "rejected"
+	TooLong         TranscriptErrorCode = "too_long"
+	TooManyFailures TranscriptErrorCode = "too_many_failures"
+)
+
+// Valid indicates whether the value is a known member of the TranscriptErrorCode enum.
+func (e TranscriptErrorCode) Valid() bool {
+	switch e {
+	case FileMissing:
+		return true
+	case NotDecodable:
+		return true
+	case Rejected:
+		return true
+	case TooLong:
+		return true
+	case TooManyFailures:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TranscriptState.
+const (
+	TranscriptStateDone    TranscriptState = "done"
+	TranscriptStateFailed  TranscriptState = "failed"
+	TranscriptStatePending TranscriptState = "pending"
+	TranscriptStateRunning TranscriptState = "running"
+	TranscriptStateSkipped TranscriptState = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the TranscriptState enum.
+func (e TranscriptState) Valid() bool {
+	switch e {
+	case TranscriptStateDone:
+		return true
+	case TranscriptStateFailed:
+		return true
+	case TranscriptStatePending:
+		return true
+	case TranscriptStateRunning:
+		return true
+	case TranscriptStateSkipped:
 		return true
 	default:
 		return false
@@ -230,6 +287,11 @@ type Message struct {
 	Id         openapi_types.UUID `json:"id"`
 	MessageId  string             `json:"messageId"`
 	ReceivedAt time.Time          `json:"receivedAt"`
+
+	// Transcript The recording turned into text by the server (automatically, one recording at a time). Missing for a
+	// recording that was never put in the queue: one received before speech recognition was switched on and not
+	// added since. The text is made by a model and may contain mistakes (whispers, noise, names).
+	Transcript *Transcript `json:"transcript,omitempty"`
 }
 
 // MessageList defines model for MessageList.
@@ -337,6 +399,43 @@ type StorageStatus struct {
 	// UsedBytes What the user's recordings take.
 	UsedBytes int64 `json:"usedBytes"`
 }
+
+// Transcript The recording turned into text by the server (automatically, one recording at a time). Missing for a
+// recording that was never put in the queue: one received before speech recognition was switched on and not
+// added since. The text is made by a model and may contain mistakes (whispers, noise, names).
+type Transcript struct {
+	// Engine The model that made the text, for example `parakeet-tdt-0.6b-v3-int8`.
+	Engine *string `json:"engine,omitempty"`
+
+	// ErrorCode Why a recording is `failed` or `skipped`: `not_decodable` and `too_long` (skipped) are about the
+	// recording; `rejected` (the service refused it), `too_many_failures` (the model did not answer on every
+	// attempt) and `file_missing` (failed) are about the attempt.
+	ErrorCode *TranscriptErrorCode `json:"errorCode,omitempty"`
+
+	// FinishedAt When the text was made, or the recording was given up on or skipped.
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+
+	// Language The language the model says it heard, if it says (the current one does not).
+	Language *string `json:"language,omitempty"`
+
+	// State `pending` waits for its turn (or for a pause before another attempt), `running` is being recognised now,
+	// `done` has its `text`, `failed` was given up on after the attempts (see `errorCode`; it can be retried),
+	// `skipped` is not sent to the model (see `errorCode`).
+	State TranscriptState `json:"state"`
+
+	// Text Only when `done`. Empty when no speech was found in the recording.
+	Text *string `json:"text,omitempty"`
+}
+
+// TranscriptErrorCode Why a recording is `failed` or `skipped`: `not_decodable` and `too_long` (skipped) are about the
+// recording; `rejected` (the service refused it), `too_many_failures` (the model did not answer on every
+// attempt) and `file_missing` (failed) are about the attempt.
+type TranscriptErrorCode string
+
+// TranscriptState `pending` waits for its turn (or for a pause before another attempt), `running` is being recognised now,
+// `done` has its `text`, `failed` was given up on after the attempts (see `errorCode`; it can be retried),
+// `skipped` is not sent to the model (see `errorCode`).
+type TranscriptState string
 
 // UploadMessageRequest defines model for UploadMessageRequest.
 type UploadMessageRequest struct {
@@ -471,6 +570,9 @@ type ServerInterface interface {
 	// DeleteMessage Delete a recording and its files
 	// (DELETE /v1/messages/{id})
 	DeleteMessage(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// RetryTranscription Put a recording whose text could not be made back in the queue
+	// (POST /v1/messages/{id}/transcribe)
+	RetryTranscription(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// GetStorage How full the user's storage is
 	// (GET /v1/storage)
 	GetStorage(w http.ResponseWriter, r *http.Request)
@@ -777,6 +879,32 @@ func (siw *ServerInterfaceWrapper) DeleteMessage(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// RetryTranscription operation middleware
+func (siw *ServerInterfaceWrapper) RetryTranscription(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RetryTranscription(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetStorage operation middleware
 func (siw *ServerInterfaceWrapper) GetStorage(w http.ResponseWriter, r *http.Request) {
 
@@ -928,6 +1056,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/messages", wrapper.UploadMessage)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/storage", wrapper.GetStorage)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/messages/{id}", wrapper.DeleteMessage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/messages/{id}/transcribe", wrapper.RetryTranscription)
 
 	return m
 }
@@ -1846,6 +1975,70 @@ func (response DeleteMessage404JSONResponse) VisitDeleteMessageResponse(w http.R
 	return err
 }
 
+type RetryTranscriptionRequestObject struct {
+	Id openapi_types.UUID `json:"id"`
+}
+
+type RetryTranscriptionResponseObject interface {
+	VisitRetryTranscriptionResponse(w http.ResponseWriter) error
+}
+
+type RetryTranscription202JSONResponse Transcript
+
+func (response RetryTranscription202JSONResponse) VisitRetryTranscriptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryTranscription401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RetryTranscription401JSONResponse) VisitRetryTranscriptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryTranscription404JSONResponse Error
+
+func (response RetryTranscription404JSONResponse) VisitRetryTranscriptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryTranscription409JSONResponse Error
+
+func (response RetryTranscription409JSONResponse) VisitRetryTranscriptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetStorageRequestObject struct {
 }
 
@@ -1931,6 +2124,9 @@ type StrictServerInterface interface {
 	// DeleteMessage Delete a recording and its files
 	// (DELETE /v1/messages/{id})
 	DeleteMessage(ctx context.Context, request DeleteMessageRequestObject) (DeleteMessageResponseObject, error)
+	// RetryTranscription Put a recording whose text could not be made back in the queue
+	// (POST /v1/messages/{id}/transcribe)
+	RetryTranscription(ctx context.Context, request RetryTranscriptionRequestObject) (RetryTranscriptionResponseObject, error)
 	// GetStorage How full the user's storage is
 	// (GET /v1/storage)
 	GetStorage(ctx context.Context, request GetStorageRequestObject) (GetStorageResponseObject, error)
@@ -2409,6 +2605,32 @@ func (sh *strictHandler) DeleteMessage(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DeleteMessageResponseObject); ok {
 		if err := validResponse.VisitDeleteMessageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RetryTranscription operation middleware
+func (sh *strictHandler) RetryTranscription(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	var request RetryTranscriptionRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RetryTranscription(ctx, request.(RetryTranscriptionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RetryTranscription")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RetryTranscriptionResponseObject); ok {
+		if err := validResponse.VisitRetryTranscriptionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

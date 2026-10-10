@@ -524,6 +524,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/messages/{id}/transcribe:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: retryTranscription
+      tags: [messages]
+      summary: Put a recording whose text could not be made back in the queue
+      description: |
+        For a recording whose `transcript.state` is `failed`: it goes back to `pending` with its attempts reset, behind
+        the recordings already waiting, and the answer is its new state. Only a failed recording can be retried: the
+        others are on their way (`pending`, `running`), done, or will not be sent to the model (`skipped`: it cannot
+        be read or is too long), and a repeat of those would change nothing. Nothing to retry, or speech recognition
+        switched off on this server, is `conflict`.
+      security:
+        - cookieAuth: []
+      responses:
+        '202':
+          description: The recording is queued again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transcript'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The user has no such message (`not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The recording has no failed transcription to retry, or speech recognition is off (`conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   # Written by hand (the tag "manual" keeps it out of code generation): it streams a zip file, which the
   # generated JSON handlers are not built for.
   /v1/messages/archive:
@@ -533,8 +574,9 @@ paths:
       summary: Download all recordings in one zip
       description: |
         Every recording of the user as the files were received (`.opus`, named `PigeonDrop-<date>_<time>.opus`
-        after the time they were received, in UTC), stored in the zip without compression. The zip is named
-        after the time of the request (`PigeonDrop-<date>_<time>.zip`).
+        after the time they were received, in UTC), stored in the zip without compression. A recording whose text
+        is ready (and not empty) has it next to it as a UTF-8 file with the same name and the extension `.txt`.
+        The zip is named after the time of the request (`PigeonDrop-<date>_<time>.zip`).
       security:
         - cookieAuth: []
       responses:
@@ -905,6 +947,43 @@ components:
         receivedAt:
           type: string
           format: date-time
+        transcript:
+          $ref: '#/components/schemas/Transcript'
+    Transcript:
+      type: object
+      description: |
+        The recording turned into text by the server (automatically, one recording at a time). Missing for a
+        recording that was never put in the queue: one received before speech recognition was switched on and not
+        added since. The text is made by a model and may contain mistakes (whispers, noise, names).
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [pending, running, done, failed, skipped]
+          description: |
+            `pending` waits for its turn (or for a pause before another attempt), `running` is being recognised now,
+            `done` has its `text`, `failed` was given up on after the attempts (see `errorCode`; it can be retried),
+            `skipped` is not sent to the model (see `errorCode`).
+        text:
+          type: string
+          description: Only when `done`. Empty when no speech was found in the recording.
+        language:
+          type: string
+          description: The language the model says it heard, if it says (the current one does not).
+        engine:
+          type: string
+          description: The model that made the text, for example `parakeet-tdt-0.6b-v3-int8`.
+        finishedAt:
+          type: string
+          format: date-time
+          description: When the text was made, or the recording was given up on or skipped.
+        errorCode:
+          type: string
+          enum: [not_decodable, too_long, rejected, too_many_failures, file_missing]
+          description: |
+            Why a recording is `failed` or `skipped`: `not_decodable` and `too_long` (skipped) are about the
+            recording; `rejected` (the service refused it), `too_many_failures` (the model did not answer on every
+            attempt) and `file_missing` (failed) are about the attempt.
     MessageList:
       type: object
       required: [messages, nextCursor]
@@ -936,6 +1015,7 @@ components:
         - expired_token
         - not_found
         - payload_too_large
+        - conflict
     Health:
       type: object
       required: [ok]

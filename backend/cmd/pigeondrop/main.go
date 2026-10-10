@@ -5,6 +5,7 @@
 //	pigeondrop migrate status list migrations and whether they are applied
 //	pigeondrop invite ...     create, list and revoke invitation codes
 //	pigeondrop user ...       list users, set a password
+//	pigeondrop stt ...        speech recognition: queue status, queue old recordings, retry failed ones
 //	pigeondrop healthcheck    exit 0 if the local server answers /healthz (for Docker)
 //	pigeondrop version
 //
@@ -44,6 +45,7 @@ commands:
   migrate status    list migrations and whether they are applied
   invite create     print a new invitation code        (also: invite list, invite revoke <id>)
   user list         list users                         (also: user set-password <email>)
+  stt status        speech recognition queue           (also: stt enqueue -missing, stt retry -failed)
   healthcheck       exit 0 if the local server answers /healthz
   version           print the version
 `
@@ -85,7 +87,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 			return fmt.Errorf("configuration:\n%w", err)
 		}
 		return migrate(ctx, cfg, args[1:], stdout)
-	case "invite", "user":
+	case "invite", "user", "stt":
 		cfg, err := config.Load(getenv)
 		if err != nil {
 			return fmt.Errorf("configuration:\n%w", err)

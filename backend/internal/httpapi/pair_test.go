@@ -53,7 +53,13 @@ func TestThePairingPageHasNothingThePolicyWouldBlock(t *testing.T) {
 	if regexp.MustCompile(`(?i)\sstyle\s*=`).MatchString(html) || strings.Contains(strings.ToLower(html), "<style") {
 		t.Error("inline style")
 	}
-	if regexp.MustCompile(`https?://`).MatchString(html + string(pairJS) + string(pairCSS)) {
+	// Nothing is loaded from another host. The one thing allowed is a link a person may follow: the licence of the
+	// speech recognition model, which asks for its name and a link to it (CC BY 4.0).
+	licence := regexp.MustCompile(`<a href="https://creativecommons\.org/licenses/by/4\.0/[a-z/.-]*" rel="noopener">CC BY 4\.0</a>`)
+	if n := len(licence.FindAllString(html, -1)); n != 1 {
+		t.Errorf("the model's licence link is on the page %d times, want once", n)
+	}
+	if regexp.MustCompile(`https?://`).MatchString(licence.ReplaceAllString(html, "") + string(pairJS) + string(pairCSS)) {
 		t.Error("the page refers to another host")
 	}
 	// Nothing from the network may be written into the page as markup.

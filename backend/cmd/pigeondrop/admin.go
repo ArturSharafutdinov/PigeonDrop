@@ -7,12 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/term"
 
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/auth"
@@ -30,6 +32,9 @@ const adminUsage = `usage:
   pigeondrop user list                                    list users
   pigeondrop user set-password <email>                    set a new password and end the user's sessions;
                                                           read from the terminal, or from stdin if piped
+  pigeondrop stt status                                   speech recognition: the queue by state, how long the oldest waits, failures
+  pigeondrop stt enqueue -missing [-max-audio 65s]        queue the recordings that were never queued (received before recognition was on)
+  pigeondrop stt retry -failed                            give every recording that was given up on another try
 `
 
 func admin(ctx context.Context, cfg config.Config, group string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -61,6 +66,12 @@ func admin(ctx context.Context, cfg config.Config, group string, args []string, 
 		return userList(ctx, q, stdout)
 	case "user set-password":
 		return userSetPassword(ctx, q, args[1:], stdin, stderr)
+	case "stt status":
+		return sttStatus(ctx, q, cfg, time.Now(), stdout)
+	case "stt enqueue":
+		return sttEnqueue(ctx, q, cfg, args[1:], time.Now(), stdout, stderr)
+	case "stt retry":
+		return sttRetry(ctx, q, cfg, args[1:], time.Now(), stdout, stderr)
 	default:
 		fmt.Fprint(stderr, adminUsage)
 		return fmt.Errorf("unknown command %q", group+" "+args[0])
@@ -215,4 +226,146 @@ func readNewPassword(stdin io.Reader, stderr io.Writer) (string, error) {
 		return "", errors.New("no password on stdin")
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// The speech recognition commands work on the queue in the database; the server's worker (a separate process)
+// picks the work up on its own within a couple of seconds, so there is nothing to tell it.
+
+var sttStates = []string{"pending", "running", "done", "failed", "skipped"}
+
+// sttStatus says how the queue stands: the count in each state, how long the oldest recording has been waiting,
+// and what failed lately.
+func sttStatus(ctx context.Context, q dbgen.Querier, cfg config.Config, now time.Time, stdout io.Writer) error {
+	counts, err := q.CountTranscriptions(ctx)
+	if err != nil {
+		return err
+	}
+	byState := map[string]int64{}
+	for _, c := range counts {
+		byState[c.State] = c.Total
+	}
+	oldest, err := q.OldestWaitingTranscription(ctx)
+	waiting := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	failedDay, err := q.CountFailedTranscriptionsSince(ctx, now.Add(-24*time.Hour))
+	if err != nil {
+		return err
+	}
+
+	if cfg.SpeechURL != "" {
+		fmt.Fprintln(stdout, "recognition: on in this environment (STT_URL is set)")
+	} else {
+		fmt.Fprintln(stdout, "recognition: off in this environment (STT_URL is not set); the server may differ")
+	}
+	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "STATE\tRECORDINGS")
+	for _, state := range sttStates {
+		fmt.Fprintf(w, "%s\t%d\n", state, byState[state])
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if !waiting {
+		fmt.Fprintln(stdout, "waiting: nothing")
+	} else {
+		fmt.Fprintf(stdout, "oldest waiting since %s (%s ago)\n", oldest.UTC().Format("2006-01-02 15:04:05 UTC"), now.Sub(oldest).Round(time.Second))
+	}
+	fmt.Fprintf(stdout, "given up on in the last 24 hours: %d\n", failedDay)
+	latest, err := q.LatestFailedTranscription(ctx)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		fmt.Fprintf(stdout, "latest failure: %s, %s, message %s\n", formatTime(latest.FinishedAt), deref(latest.ErrorCode), latest.MessageID)
+		if latest.LastError != nil {
+			fmt.Fprintf(stdout, "  %s\n", *latest.LastError)
+		}
+	}
+	return nil
+}
+
+func formatTime(t *time.Time) string {
+	if t == nil {
+		return "?"
+	}
+	return t.UTC().Format("2006-01-02 15:04 UTC")
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "?"
+	}
+	return *s
+}
+
+// sttEnqueue queues the recordings that were received before recognition was switched on. It does nothing without
+// -missing: queueing a whole archive is not a thing to do by an accident of typing.
+func sttEnqueue(ctx context.Context, q dbgen.Querier, cfg config.Config, args []string, now time.Time, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("stt enqueue", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	missing := flags.Bool("missing", false, "queue every recording that has no place in the queue yet")
+	maxAudio := flags.Duration("max-audio", cfg.SpeechMaxAudio, "recordings longer than this are not sent to the model")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	if !*missing {
+		return errors.New("usage: pigeondrop stt enqueue -missing")
+	}
+	if *maxAudio <= 0 {
+		return errors.New("-max-audio must be positive")
+	}
+
+	states, err := q.EnqueueMissingTranscriptions(ctx, dbgen.EnqueueMissingTranscriptionsParams{
+		MaxAudioMs: int32(min(maxAudio.Milliseconds(), math.MaxInt32)), Now: now,
+	})
+	if err != nil {
+		return err
+	}
+	queued, skipped := 0, 0
+	for _, state := range states {
+		if state == "skipped" {
+			skipped++
+		} else {
+			queued++
+		}
+	}
+	fmt.Fprintf(stdout, "queued %d recordings (and marked %d as not going to the model: cannot be read, or longer than %s)\n", queued, skipped, *maxAudio)
+	warnIfOff(cfg, queued, stderr)
+	return nil
+}
+
+// sttRetry gives every recording that was given up on another try, behind whatever is queued.
+func sttRetry(ctx context.Context, q dbgen.Querier, cfg config.Config, args []string, now time.Time, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("stt retry", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	failed := flags.Bool("failed", false, "give every recording that was given up on another try")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	if !*failed {
+		return errors.New("usage: pigeondrop stt retry -failed")
+	}
+	n, err := q.RetryFailedTranscriptions(ctx, now)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "queued again: %d recordings\n", n)
+	warnIfOff(cfg, int(n), stderr)
+	return nil
+}
+
+// warnIfOff reminds the operator that queued recordings wait for ever if nothing works the queue.
+func warnIfOff(cfg config.Config, queued int, stderr io.Writer) {
+	if queued > 0 && cfg.SpeechURL == "" {
+		fmt.Fprintln(stderr, "note: STT_URL is not set in this environment. If the server runs without it too, nothing will work the queue.")
+	}
 }

@@ -15,10 +15,13 @@
     forbidden_origin: 'Запрос отклонён: он пришёл с другого сайта.',
     invalid_request: 'Проверьте введённые данные.',
     not_found: 'Не найдено: возможно, это уже удалили.',
+    conflict: 'Эту запись сейчас нельзя расшифровать заново: список мог устареть.',
   }
 
   var $ = function (id) { return document.getElementById(id) }
-  var state = { cursor: null, pendingCode: null }
+  // boxes: the transcript block of each message on the page, by message id; waiting: the ids still being recognised.
+  var state = { cursor: null, pendingCode: null, boxes: {}, waiting: {}, loaded: 0, poll: null }
+  var POLL_MS = 3000
 
   function el(tag, props, children) {
     var node = document.createElement(tag)
@@ -71,6 +74,10 @@
   function showGuest() {
     $('user').hidden = true
     $('guest').hidden = false
+    state.waiting = {}
+    state.boxes = {}
+    clearTimeout(state.poll)
+    state.poll = null
   }
 
   function showTab(which) {
@@ -160,8 +167,72 @@
     })
   }
 
+  // ---- the text of a recording ------------------------------------------------------------------
+
+  var SKIPPED = {
+    not_decodable: 'Запись не удалось прочитать, расшифровать её нельзя.',
+    too_long: 'Запись слишком длинная для расшифровки.',
+  }
+
+  // Shows what the server says about a recording's text in its box: waiting, the text, or what went wrong (with a
+  // way to try again when that helps). Nothing from the server is ever put in as markup.
+  function paintTranscript(id, transcript) {
+    var box = state.boxes[id]
+    if (!box) return
+    box.textContent = ''
+    box.hidden = !transcript
+    if (transcript && (transcript.state === 'pending' || transcript.state === 'running')) state.waiting[id] = true
+    else delete state.waiting[id]
+    if (!transcript) return
+
+    var kind = transcript.state
+    if (kind === 'pending') box.appendChild(el('p', { class: 'hint', text: 'Ждёт расшифровки…' }))
+    else if (kind === 'running') box.appendChild(el('p', { class: 'hint', text: 'Расшифровывается…' }))
+    else if (kind === 'done') {
+      if (transcript.text) box.appendChild(el('p', { class: 'transcript-text', text: transcript.text }))
+      else box.appendChild(el('p', { class: 'hint', text: 'Речь не обнаружена.' }))
+    } else if (kind === 'failed') {
+      var again = el('button', { type: 'button', class: 'link', text: 'Повторить' })
+      again.addEventListener('click', function () {
+        again.disabled = true
+        api('POST', '/v1/messages/' + id + '/transcribe').then(function (res) {
+          if (res.status === 202) { paintTranscript(id, res.data); schedulePoll() }
+          else { again.disabled = false; notice(explain(res), 'error'); if (res.status === 409) loadMessages(true) }
+        }, function () { again.disabled = false; notice('Нет связи с сервером.', 'error') })
+      })
+      box.appendChild(el('p', { class: 'hint' }, [document.createTextNode('Не удалось расшифровать. '), again]))
+    } else {
+      box.appendChild(el('p', { class: 'hint', text: SKIPPED[transcript.errorCode] || 'Эту запись не расшифровывают.' }))
+    }
+  }
+
+  // Looks again every few seconds while any recording on the page is still waiting for its text, and stops when
+  // none is, or the person leaves, or the tab is hidden (it looks at once when the tab is shown again).
+  function waitingForText() { return Object.keys(state.waiting).length > 0 }
+
+  function schedulePoll() {
+    if (state.poll || document.hidden || !waitingForText()) return
+    state.poll = setTimeout(pollNow, POLL_MS)
+  }
+
+  function pollNow() {
+    state.poll = null
+    if (document.hidden || !waitingForText()) return
+    api('GET', '/v1/messages?limit=' + Math.min(100, Math.max(20, state.loaded))).then(function (res) {
+      if (res.status === 200) res.data.messages.forEach(function (m) { if (state.waiting[m.id]) paintTranscript(m.id, m.transcript) })
+      schedulePoll()
+    }, schedulePoll)
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return
+    clearTimeout(state.poll)
+    state.poll = null
+    if (waitingForText()) pollNow()
+  })
+
   function loadMessages(fresh) {
-    if (fresh) { state.cursor = null; $('message-list').textContent = '' }
+    if (fresh) { state.cursor = null; state.boxes = {}; state.waiting = {}; state.loaded = 0; $('message-list').textContent = '' }
     var q = '?limit=20' + (state.cursor ? '&before=' + encodeURIComponent(state.cursor) : '')
     api('GET', '/v1/messages' + q).then(function (res) {
       if (res.status !== 200) return
@@ -185,9 +256,16 @@
         ]
         if (m.hasWav) children.push(el('audio', { controls: '', preload: 'none', src: '/v1/messages/' + m.id + '/audio' }))
         else children.push(el('div', { class: 'meta', text: 'Не удалось преобразовать для прослушивания; оригинал можно скачать.' }))
+        var box = el('div', { class: 'transcript' })
+        state.boxes[m.id] = box
+        children.push(box)
         children.push(actions)
         list.appendChild(el('li', {}, children))
+        paintTranscript(m.id, m.transcript)
       })
+      state.loaded += res.data.messages.length
+      schedulePoll()
+      $('transcript-note').hidden = !Object.keys(state.boxes).some(function (id) { return !state.boxes[id].hidden })
       state.cursor = res.data.nextCursor
       $('more').hidden = !state.cursor
       $('message-empty').hidden = list.children.length > 0

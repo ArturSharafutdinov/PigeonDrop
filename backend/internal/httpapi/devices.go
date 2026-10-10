@@ -147,7 +147,7 @@ func (s *Server) PollDevicePairing(ctx context.Context, request api.PollDevicePa
 			return nil, fmt.Errorf("record poll: %w", err)
 		}
 		interval := seconds(pollInterval)
-		return api.PollDevicePairing200JSONResponse{Status: api.Pending, Interval: &interval}, nil
+		return api.PollDevicePairing200JSONResponse{Status: api.PollPairingResultStatusPending, Interval: &interval}, nil
 	}
 
 	token, tokenHash, err := auth.NewDeviceToken()
@@ -180,7 +180,7 @@ func (s *Server) PollDevicePairing(ctx context.Context, request api.PollDevicePa
 	}
 
 	s.Logger.Info("device paired", "device_id", created.ID, "user_id", created.UserID)
-	return api.PollDevicePairing200JSONResponse{Status: api.Approved, DeviceToken: &token, DeviceId: &created.ID}, nil
+	return api.PollDevicePairing200JSONResponse{Status: api.PollPairingResultStatusApproved, DeviceToken: &token, DeviceId: &created.ID}, nil
 }
 
 var errPairingCollected = errors.New("pairing already collected")

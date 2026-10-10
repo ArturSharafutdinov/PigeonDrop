@@ -26,6 +26,10 @@ type Querier interface {
 	// Spends the invitation. No row means it was unknown, expired, or already used (possibly a moment ago
 	// by someone else) - the caller cannot and need not tell which.
 	ConsumeInvitation(ctx context.Context, arg ConsumeInvitationParams) (uuid.UUID, error)
+	// Recordings given up on since a moment.
+	CountFailedTranscriptionsSince(ctx context.Context, since time.Time) (int64, error)
+	// The operator's counts by state, for `pigeondrop stt status`.
+	CountTranscriptions(ctx context.Context) ([]CountTranscriptionsRow, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (CreateDeviceRow, error)
 	CreateInvitation(ctx context.Context, arg CreateInvitationParams) (CreateInvitationRow, error)
 	// Device pairing and paired devices. Times come from the caller (never now()).
@@ -44,6 +48,10 @@ type Querier interface {
 	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
+	// Puts every recording that has no row in the queue yet into it (the ones received before speech recognition was
+	// switched on), oldest first, behind whatever is queued now. A recording that cannot go to the model is recorded
+	// as skipped, like a new one. Returns the state of each row added.
+	EnqueueMissingTranscriptions(ctx context.Context, arg EnqueueMissingTranscriptionsParams) ([]string, error)
 	// A new recording that is not going to the model (it cannot be decoded, or it is too long); error_code says why.
 	EnqueueSkippedTranscription(ctx context.Context, arg EnqueueSkippedTranscriptionParams) error
 	// The queue of recordings waiting to be turned into text, and the text. The worker (internal/transcribe) is the
@@ -63,6 +71,9 @@ type Querier interface {
 	GetMessageByClientID(ctx context.Context, arg GetMessageByClientIDParams) (GetMessageByClientIDRow, error)
 	// Only a pairing that can still be approved: unknown, expired and already approved codes are all "no row".
 	GetOpenPairingByUserCode(ctx context.Context, arg GetOpenPairingByUserCodeParams) (GetOpenPairingByUserCodeRow, error)
+	// What a person may see of one of their own recordings' transcription: no row when the recording is not theirs or
+	// was never queued.
+	GetOwnTranscription(ctx context.Context, arg GetOwnTranscriptionParams) (GetOwnTranscriptionRow, error)
 	GetPairingByDeviceCodeHash(ctx context.Context, deviceCodeHash []byte) (GetPairingByDeviceCodeHashRow, error)
 	// The session behind a cookie, with its user. No row when it is unknown or has expired.
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
@@ -73,19 +84,24 @@ type Querier interface {
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	// Returns no row when this device already uploaded this name: a request with the same name won the race.
 	InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error)
+	// The latest failure, with the model's own words about it.
+	LatestFailedTranscription(ctx context.Context) (LatestFailedTranscriptionRow, error)
 	ListDevices(ctx context.Context, userID uuid.UUID) ([]ListDevicesRow, error)
 	ListInvitations(ctx context.Context) ([]ListInvitationsRow, error)
 	// Every message of the user, oldest first, for the archive of all recordings: only what is needed to find and
-	// name the files.
+	// name the files, and the text if it is ready (null otherwise).
 	ListMessageFiles(ctx context.Context, userID uuid.UUID) ([]ListMessageFilesRow, error)
 	// The caller's messages, newest first, starting after the cursor (the received_at and id of the last message
 	// of the previous page; both null for the first page).
+	// A message that has no row in the recognition queue has no transcript_* values (they are all null).
 	ListMessages(ctx context.Context, arg ListMessagesParams) ([]ListMessagesRow, error)
 	ListUsers(ctx context.Context) ([]ListUsersRow, error)
 	// Everything that changes how much room a user's recordings take (an upload counts, makes room and inserts)
 	// runs under this lock, so two uploads of one user cannot both see free room that only one of them gets.
 	// NO KEY UPDATE conflicts with itself but not with the key-share locks that inserts referencing the user take.
 	LockUserStorage(ctx context.Context, id uuid.UUID) error
+	// When the oldest recording still waiting (pending, or running) was queued. No row when nothing waits.
+	OldestWaitingTranscription(ctx context.Context) (time.Time, error)
 	// Deletes the user's oldest messages, never keep_id, until the newest ones that are left fit in room bytes
 	// (the limit minus the message being kept, whatever its place in time). The files are removed by the caller.
 	PruneMessages(ctx context.Context, arg PruneMessagesParams) ([]uuid.UUID, error)
@@ -94,6 +110,11 @@ type Querier interface {
 	// Puts the recording back in the queue, to be taken again from run_after on. give_back is 1 when the attempt
 	// must not count (the model was not reached, or the server is stopping) and 0 when it must.
 	ReleaseTranscription(ctx context.Context, arg ReleaseTranscriptionParams) (int64, error)
+	// Gives every recording that was given up on another try, oldest failure first, behind whatever is queued now.
+	RetryFailedTranscriptions(ctx context.Context, now time.Time) (int64, error)
+	// A person asks for another try at a recording that was given up on. It goes to the back of the queue with its
+	// attempts reset. One row when it was theirs and failed; none otherwise (the caller says why).
+	RetryOwnTranscription(ctx context.Context, arg RetryOwnTranscriptionParams) (int64, error)
 	// No row means the user has no such device. Revoking twice is fine: the second time changes nothing.
 	RevokeDevice(ctx context.Context, arg RevokeDeviceParams) (uuid.UUID, error)
 	// Only an unused invitation can be withdrawn; a used one stays as the record of who came through it.

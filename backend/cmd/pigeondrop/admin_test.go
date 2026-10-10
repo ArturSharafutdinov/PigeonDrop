@@ -25,6 +25,7 @@ import (
 type cli struct {
 	t    *testing.T
 	env  func(string) string
+	url  string
 	pool *pgxpool.Pool
 	q    *dbgen.Queries
 }
@@ -32,7 +33,7 @@ type cli struct {
 func newCLI(t *testing.T) *cli {
 	t.Helper()
 	url, pool := testdb.NewURL(t)
-	return &cli{t: t, env: envOf(map[string]string{"DATABASE_URL": url}), pool: pool, q: dbgen.New(pool)}
+	return &cli{t: t, env: envOf(map[string]string{"DATABASE_URL": url}), url: url, pool: pool, q: dbgen.New(pool)}
 }
 
 // run executes one command the way main does and returns what it printed.
