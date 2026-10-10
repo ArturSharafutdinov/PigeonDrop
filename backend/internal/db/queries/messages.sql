@@ -15,19 +15,27 @@ RETURNING id, device_id, client_message_id, format, bytes_received, duration_ms,
 
 -- The caller's messages, newest first, starting after the cursor (the received_at and id of the last message
 -- of the previous page; both null for the first page).
+-- A message that has no row in the recognition queue has no transcript_* values (they are all null).
 -- name: ListMessages :many
-SELECT m.id, m.device_id, d.name AS device_name, m.client_message_id, m.bytes_received, m.duration_ms, m.has_wav, m.received_at
+SELECT m.id, m.device_id, d.name AS device_name, m.client_message_id, m.bytes_received, m.duration_ms, m.has_wav, m.received_at,
+       t.state AS transcript_state, t.text AS transcript_text, t.language AS transcript_language,
+       t.engine AS transcript_engine, t.finished_at AS transcript_finished_at, t.error_code AS transcript_error_code
 FROM messages m
 JOIN devices d ON d.id = m.device_id
+LEFT JOIN transcriptions t ON t.message_id = m.id
 WHERE m.user_id = sqlc.arg(user_id)
   AND (sqlc.narg(before_at)::timestamptz IS NULL OR (m.received_at, m.id) < (sqlc.narg(before_at)::timestamptz, sqlc.narg(before_id)::uuid))
 ORDER BY m.received_at DESC, m.id DESC
 LIMIT sqlc.arg(max_rows);
 
 -- Every message of the user, oldest first, for the archive of all recordings: only what is needed to find and
--- name the files.
+-- name the files, and the text if it is ready (null otherwise).
 -- name: ListMessageFiles :many
-SELECT id, received_at FROM messages WHERE user_id = $1 ORDER BY received_at, id;
+SELECT m.id, m.received_at, t.text AS transcript_text
+FROM messages m
+LEFT JOIN transcriptions t ON t.message_id = m.id AND t.state = 'done'
+WHERE m.user_id = $1
+ORDER BY m.received_at, m.id;
 
 -- name: GetMessage :one
 SELECT id, device_id, client_message_id, format, bytes_received, duration_ms, has_wav, received_at

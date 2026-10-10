@@ -320,6 +320,7 @@ func (s *Server) ListMessages(ctx context.Context, request api.ListMessagesReque
 		messages = append(messages, api.Message{
 			Id: r.ID, MessageId: r.ClientMessageID, DeviceId: r.DeviceID, DeviceName: r.DeviceName,
 			BytesReceived: r.BytesReceived, DurationMs: duration, HasWav: r.HasWav, ReceivedAt: r.ReceivedAt,
+			Transcript: transcriptOf(r.TranscriptState, r.TranscriptText, r.TranscriptLanguage, r.TranscriptEngine, r.TranscriptFinishedAt, r.TranscriptErrorCode),
 		})
 	}
 	return api.ListMessages200JSONResponse{Messages: messages, NextCursor: next}, nil
@@ -459,8 +460,8 @@ func (s *Server) handleMessageAudio(w http.ResponseWriter, r *http.Request) {
 
 // handleMessagesArchive streams every recording of the user as one zip, each file as it was received and stored
 // without compression (recordings are already compressed audio). Files are named after the time they were received,
-// the zip after the time of the request, both in UTC like the single-file download. Written by hand because the
-// generated handlers speak JSON.
+// the zip after the time of the request, both in UTC like the single-file download. A recording whose text is ready
+// has it next to it, in a .txt of the same name. Written by hand because the generated handlers speak JSON.
 func (s *Server) handleMessagesArchive(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
 	if p == nil {
@@ -492,7 +493,7 @@ func (s *Server) handleMessagesArchive(w http.ResponseWriter, r *http.Request) {
 	taken := map[string]int{} // two recordings in one second would otherwise get one name
 	for _, row := range rows {
 		_ = rc.SetWriteDeadline(time.Now().Add(2 * time.Minute))
-		if err := s.addToArchive(zw, row.ID, row.ReceivedAt, taken); err != nil {
+		if err := s.addToArchive(zw, row.ID, row.ReceivedAt, row.TranscriptText, taken); err != nil {
 			// The answer is already on its way, so all that is left is to cut the archive short: a zip without its
 			// directory is rejected by unzip tools, which tells the person it is incomplete.
 			s.Logger.Error("archive of recordings broke off", "user_id", p.User.Id, "message_id", row.ID, "error", err)
@@ -504,9 +505,10 @@ func (s *Server) handleMessagesArchive(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// addToArchive copies one stored recording into the zip. A file that is gone (deleted since the list was read) is
-// skipped; any other failure ends the archive.
-func (s *Server) addToArchive(zw *zip.Writer, id uuid.UUID, receivedAt time.Time, taken map[string]int) error {
+// addToArchive copies one stored recording into the zip, and its text if there is one (an empty text, the sign of
+// a recording without speech, is not worth a file). A file that is gone (deleted since the list was read) is
+// skipped, text and all; any other failure ends the archive.
+func (s *Server) addToArchive(zw *zip.Writer, id uuid.UUID, receivedAt time.Time, text *string, taken map[string]int) error {
 	file, err := s.Messages.Open(opusFile(id))
 	if errors.Is(err, storage.ErrNotFound) {
 		s.Logger.Warn("a message's file is missing, left out of the archive", "message_id", id)
@@ -518,18 +520,29 @@ func (s *Server) addToArchive(zw *zip.Writer, id uuid.UUID, receivedAt time.Time
 	defer file.Close()
 
 	base := "PigeonDrop-" + receivedAt.UTC().Format("2006-01-02_15-04-05")
-	name := base + ".opus"
+	stem := base
 	if n := taken[base]; n > 0 {
-		name = fmt.Sprintf("%s_%d.opus", base, n+1)
+		stem = fmt.Sprintf("%s_%d", base, n+1)
 	}
 	taken[base]++
 
-	out, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store, Modified: receivedAt})
+	out, err := zw.CreateHeader(&zip.FileHeader{Name: stem + ".opus", Method: zip.Store, Modified: receivedAt})
 	if err != nil {
-		return fmt.Errorf("add %s: %w", name, err)
+		return fmt.Errorf("add %s.opus: %w", stem, err)
 	}
 	if _, err := io.Copy(out, file); err != nil {
-		return fmt.Errorf("copy %s: %w", name, err)
+		return fmt.Errorf("copy %s.opus: %w", stem, err)
+	}
+	if text == nil || *text == "" {
+		return nil
+	}
+	// Text is small and compresses well, unlike the audio.
+	out, err = zw.CreateHeader(&zip.FileHeader{Name: stem + ".txt", Method: zip.Deflate, Modified: receivedAt})
+	if err != nil {
+		return fmt.Errorf("add %s.txt: %w", stem, err)
+	}
+	if _, err := io.WriteString(out, *text+"\n"); err != nil {
+		return fmt.Errorf("write %s.txt: %w", stem, err)
 	}
 	return nil
 }

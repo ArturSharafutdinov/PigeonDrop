@@ -85,6 +85,90 @@ func (q *Queries) CompleteTranscription(ctx context.Context, arg CompleteTranscr
 	return result.RowsAffected(), nil
 }
 
+const countFailedTranscriptionsSince = `-- name: CountFailedTranscriptionsSince :one
+SELECT count(*)::bigint AS total FROM transcriptions WHERE state = 'failed' AND finished_at >= $1::timestamptz
+`
+
+// Recordings given up on since a moment.
+func (q *Queries) CountFailedTranscriptionsSince(ctx context.Context, since time.Time) (int64, error) {
+	row := q.db.QueryRow(ctx, countFailedTranscriptionsSince, since)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
+const countTranscriptions = `-- name: CountTranscriptions :many
+SELECT state, count(*)::bigint AS total FROM transcriptions GROUP BY state ORDER BY state
+`
+
+type CountTranscriptionsRow struct {
+	State string
+	Total int64
+}
+
+// The operator's counts by state, for `pigeondrop stt status`.
+func (q *Queries) CountTranscriptions(ctx context.Context) ([]CountTranscriptionsRow, error) {
+	rows, err := q.db.Query(ctx, countTranscriptions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountTranscriptionsRow
+	for rows.Next() {
+		var i CountTranscriptionsRow
+		if err := rows.Scan(&i.State, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const enqueueMissingTranscriptions = `-- name: EnqueueMissingTranscriptions :many
+INSERT INTO transcriptions (message_id, state, run_after, enqueued_at, finished_at, error_code)
+SELECT m.id,
+       CASE WHEN NOT m.has_wav OR m.duration_ms > $1::integer THEN 'skipped' ELSE 'pending' END,
+       $2::timestamptz,
+       $2::timestamptz + ROW_NUMBER() OVER (ORDER BY m.received_at, m.id) * interval '1 microsecond',
+       CASE WHEN NOT m.has_wav OR m.duration_ms > $1::integer THEN $2::timestamptz END,
+       CASE WHEN NOT m.has_wav THEN 'not_decodable' WHEN m.duration_ms > $1::integer THEN 'too_long' END
+FROM messages m
+WHERE NOT EXISTS (SELECT 1 FROM transcriptions t WHERE t.message_id = m.id)
+ON CONFLICT (message_id) DO NOTHING
+RETURNING state
+`
+
+type EnqueueMissingTranscriptionsParams struct {
+	MaxAudioMs int32
+	Now        time.Time
+}
+
+// Puts every recording that has no row in the queue yet into it (the ones received before speech recognition was
+// switched on), oldest first, behind whatever is queued now. A recording that cannot go to the model is recorded
+// as skipped, like a new one. Returns the state of each row added.
+func (q *Queries) EnqueueMissingTranscriptions(ctx context.Context, arg EnqueueMissingTranscriptionsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, enqueueMissingTranscriptions, arg.MaxAudioMs, arg.Now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var state string
+		if err := rows.Scan(&state); err != nil {
+			return nil, err
+		}
+		items = append(items, state)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const enqueueSkippedTranscription = `-- name: EnqueueSkippedTranscription :exec
 INSERT INTO transcriptions (message_id, state, run_after, enqueued_at, finished_at, error_code)
 VALUES ($1, 'skipped', $2::timestamptz, $2::timestamptz, $2::timestamptz, $3::text)
@@ -154,6 +238,43 @@ func (q *Queries) FailTranscription(ctx context.Context, arg FailTranscriptionPa
 	return result.RowsAffected(), nil
 }
 
+const getOwnTranscription = `-- name: GetOwnTranscription :one
+SELECT t.state, t.text, t.language, t.engine, t.finished_at, t.error_code
+FROM transcriptions t
+JOIN messages m ON m.id = t.message_id
+WHERE t.message_id = $1 AND m.user_id = $2
+`
+
+type GetOwnTranscriptionParams struct {
+	MessageID uuid.UUID
+	UserID    uuid.UUID
+}
+
+type GetOwnTranscriptionRow struct {
+	State      string
+	Text       *string
+	Language   *string
+	Engine     *string
+	FinishedAt *time.Time
+	ErrorCode  *string
+}
+
+// What a person may see of one of their own recordings' transcription: no row when the recording is not theirs or
+// was never queued.
+func (q *Queries) GetOwnTranscription(ctx context.Context, arg GetOwnTranscriptionParams) (GetOwnTranscriptionRow, error) {
+	row := q.db.QueryRow(ctx, getOwnTranscription, arg.MessageID, arg.UserID)
+	var i GetOwnTranscriptionRow
+	err := row.Scan(
+		&i.State,
+		&i.Text,
+		&i.Language,
+		&i.Engine,
+		&i.FinishedAt,
+		&i.ErrorCode,
+	)
+	return i, err
+}
+
 const getTranscription = `-- name: GetTranscription :one
 SELECT message_id, state, attempts, run_after, locked_until, enqueued_at, started_at, finished_at,
        text, language, engine, audio_ms, stt_ms, error_code, last_error
@@ -202,6 +323,42 @@ func (q *Queries) GetTranscriptionSubject(ctx context.Context, id uuid.UUID) (Ge
 	return i, err
 }
 
+const latestFailedTranscription = `-- name: LatestFailedTranscription :one
+SELECT message_id, finished_at, error_code, last_error FROM transcriptions WHERE state = 'failed' ORDER BY finished_at DESC, message_id LIMIT 1
+`
+
+type LatestFailedTranscriptionRow struct {
+	MessageID  uuid.UUID
+	FinishedAt *time.Time
+	ErrorCode  *string
+	LastError  *string
+}
+
+// The latest failure, with the model's own words about it.
+func (q *Queries) LatestFailedTranscription(ctx context.Context) (LatestFailedTranscriptionRow, error) {
+	row := q.db.QueryRow(ctx, latestFailedTranscription)
+	var i LatestFailedTranscriptionRow
+	err := row.Scan(
+		&i.MessageID,
+		&i.FinishedAt,
+		&i.ErrorCode,
+		&i.LastError,
+	)
+	return i, err
+}
+
+const oldestWaitingTranscription = `-- name: OldestWaitingTranscription :one
+SELECT enqueued_at FROM transcriptions WHERE state IN ('pending', 'running') ORDER BY enqueued_at, message_id LIMIT 1
+`
+
+// When the oldest recording still waiting (pending, or running) was queued. No row when nothing waits.
+func (q *Queries) OldestWaitingTranscription(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, oldestWaitingTranscription)
+	var enqueued_at time.Time
+	err := row.Scan(&enqueued_at)
+	return enqueued_at, err
+}
+
 const releaseTranscription = `-- name: ReleaseTranscription :execrows
 UPDATE transcriptions
 SET state = 'pending', run_after = $1::timestamptz, locked_until = NULL,
@@ -227,6 +384,52 @@ func (q *Queries) ReleaseTranscription(ctx context.Context, arg ReleaseTranscrip
 		arg.MessageID,
 		arg.Attempt,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retryFailedTranscriptions = `-- name: RetryFailedTranscriptions :execrows
+WITH picked AS (
+    SELECT message_id, ROW_NUMBER() OVER (ORDER BY finished_at, message_id) AS place
+    FROM transcriptions WHERE state = 'failed'
+)
+UPDATE transcriptions t
+SET state = 'pending', attempts = 0, run_after = $1::timestamptz,
+    enqueued_at = $1::timestamptz + picked.place * interval '1 microsecond',
+    locked_until = NULL, started_at = NULL, finished_at = NULL, error_code = NULL, last_error = NULL
+FROM picked
+WHERE t.message_id = picked.message_id AND t.state = 'failed'
+`
+
+// Gives every recording that was given up on another try, oldest failure first, behind whatever is queued now.
+func (q *Queries) RetryFailedTranscriptions(ctx context.Context, now time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, retryFailedTranscriptions, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retryOwnTranscription = `-- name: RetryOwnTranscription :execrows
+UPDATE transcriptions t
+SET state = 'pending', attempts = 0, run_after = $1::timestamptz, enqueued_at = $1::timestamptz,
+    locked_until = NULL, started_at = NULL, finished_at = NULL, error_code = NULL, last_error = NULL
+FROM messages m
+WHERE t.message_id = $2 AND m.id = t.message_id AND m.user_id = $3 AND t.state = 'failed'
+`
+
+type RetryOwnTranscriptionParams struct {
+	Now       time.Time
+	MessageID uuid.UUID
+	UserID    uuid.UUID
+}
+
+// A person asks for another try at a recording that was given up on. It goes to the back of the queue with its
+// attempts reset. One row when it was theirs and failed; none otherwise (the caller says why).
+func (q *Queries) RetryOwnTranscription(ctx context.Context, arg RetryOwnTranscriptionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryOwnTranscription, arg.Now, arg.MessageID, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
