@@ -79,6 +79,8 @@ type Server struct {
 	Transcription *transcribe.Intake
 	// TranscriptionWake tells the worker that there is something new in the queue (nil is fine).
 	TranscriptionWake func()
+	// Telegram is the bot people link their chat to; nil means the Telegram bot is off on this server.
+	Telegram TelegramBot
 
 	// userCodes draws the short code of a pairing; nil means auth.NewUserCode. Tests replace it to force collisions.
 	userCodes func() (display, canonical string, err error)

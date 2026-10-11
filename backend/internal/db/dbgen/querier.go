@@ -36,17 +36,27 @@ type Querier interface {
 	// A unique violation on user_code means the random code collided with a live one: the caller draws another.
 	CreatePairing(ctx context.Context, arg CreatePairingParams) (uuid.UUID, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (uuid.UUID, error)
+	CreateTelegramLinkCode(ctx context.Context, arg CreateTelegramLinkCodeParams) error
 	// Users, invitations and sessions. Times come from the caller (never now()) so the server and its
 	// tests share one clock.
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DeleteAllMessages(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
 	DeleteExpiredPairings(ctx context.Context, now time.Time) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
+	DeleteExpiredTelegramLinkCodes(ctx context.Context, now time.Time) (int64, error)
 	// No row when the user has no such message. The files are removed by the caller afterwards.
 	DeleteMessage(ctx context.Context, arg DeleteMessageParams) (DeleteMessageRow, error)
 	// Used after a password change: every other session of the user ends, the current one stays.
 	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
+	// Unlinking; no row changed means there was no link (not an error).
+	DeleteTelegramLink(ctx context.Context, userID uuid.UUID) (int64, error)
+	// The chat leaves whoever it was linked to (a chat belongs to one account); returns who, if anyone.
+	DeleteTelegramLinkByChat(ctx context.Context, chatID int64) (int64, error)
+	// Linking an account to a Telegram chat (internal/telegram, internal/httpapi/telegram.go). Times come from the
+	// caller (never now()).
+	// A new code for the person; their earlier unused codes stop working (one live link at a time).
+	DeleteUnusedTelegramLinkCodes(ctx context.Context, userID uuid.UUID) error
 	DeleteUserSessions(ctx context.Context, userID uuid.UUID) error
 	// Puts every recording that has no row in the queue yet into it (the ones received before speech recognition was
 	// switched on), oldest first, behind whatever is queued now. A recording that cannot go to the model is recorded
@@ -77,11 +87,18 @@ type Querier interface {
 	GetPairingByDeviceCodeHash(ctx context.Context, deviceCodeHash []byte) (GetPairingByDeviceCodeHashRow, error)
 	// The session behind a cookie, with its user. No row when it is unknown or has expired.
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
+	GetTelegramLink(ctx context.Context, userID uuid.UUID) (TelegramLink, error)
+	// Which account a chat is linked to, for /stop.
+	GetTelegramLinkByChat(ctx context.Context, chatID int64) (TelegramLink, error)
+	// The code with what is needed to decide: no row means there never was such a code (or it was purged).
+	GetTelegramLinkCode(ctx context.Context, codeHash []byte) (GetTelegramLinkCodeRow, error)
 	GetTranscription(ctx context.Context, messageID uuid.UUID) (Transcription, error)
 	// What the worker needs to know about a recording it took. No row: the recording was deleted meanwhile.
 	GetTranscriptionSubject(ctx context.Context, id uuid.UUID) (GetTranscriptionSubjectRow, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	// The language of the person's account, for the bot's answers once it knows whose chat it is.
+	GetUserLanguage(ctx context.Context, id uuid.UUID) (string, error)
 	// Returns no row when this device already uploaded this name: a request with the same name won the race.
 	InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error)
 	// The latest failure, with the model's own words about it.
@@ -130,6 +147,10 @@ type Querier interface {
 	TouchPairingPoll(ctx context.Context, arg TouchPairingPollParams) error
 	// Slides the expiry forward, but never past the absolute limit.
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
+	// Links the account to the chat, replacing the account's earlier link and clearing a block.
+	UpsertTelegramLink(ctx context.Context, arg UpsertTelegramLinkParams) error
+	// Uses the code, once: no row means someone used it first, or it has expired.
+	UseTelegramLinkCode(ctx context.Context, arg UseTelegramLinkCodeParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

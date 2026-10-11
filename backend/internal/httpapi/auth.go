@@ -60,6 +60,9 @@ type AuthLimits struct {
 	// that a watch stuck in a loop, or a stolen token, cannot push a flood of files and, through the account's
 	// automatic cleanup, push the person's real recordings out.
 	UploadDevice *auth.Limiter
+	// TelegramLinkUser counts every link a signed-in user asks for to link a Telegram chat (a success leaves a row,
+	// like a pairing does).
+	TelegramLinkUser *auth.Limiter
 }
 
 func defaultLimits(now func() time.Time) AuthLimits {
@@ -73,6 +76,8 @@ func defaultLimits(now func() time.Time) AuthLimits {
 		PairingUser:  auth.NewLimiter(10, 15*time.Minute, now),
 
 		UploadDevice: auth.NewLimiter(60, time.Hour, now),
+
+		TelegramLinkUser: auth.NewLimiter(10, time.Hour, now),
 	}
 }
 

@@ -219,10 +219,10 @@ func classify(code int, description string, safeToRepeat bool) Kind {
 func jsonBody(v any) ([]byte, error) { return json.Marshal(v) }
 
 // GetMe asks who the bot is. It is also the cheapest way to find out that the token and the network work.
-func (c *Client) GetMe(ctx context.Context) (Bot, error) {
-	var bot Bot
-	err := c.call(ctx, "getMe", true, 0, "application/json", []byte("{}"), &bot)
-	return bot, err
+func (c *Client) GetMe(ctx context.Context) (Me, error) {
+	var me Me
+	err := c.call(ctx, "getMe", true, 0, "application/json", []byte("{}"), &me)
+	return me, err
 }
 
 // GetWebhookInfo says whether a webhook is set (getUpdates does not work while one is).

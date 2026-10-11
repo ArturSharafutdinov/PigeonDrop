@@ -374,6 +374,67 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/telegram:
+    get:
+      operationId: getTelegram
+      tags: [telegram]
+      summary: Whether recordings can go to Telegram, and whether this account is linked
+      description: |
+        `available` is false when the Telegram bot is off on this server (no token) or cannot be reached yet; then there
+        is nothing to link and the page shows no section. `link` is the chat the account's new recordings are sent to,
+        absent when the account is not linked.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The state of the account's Telegram link.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      operationId: unlinkTelegram
+      tags: [telegram]
+      summary: Stop sending recordings to Telegram
+      description: Removes the link. Recordings already sent stay in the chat. Unlinking an account that is not linked is fine.
+      security:
+        - cookieAuth: []
+      responses:
+        '204':
+          description: The account is not linked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/telegram/link:
+    post:
+      operationId: createTelegramLink
+      tags: [telegram]
+      summary: A link that links a Telegram chat to this account
+      description: |
+        Returns a `t.me` link with a one-time code in it. The person opens it in Telegram and presses Start; the bot
+        then links that chat to the account (the page learns it from `GET /v1/telegram`). The code works once and
+        for ten minutes; asking again makes the earlier unused code stop working. An account that is linked already
+        can ask too: the new chat replaces the old one.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The link to open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramLinkCode'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+        '503':
+          description: The Telegram bot is off on this server or cannot be reached yet (`unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /v1/messages:
     post:
       operationId: uploadMessage
@@ -949,6 +1010,46 @@ components:
           format: date-time
         transcript:
           $ref: '#/components/schemas/Transcript'
+    TelegramStatus:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+          description: Whether recordings can be sent to Telegram on this server.
+        botUsername:
+          type: string
+          description: The bot, without the @. Present when `available`.
+        link:
+          $ref: '#/components/schemas/TelegramLink'
+    TelegramLink:
+      type: object
+      required: [linkedAt, blocked]
+      properties:
+        username:
+          type: string
+          description: The Telegram username of the linked chat, without the @, if the person has one.
+        firstName:
+          type: string
+          description: The first name of the person in the linked chat, if Telegram gave it.
+        linkedAt:
+          type: string
+          format: date-time
+        blocked:
+          type: boolean
+          description: |
+            True when Telegram says the chat cannot be written to (the person blocked the bot). Nothing is sent until
+            the account is linked again.
+    TelegramLinkCode:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url:
+          type: string
+          description: The `https://t.me/<bot>?start=<code>` link to open in Telegram. Treat it as a secret until used.
+        expiresAt:
+          type: string
+          format: date-time
     Transcript:
       type: object
       description: |
@@ -1016,6 +1117,7 @@ components:
         - not_found
         - payload_too_large
         - conflict
+        - unavailable
     Health:
       type: object
       required: [ok]

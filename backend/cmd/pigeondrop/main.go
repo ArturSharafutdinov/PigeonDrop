@@ -32,6 +32,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/httpapi"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/telegram"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/transcribe"
 )
 
@@ -142,11 +143,21 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// Stops the worker (it gives back the recording it holds) before the database pool is closed.
 	defer stopWorker()
 
+	bot, stopBot, err := startTelegram(ctx, cfg, queries, db.InTx(pool), logger)
+	if err != nil {
+		return err
+	}
+	defer stopBot()
+	var telegramBot httpapi.TelegramBot // stays nil, not a nil *telegram.Bot, when the bot is off
+	if bot != nil {
+		telegramBot = bot
+	}
+
 	srv := &http.Server{
 		Addr: ":" + strconv.Itoa(cfg.Port),
 		Handler: httpapi.NewHandler(&httpapi.Server{
 			Pinger: pool, DB: queries, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
-			Transcription: intake, TranscriptionWake: wake,
+			Transcription: intake, TranscriptionWake: wake, Telegram: telegramBot,
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 			Storage: httpapi.StorageLimits{
 				MaxAudioBytes: httpapi.DefaultStorageLimits.MaxAudioBytes, AccountBytes: cfg.AccountStorageBytes, WarnPercent: httpapi.DefaultStorageLimits.WarnPercent,
@@ -222,6 +233,35 @@ func startSpeechRecognition(ctx context.Context, cfg config.Config, q dbgen.Quer
 	return &transcribe.Intake{MaxAudio: cfg.SpeechMaxAudio}, worker.Wake, stop, nil
 }
 
+// startTelegram starts the Telegram bot if there is a token for it. It returns the bot (nil if it is off) and the
+// function that stops it and waits until it has.
+func startTelegram(ctx context.Context, cfg config.Config, q dbgen.Querier, tx telegram.TxFunc, logger *slog.Logger) (*telegram.Bot, func(), error) {
+	if cfg.TelegramToken == "" {
+		return nil, func() {}, nil
+	}
+	client, err := telegram.NewClient(cfg.TelegramAPIURL, cfg.TelegramToken, cfg.TelegramTimeout)
+	if err != nil {
+		return nil, nil, fmt.Errorf("telegram: %w", err)
+	}
+	bot := telegram.NewBot(client, q, tx, logger, telegram.BotSettings{PageURL: cfg.DefaultServerURL + "/pair"})
+
+	botCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		bot.Run(botCtx)
+	}()
+	stop := func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			logger.Warn("the Telegram bot did not stop in time")
+		}
+	}
+	return bot, stop, nil
+}
+
 // purgeExpired deletes expired sessions and pairings once an hour until ctx ends. Expired ones are already
 // refused wherever they are used; this only keeps the tables from growing.
 func purgeExpired(ctx context.Context, q dbgen.Querier, logger *slog.Logger) {
@@ -241,8 +281,12 @@ func purgeExpired(ctx context.Context, q dbgen.Querier, logger *slog.Logger) {
 			if err != nil && ctx.Err() == nil {
 				logger.Warn("purge expired pairings", "error", err)
 			}
-			if sessions > 0 || pairings > 0 {
-				logger.Info("expired entries removed", "sessions", sessions, "pairings", pairings)
+			linkCodes, err := q.DeleteExpiredTelegramLinkCodes(ctx, now)
+			if err != nil && ctx.Err() == nil {
+				logger.Warn("purge expired Telegram link codes", "error", err)
+			}
+			if sessions > 0 || pairings > 0 || linkCodes > 0 {
+				logger.Info("expired entries removed", "sessions", sessions, "pairings", pairings, "telegram_link_codes", linkCodes)
 			}
 		}
 	}

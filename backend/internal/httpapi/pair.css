@@ -45,6 +45,7 @@ button.danger { color: var(--danger); }
 .rows .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .rows .transcript { margin-top: 6px; }
 .rows .transcript p { margin: 0; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
 .transcript-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 audio { width: 100%; margin-top: 6px; }
 [hidden] { display: none !important; }

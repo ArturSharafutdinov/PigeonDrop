@@ -16,12 +16,14 @@
     invalid_request: 'Проверьте введённые данные.',
     not_found: 'Не найдено: возможно, это уже удалили.',
     conflict: 'Эту запись сейчас нельзя расшифровать заново: список мог устареть.',
+    unavailable: 'Telegram сейчас недоступен. Попробуйте позже.',
   }
 
   var $ = function (id) { return document.getElementById(id) }
   // boxes: the transcript block of each message on the page, by message id; waiting: the ids still being recognised.
-  var state = { cursor: null, pendingCode: null, boxes: {}, waiting: {}, loaded: 0, poll: null }
+  var state = { cursor: null, pendingCode: null, boxes: {}, waiting: {}, loaded: 0, poll: null, tgLinkedAt: null, tgBefore: null, tgUntil: null, tgPoll: null }
   var POLL_MS = 3000
+  var TELEGRAM_LINK_MS = 10 * 60 * 1000
 
   function el(tag, props, children) {
     var node = document.createElement(tag)
@@ -78,6 +80,8 @@
     state.boxes = {}
     clearTimeout(state.poll)
     state.poll = null
+    endTelegramWait()
+    $('telegram').hidden = true
   }
 
   function showTab(which) {
@@ -111,6 +115,7 @@
     $('user').hidden = false
     $('who').textContent = user.email
     loadDevices()
+    loadTelegram()
     loadMessages(true)
     loadStorage()
     var code = new URLSearchParams(location.search).get('code')
@@ -229,6 +234,7 @@
     clearTimeout(state.poll)
     state.poll = null
     if (waitingForText()) pollNow()
+    if (state.tgUntil !== null) pollTelegram()
   })
 
   function loadMessages(fresh) {
@@ -272,6 +278,61 @@
       $('delete-all').hidden = list.children.length === 0
       $('download-all').hidden = list.children.length === 0
     })
+  }
+
+  // ---- Telegram ---------------------------------------------------------------------------------
+
+  // Shows whether the account is linked to a chat. The section stays hidden when this server has no bot.
+  function paintTelegram(status) {
+    $('telegram').hidden = !status.available
+    var link = status.link
+    state.tgLinkedAt = link ? link.linkedAt : null
+    if (!status.available) return
+    $('telegram-link').textContent = link ? 'Привязать другой чат' : 'Привязать Telegram'
+    $('telegram-unlink').hidden = !link
+    $('telegram-blocked').hidden = !(link && link.blocked)
+    $('telegram-state').textContent = link
+      ? 'Записи приходят в Telegram: ' + (link.username ? '@' + link.username : link.firstName || 'личный чат') + ' (привязано ' + when(link.linkedAt) + ').'
+      : 'Не привязан. Привяжите чат, и новые записи с часов будут приходить в него голосовым сообщением с расшифровкой.'
+  }
+
+  function loadTelegram() {
+    return api('GET', '/v1/telegram').then(function (res) {
+      if (res.status === 200) paintTelegram(res.data)
+      return res
+    })
+  }
+
+  // Waits for the person to press Start in Telegram: looks every few seconds, for as long as the link lives, and
+  // only while the tab is shown.
+  function endTelegramWait() {
+    clearTimeout(state.tgPoll)
+    state.tgPoll = null
+    state.tgUntil = null
+    $('telegram-wait').hidden = true
+    $('telegram-open').setAttribute('href', '#')
+  }
+
+  function scheduleTelegramPoll() {
+    clearTimeout(state.tgPoll)
+    state.tgPoll = null
+    if (state.tgUntil === null || document.hidden) return
+    state.tgPoll = setTimeout(pollTelegram, POLL_MS)
+  }
+
+  function pollTelegram() {
+    state.tgPoll = null
+    if (state.tgUntil === null) return
+    if (Date.now() > state.tgUntil) { endTelegramWait(); return }
+    loadTelegram().then(function (res) {
+      if (state.tgUntil === null) return
+      if (res.status === 200 && res.data.link && res.data.link.linkedAt !== state.tgBefore) {
+        endTelegramWait()
+        notice('Telegram привязан.', 'ok')
+        return
+      }
+      scheduleTelegramPoll()
+    }, scheduleTelegramPoll)
   }
 
   // ---- pairing ----------------------------------------------------------------------------------
@@ -330,6 +391,32 @@
     api('POST', '/v1/auth/logout').then(function () { notice('Вы вышли.', 'ok'); showGuest() })
   })
   $('more').addEventListener('click', function () { loadMessages(false) })
+
+  $('telegram-link').addEventListener('click', function () {
+    var button = $('telegram-link')
+    notice('')
+    button.disabled = true
+    api('POST', '/v1/telegram/link').then(function (res) {
+      button.disabled = false
+      if (res.status !== 200) { if (res.status !== 401) notice(explain(res), 'error'); return }
+      var url = null
+      try { url = new URL(res.data.url) } catch (e) { url = null }
+      if (!url || url.hostname !== 't.me') { notice('Сервер вернул не ту ссылку, которую ждали. Не открывайте её.', 'error'); return }
+      $('telegram-open').setAttribute('href', url.href)
+      $('telegram-wait').hidden = false
+      state.tgBefore = state.tgLinkedAt
+      state.tgUntil = Date.now() + TELEGRAM_LINK_MS
+      scheduleTelegramPoll()
+    }, function () { button.disabled = false; notice('Нет связи с сервером.', 'error') })
+  })
+
+  $('telegram-unlink').addEventListener('click', function () {
+    if (!confirm('Перестать присылать записи в Telegram?')) return
+    api('DELETE', '/v1/telegram').then(function (res) {
+      if (res.status === 204) { endTelegramWait(); notice('Telegram отключён.', 'ok'); loadTelegram() }
+      else if (res.status !== 401) notice(explain(res), 'error')
+    })
+  })
 
   $('delete-all').addEventListener('click', function () {
     if (!confirm('Удалить все записи насовсем? Это нельзя отменить.')) return
