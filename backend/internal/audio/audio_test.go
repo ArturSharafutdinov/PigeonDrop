@@ -302,3 +302,25 @@ func FuzzToWAV(f *testing.F) {
 		}
 	})
 }
+
+func TestPCMToWAVMakesTheHeaderTheServiceExpects(t *testing.T) {
+	pcm := []byte{1, 0, 2, 0, 3, 0}
+
+	wav := PCMToWAV(pcm)
+
+	if len(wav) != 44+len(pcm) || !bytes.Equal(wav[44:], pcm) {
+		t.Fatalf("%d bytes", len(wav))
+	}
+	if string(wav[:4]) != "RIFF" || string(wav[8:16]) != "WAVEfmt " || string(wav[36:40]) != "data" {
+		t.Errorf("header %q", wav[:44])
+	}
+	if got := binary.LittleEndian.Uint32(wav[4:8]); got != uint32(36+len(pcm)) {
+		t.Errorf("RIFF size %d", got)
+	}
+	if got := binary.LittleEndian.Uint32(wav[40:44]); got != uint32(len(pcm)) {
+		t.Errorf("data size %d", got)
+	}
+	if rate := binary.LittleEndian.Uint32(wav[24:28]); rate != 16000 {
+		t.Errorf("rate %d", rate)
+	}
+}

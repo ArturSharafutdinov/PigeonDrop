@@ -17,10 +17,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/term"
 
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/audio"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/auth"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/config"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/transcribe"
 )
 
 // The operator's commands. They talk to the database directly, so whoever can run them (inside the
@@ -32,6 +34,7 @@ const adminUsage = `usage:
   pigeondrop user list                                    list users
   pigeondrop user set-password <email>                    set a new password and end the user's sessions;
                                                           read from the terminal, or from stdin if piped
+  pigeondrop stt check                                    speech recognition: ask the service (STT_URL, STT_TOKEN) to recognise a second of silence
   pigeondrop stt status                                   speech recognition: the queue by state, how long the oldest waits, failures
   pigeondrop stt enqueue -missing [-max-audio 65s]        queue the recordings that were never queued (received before recognition was on)
   pigeondrop stt retry -failed                            give every recording that was given up on another try
@@ -41,6 +44,11 @@ func admin(ctx context.Context, cfg config.Config, group string, args []string, 
 	if len(args) == 0 {
 		fmt.Fprint(stderr, adminUsage)
 		return fmt.Errorf("usage: pigeondrop %s <command>", group)
+	}
+
+	// The only command that does not need the database: it is how to find out that the service can be reached.
+	if group == "stt" && args[0] == "check" {
+		return sttCheck(ctx, cfg, args[1:], stdout)
 	}
 
 	pool, err := db.Connect(ctx, cfg.DatabaseURL, 2)
@@ -368,4 +376,44 @@ func warnIfOff(cfg config.Config, queued int, stderr io.Writer) {
 	if queued > 0 && cfg.SpeechURL == "" {
 		fmt.Fprintln(stderr, "note: STT_URL is not set in this environment. If the server runs without it too, nothing will work the queue.")
 	}
+}
+
+// sttCheck sends the service one second of silence the way the server's worker would, with the address, token and
+// timeout the server is configured with, and says whether and how it answered. Run in the server's container it
+// answers the questions that cannot be answered from anywhere else: can the two applications reach each other by that
+// name, is the token the same on both sides, has the model finished loading. It needs no database and queues nothing.
+func sttCheck(ctx context.Context, cfg config.Config, args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return fmt.Errorf("unexpected argument %q", args[0])
+	}
+	if cfg.SpeechURL == "" {
+		return errors.New("STT_URL is not set in this environment: there is no service to check")
+	}
+	service, err := transcribe.NewHTTP(cfg.SpeechURL, cfg.SpeechToken, cfg.SpeechTimeout)
+	if err != nil {
+		return err
+	}
+
+	const second = audio.SampleRate * 2 // bytes of 16-bit mono PCM
+	started := time.Now()
+	result, err := service.Transcribe(ctx, audio.PCMToWAV(make([]byte, second)))
+	took := time.Since(started).Round(time.Millisecond)
+	if err != nil {
+		kind, isCall := transcribe.KindOf(err)
+		switch {
+		case isCall && kind == transcribe.Busy:
+			// It answered, which is what is being checked.
+			fmt.Fprintf(stdout, "ok: the service at %s answered (it is busy with another recording right now)\n", cfg.SpeechURL)
+			return nil
+		case isCall && kind == transcribe.Unavailable:
+			return fmt.Errorf("the service at %s cannot be used: %w\n"+
+				"check STT_URL (the name must resolve from this container: both applications on one Docker network), "+
+				"that the service has finished loading (about 15 seconds after it starts), and that STT_TOKEN is the one the service runs with", cfg.SpeechURL, err)
+		default:
+			return fmt.Errorf("the service at %s answered badly: %w", cfg.SpeechURL, err)
+		}
+	}
+	fmt.Fprintf(stdout, "ok: the service at %s answered in %s (engine %s, the model took %d ms for %d ms of audio)\n",
+		cfg.SpeechURL, took, result.Engine, result.SttMs, result.AudioMs)
+	return nil
 }

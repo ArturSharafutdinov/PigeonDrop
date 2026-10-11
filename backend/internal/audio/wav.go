@@ -57,6 +57,10 @@ func toWAV(data []byte, newDecoder func() (Decoder, error)) ([]byte, error) {
 	return wavFile(pcm), nil
 }
 
+// PCMToWAV wraps 16 kHz, 16-bit, mono little-endian samples in a WAV header, the form the speech recognition
+// service takes.
+func PCMToWAV(pcm []byte) []byte { return wavFile(pcm) }
+
 // wavFile prepends the 44-byte WAV header for 16 kHz, 16-bit, mono PCM.
 func wavFile(pcm []byte) []byte {
 	const bytesPerSample = 2
