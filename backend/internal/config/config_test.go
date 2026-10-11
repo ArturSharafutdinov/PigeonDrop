@@ -27,6 +27,10 @@ func TestLoadDefaults(t *testing.T) {
 	if c.SpeechURL != "" || c.SpeechToken != "" || c.SpeechTimeout != 90*time.Second || c.SpeechMaxAttempts != 5 || c.SpeechMaxAudio != 65*time.Second {
 		t.Fatalf("unexpected speech recognition defaults: %+v", c)
 	}
+	// The Telegram bot is off until it has a token.
+	if c.TelegramToken != "" || c.TelegramAPIURL != "" || c.TelegramWait != 3*time.Minute || c.TelegramTimeout != 30*time.Second {
+		t.Fatalf("unexpected Telegram defaults: %+v", c)
+	}
 }
 
 func TestLoadDefaultServerURLFollowsPort(t *testing.T) {
@@ -57,6 +61,10 @@ func TestLoadValues(t *testing.T) {
 		"STT_TIMEOUT":           "2m",
 		"STT_MAX_ATTEMPTS":      "3",
 		"STT_MAX_AUDIO_SECONDS": "30.5",
+		"TELEGRAM_BOT_TOKEN":    " 123456789:AAH-test_token0123456789abcdefghijk ",
+		"TELEGRAM_API_URL":      " http://localhost:8081/ ",
+		"TELEGRAM_WAIT":         "90s",
+		"TELEGRAM_TIMEOUT":      "10s",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +76,8 @@ func TestLoadValues(t *testing.T) {
 		AccountStorageBytes: 2000000,
 		SpeechURL:           "http://stt:8000", SpeechToken: "shared-secret", SpeechTimeout: 2 * time.Minute, SpeechMaxAttempts: 3,
 		SpeechMaxAudio: 30*time.Second + 500*time.Millisecond,
+		TelegramToken:  "123456789:AAH-test_token0123456789abcdefghijk", TelegramAPIURL: "http://localhost:8081",
+		TelegramWait: 90 * time.Second, TelegramTimeout: 10 * time.Second,
 	}
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
@@ -145,5 +155,56 @@ func TestSpeechTokenWithoutAServiceIsAMistake(t *testing.T) {
 	}
 	if _, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "STT_URL": "http://stt:8000"})); err != nil {
 		t.Errorf("a service without a token (started for experiments) must load: %v", err)
+	}
+}
+
+func TestTelegramSettingsHaveLimits(t *testing.T) {
+	const token = "123456789:AAH-test_token0123456789abcdefghijk"
+	bad := map[string][]string{
+		"TELEGRAM_BOT_TOKEN": {"nonsense", "123456789", "123456789:short", ":AAH-test_token0123456789abcdefghijk", "abc:AAH-test_token0123456789abcdefghijk", "123456789:AAH test token0123456789abcdef", "123456789:AAH/test_token0123456789abcdef"},
+		"TELEGRAM_API_URL":   {"api.telegram.org", "ftp://x", "http://", "https://u:p@x", "https://x/bot", "https://x?a=1"},
+		"TELEGRAM_WAIT":      {"0s", "500ms", "31m", "3", "-1m", "soon"},
+		"TELEGRAM_TIMEOUT":   {"0s", "500ms", "6m", "30", "-1m", "soon"},
+	}
+	for name, values := range bad {
+		for _, v := range values {
+			vars := map[string]string{"DATABASE_URL": "postgres://x/y", "TELEGRAM_BOT_TOKEN": token, name: v}
+			_, err := Load(env(vars))
+			if err == nil {
+				t.Errorf("%s=%q was accepted", name, v)
+				continue
+			}
+			if name == "TELEGRAM_BOT_TOKEN" && v != "" && v != "nonsense" && strings.Contains(err.Error(), v) {
+				t.Errorf("the wrong token is repeated in the error: %v", err)
+			}
+		}
+	}
+	good := map[string]string{"TELEGRAM_WAIT": "1s", "TELEGRAM_TIMEOUT": "5m", "TELEGRAM_API_URL": "https://tg.example.com:8443"}
+	for name, v := range good {
+		if _, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "TELEGRAM_BOT_TOKEN": token, name: v})); err != nil {
+			t.Errorf("%s=%q: %v", name, v, err)
+		}
+	}
+	if _, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "TELEGRAM_WAIT": "30m"})); err != nil {
+		t.Errorf("a wait without a token (the bot is off) must load: %v", err)
+	}
+}
+
+func TestTelegramAddressWithoutATokenIsAMistake(t *testing.T) {
+	// An address with no token usually means the token was lost, and the bot would silently stay off.
+	_, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "TELEGRAM_API_URL": "http://localhost:8081"}))
+	if err == nil || !strings.Contains(err.Error(), "TELEGRAM_API_URL is set but TELEGRAM_BOT_TOKEN is not") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAWrongTelegramTokenIsNeverEchoed(t *testing.T) {
+	const wrong = "999999999:this-one-has-a-space in it-and-more"
+	_, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x/y", "TELEGRAM_BOT_TOKEN": wrong}))
+	if err == nil || !strings.Contains(err.Error(), "TELEGRAM_BOT_TOKEN does not look like a token") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "999999999") || strings.Contains(err.Error(), "this-one") {
+		t.Errorf("the token is in the error: %v", err)
 	}
 }

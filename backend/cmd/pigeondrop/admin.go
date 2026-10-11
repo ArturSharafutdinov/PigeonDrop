@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -22,6 +23,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/config"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/telegram"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/transcribe"
 )
 
@@ -38,6 +40,7 @@ const adminUsage = `usage:
   pigeondrop stt status                                   speech recognition: the queue by state, how long the oldest waits, failures
   pigeondrop stt enqueue -missing [-max-audio 65s]        queue the recordings that were never queued (received before recognition was on)
   pigeondrop stt retry -failed                            give every recording that was given up on another try
+  pigeondrop telegram check                               Telegram bot: ask Telegram who the bot is (TELEGRAM_BOT_TOKEN) and whether updates can be received
 `
 
 func admin(ctx context.Context, cfg config.Config, group string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -46,9 +49,12 @@ func admin(ctx context.Context, cfg config.Config, group string, args []string, 
 		return fmt.Errorf("usage: pigeondrop %s <command>", group)
 	}
 
-	// The only command that does not need the database: it is how to find out that the service can be reached.
+	// The commands that do not need the database: they are how to find out that the other side can be reached.
 	if group == "stt" && args[0] == "check" {
 		return sttCheck(ctx, cfg, args[1:], stdout)
+	}
+	if group == "telegram" && args[0] == "check" {
+		return telegramCheck(ctx, cfg, args[1:], stdout)
 	}
 
 	pool, err := db.Connect(ctx, cfg.DatabaseURL, 2)
@@ -415,5 +421,50 @@ func sttCheck(ctx context.Context, cfg config.Config, args []string, stdout io.W
 	}
 	fmt.Fprintf(stdout, "ok: the service at %s answered in %s (engine %s, the model took %d ms for %d ms of audio)\n",
 		cfg.SpeechURL, took, result.Engine, result.SttMs, result.AudioMs)
+	return nil
+}
+
+// telegramCheck asks Telegram who the bot is, the way the server will, with the token and the address it is
+// configured with, and whether a webhook is set (while one is, the bot cannot receive messages). Run in the server's
+// container it answers what cannot be answered from anywhere else: can this server reach Telegram at all (some
+// networks cannot), and is the token the right one. It needs no database and sends nothing to anyone.
+func telegramCheck(ctx context.Context, cfg config.Config, args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return fmt.Errorf("unexpected argument %q", args[0])
+	}
+	if cfg.TelegramToken == "" {
+		return errors.New("TELEGRAM_BOT_TOKEN is not set in this environment: the Telegram bot is off")
+	}
+	client, err := telegram.NewClient(cfg.TelegramAPIURL, cfg.TelegramToken, cfg.TelegramTimeout)
+	if err != nil {
+		return err
+	}
+
+	bot, err := client.GetMe(ctx)
+	if err != nil {
+		if kind, isCall := telegram.KindOf(err); isCall && kind == telegram.Unavailable {
+			return fmt.Errorf("Telegram cannot be used: %w\n"+
+				"check that this server can open the Bot API (api.telegram.org: DNS and outgoing HTTPS are not blocked) and that "+
+				"TELEGRAM_BOT_TOKEN is the token @BotFather gave for this bot (a 401 means it is not)", err)
+		}
+		return fmt.Errorf("Telegram answered badly: %w", err)
+	}
+
+	info, err := client.GetWebhookInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("ask Telegram about the webhook: %w", err)
+	}
+	if info.URL != "" {
+		// Only the host is shown: the rest of a webhook's address is often a secret.
+		host := "another address"
+		if u, err := url.Parse(info.URL); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		return fmt.Errorf("the bot @%s has a webhook set (to %s): while it is, Telegram does not give the server the bot's messages. "+
+			"Remove it (the Bot API method deleteWebhook) or use another bot", bot.Username, host)
+	}
+
+	fmt.Fprintf(stdout, "ok: the bot @%s (id %d) answers; no webhook is set, so the server can receive its messages (people open https://t.me/%s)\n",
+		bot.Username, bot.ID, bot.Username)
 	return nil
 }

@@ -6,6 +6,7 @@
 //	pigeondrop invite ...     create, list and revoke invitation codes
 //	pigeondrop user ...       list users, set a password
 //	pigeondrop stt ...        speech recognition: queue status, queue old recordings, retry failed ones
+//	pigeondrop telegram ...   Telegram bot: check that it can be used
 //	pigeondrop healthcheck    exit 0 if the local server answers /healthz (for Docker)
 //	pigeondrop version
 //
@@ -46,6 +47,7 @@ commands:
   invite create     print a new invitation code        (also: invite list, invite revoke <id>)
   user list         list users                         (also: user set-password <email>)
   stt status        speech recognition queue           (also: stt check, stt enqueue -missing, stt retry -failed)
+  telegram check    ask Telegram who the bot is
   healthcheck       exit 0 if the local server answers /healthz
   version           print the version
 `
@@ -87,7 +89,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 			return fmt.Errorf("configuration:\n%w", err)
 		}
 		return migrate(ctx, cfg, args[1:], stdout)
-	case "invite", "user", "stt":
+	case "invite", "user", "stt", "telegram":
 		cfg, err := config.Load(getenv)
 		if err != nil {
 			return fmt.Errorf("configuration:\n%w", err)

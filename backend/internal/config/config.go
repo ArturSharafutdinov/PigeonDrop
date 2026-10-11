@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +52,21 @@ type Config struct {
 	SpeechMaxAttempts int
 	// SpeechMaxAudio is the longest recording sent to the service. The model's memory was measured to 60 seconds.
 	SpeechMaxAudio time.Duration
+
+	// TelegramToken is the bot's token from @BotFather. Empty turns the Telegram bot off: no page section, no
+	// links to chats, no sending. It is a secret: it is never printed, not even in a message about its being wrong.
+	TelegramToken string
+	// TelegramAPIURL is the address of the Bot API (scheme://host[:port]); empty means Telegram's own. For tests
+	// and for a Bot API server of one's own.
+	TelegramAPIURL string
+	// TelegramWait is how long a recording waits for its text before it is sent without it.
+	TelegramWait time.Duration
+	// TelegramTimeout limits one call to the Bot API (a long poll adds its own wait).
+	TelegramTimeout time.Duration
 }
+
+// telegramToken is the shape of a bot token: the bot's number, a colon, then the secret part.
+var telegramToken = regexp.MustCompile(`^[0-9]{3,}:[A-Za-z0-9_-]{20,}$`)
 
 // DefaultAccountStorageBytes is 100 MiB. MinAccountStorageBytes only guards against a typo (a limit in megabytes
 // or kilobytes by mistake); it is lower than one large recording on purpose, so that the storage warning can be
@@ -80,6 +95,9 @@ func Load(getenv func(string) string) (Config, error) {
 		SpeechTimeout:     90 * time.Second,
 		SpeechMaxAttempts: 5,
 		SpeechMaxAudio:    65 * time.Second,
+
+		TelegramWait:    3 * time.Minute,
+		TelegramTimeout: 30 * time.Second,
 	}
 
 	if c.DatabaseURL == "" {
@@ -186,6 +204,39 @@ func Load(getenv func(string) string) (Config, error) {
 			bad("STT_MAX_AUDIO_SECONDS must be a number of seconds from 1 to 600, got %q", v)
 		} else {
 			c.SpeechMaxAudio = time.Duration(n * float64(time.Second))
+		}
+	}
+
+	if v := strings.TrimSpace(getenv("TELEGRAM_BOT_TOKEN")); v != "" {
+		if !telegramToken.MatchString(v) {
+			bad("TELEGRAM_BOT_TOKEN does not look like a token from @BotFather (digits, a colon, then letters and digits)") // not echoed: it is a secret
+		} else {
+			c.TelegramToken = v
+		}
+	}
+	if v := strings.TrimSpace(getenv("TELEGRAM_API_URL")); v != "" {
+		if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			bad("TELEGRAM_API_URL must be scheme://host[:port], got %q", v)
+		} else if c.TelegramToken == "" && strings.TrimSpace(getenv("TELEGRAM_BOT_TOKEN")) == "" {
+			bad("TELEGRAM_API_URL is set but TELEGRAM_BOT_TOKEN is not: the Telegram bot would stay off")
+		} else {
+			c.TelegramAPIURL = strings.TrimRight(v, "/")
+		}
+	}
+	if v := strings.TrimSpace(getenv("TELEGRAM_WAIT")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Second || d > 30*time.Minute {
+			bad("TELEGRAM_WAIT must be a duration from 1s to 30m (for example 3m), got %q", v)
+		} else {
+			c.TelegramWait = d
+		}
+	}
+	if v := strings.TrimSpace(getenv("TELEGRAM_TIMEOUT")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Second || d > 5*time.Minute {
+			bad("TELEGRAM_TIMEOUT must be a duration from 1s to 5m (for example 30s), got %q", v)
+		} else {
+			c.TelegramTimeout = d
 		}
 	}
 
