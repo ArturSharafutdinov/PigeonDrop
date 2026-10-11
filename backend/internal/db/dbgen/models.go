@@ -81,6 +81,22 @@ type Session struct {
 	AbsoluteExpiresAt time.Time
 }
 
+type TelegramDelivery struct {
+	MessageID      uuid.UUID
+	State          string
+	Attempts       int32
+	RunAfter       time.Time
+	WaitUntil      time.Time
+	LockedUntil    *time.Time
+	EnqueuedAt     time.Time
+	FinishedAt     *time.Time
+	ChatID         *int64
+	VoiceMessageID *int64
+	WithText       *bool
+	ErrorCode      *string
+	LastError      *string
+}
+
 type TelegramLink struct {
 	UserID    uuid.UUID
 	ChatID    int64

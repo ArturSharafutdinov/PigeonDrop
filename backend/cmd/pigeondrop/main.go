@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,7 +49,7 @@ commands:
   invite create     print a new invitation code        (also: invite list, invite revoke <id>)
   user list         list users                         (also: user set-password <email>)
   stt status        speech recognition queue           (also: stt check, stt enqueue -missing, stt retry -failed)
-  telegram check    ask Telegram who the bot is
+  telegram check    ask Telegram who the bot is        (also: telegram status)
   healthcheck       exit 0 if the local server answers /healthz
   version           print the version
 `
@@ -143,21 +144,23 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// Stops the worker (it gives back the recording it holds) before the database pool is closed.
 	defer stopWorker()
 
-	bot, stopBot, err := startTelegram(ctx, cfg, queries, db.InTx(pool), logger)
+	tg, stopTelegram, err := startTelegram(ctx, cfg, queries, db.InTx(pool), messages, logger)
 	if err != nil {
 		return err
 	}
-	defer stopBot()
+	// Stops the bot and the delivery worker (which gives back the recording it holds) before the pool is closed.
+	defer stopTelegram()
 	var telegramBot httpapi.TelegramBot // stays nil, not a nil *telegram.Bot, when the bot is off
-	if bot != nil {
-		telegramBot = bot
+	if tg.bot != nil {
+		telegramBot = tg.bot
 	}
 
 	srv := &http.Server{
 		Addr: ":" + strconv.Itoa(cfg.Port),
 		Handler: httpapi.NewHandler(&httpapi.Server{
 			Pinger: pool, DB: queries, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
-			Transcription: intake, TranscriptionWake: wake, Telegram: telegramBot,
+			Transcription: intake, TranscriptionWake: wake,
+			Telegram: telegramBot, TelegramDelivery: tg.intake, TelegramWake: tg.wake,
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 			Storage: httpapi.StorageLimits{
 				MaxAudioBytes: httpapi.DefaultStorageLimits.MaxAudioBytes, AccountBytes: cfg.AccountStorageBytes, WarnPercent: httpapi.DefaultStorageLimits.WarnPercent,
@@ -233,33 +236,53 @@ func startSpeechRecognition(ctx context.Context, cfg config.Config, q dbgen.Quer
 	return &transcribe.Intake{MaxAudio: cfg.SpeechMaxAudio}, worker.Wake, stop, nil
 }
 
-// startTelegram starts the Telegram bot if there is a token for it. It returns the bot (nil if it is off) and the
-// function that stops it and waits until it has.
-func startTelegram(ctx context.Context, cfg config.Config, q dbgen.Querier, tx telegram.TxFunc, logger *slog.Logger) (*telegram.Bot, func(), error) {
+// telegramParts is what the rest of the server uses of the Telegram bot; every field is nil when the bot is off.
+type telegramParts struct {
+	bot *telegram.Bot
+	// intake queues a new recording for its owner's chat; wake tells the delivery worker that there is one.
+	intake *telegram.Intake
+	wake   func()
+}
+
+// startTelegram starts the Telegram bot and the worker that sends recordings, if there is a token for them. It
+// returns what the server uses of them and the function that stops both and waits until they have.
+func startTelegram(ctx context.Context, cfg config.Config, q dbgen.Querier, tx telegram.TxFunc, files storage.Store, logger *slog.Logger) (telegramParts, func(), error) {
 	if cfg.TelegramToken == "" {
-		return nil, func() {}, nil
+		return telegramParts{}, func() {}, nil
 	}
 	client, err := telegram.NewClient(cfg.TelegramAPIURL, cfg.TelegramToken, cfg.TelegramTimeout)
 	if err != nil {
-		return nil, nil, fmt.Errorf("telegram: %w", err)
+		return telegramParts{}, nil, fmt.Errorf("telegram: %w", err)
 	}
 	bot := telegram.NewBot(client, q, tx, logger, telegram.BotSettings{PageURL: cfg.DefaultServerURL + "/pair"})
+	deliverer := telegram.NewDeliverer(q, files, client, logger, telegram.DeliverySettings{
+		// A call may take its whole timeout (a recording goes up with it), and the lease must outlast it or another
+		// worker could take the delivery while the first is still waiting.
+		Lease: cfg.TelegramTimeout*2 + 30*time.Second,
+	})
 
 	botCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		bot.Run(botCtx)
-	}()
+	var running sync.WaitGroup
+	for _, run := range []func(context.Context){bot.Run, deliverer.Run} {
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			run(botCtx)
+		}()
+	}
+	logger.Info("telegram is on", "wait_for_text", cfg.TelegramWait, "timeout", cfg.TelegramTimeout)
+
 	stop := func() {
 		cancel()
+		done := make(chan struct{})
+		go func() { running.Wait(); close(done) }()
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
 			logger.Warn("the Telegram bot did not stop in time")
 		}
 	}
-	return bot, stop, nil
+	return telegramParts{bot: bot, intake: &telegram.Intake{Wait: cfg.TelegramWait}, wake: deliverer.Wake}, stop, nil
 }
 
 // purgeExpired deletes expired sessions and pairings once an hour until ctx ends. Expired ones are already

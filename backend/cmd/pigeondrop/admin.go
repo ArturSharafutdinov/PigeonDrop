@@ -41,6 +41,7 @@ const adminUsage = `usage:
   pigeondrop stt enqueue -missing [-max-audio 65s]        queue the recordings that were never queued (received before recognition was on)
   pigeondrop stt retry -failed                            give every recording that was given up on another try
   pigeondrop telegram check                               Telegram bot: ask Telegram who the bot is (TELEGRAM_BOT_TOKEN) and whether updates can be received
+  pigeondrop telegram status                              Telegram bot: how many accounts are linked, the sending queue by state, how long the oldest waits, failures
 `
 
 func admin(ctx context.Context, cfg config.Config, group string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -86,6 +87,8 @@ func admin(ctx context.Context, cfg config.Config, group string, args []string, 
 		return sttEnqueue(ctx, q, cfg, args[1:], time.Now(), stdout, stderr)
 	case "stt retry":
 		return sttRetry(ctx, q, cfg, args[1:], time.Now(), stdout, stderr)
+	case "telegram status":
+		return telegramStatus(ctx, q, cfg, args[1:], time.Now(), stdout)
 	default:
 		fmt.Fprint(stderr, adminUsage)
 		return fmt.Errorf("unknown command %q", group+" "+args[0])
@@ -466,5 +469,69 @@ func telegramCheck(ctx context.Context, cfg config.Config, args []string, stdout
 
 	fmt.Fprintf(stdout, "ok: the bot @%s (id %d) answers; no webhook is set, so the server can receive its messages (people open https://t.me/%s)\n",
 		bot.Username, bot.ID, bot.Username)
+	return nil
+}
+
+var telegramStates = []string{telegram.StatePending, telegram.StateRunning, telegram.StateSent, telegram.StateFailed, telegram.StateSkipped}
+
+// telegramStatus is what the operator looks at when a person says "nothing came to my Telegram": whether the bot is
+// on in this environment, how many accounts are linked, and where the recordings are in the sending queue.
+func telegramStatus(ctx context.Context, q dbgen.Querier, cfg config.Config, args []string, now time.Time, stdout io.Writer) error {
+	if len(args) != 0 {
+		return fmt.Errorf("unexpected argument %q", args[0])
+	}
+	links, err := q.CountTelegramLinks(ctx)
+	if err != nil {
+		return err
+	}
+	counts, err := q.CountTelegramDeliveries(ctx)
+	if err != nil {
+		return err
+	}
+	byState := map[string]int64{}
+	for _, c := range counts {
+		byState[c.State] = c.Total
+	}
+	oldest, err := q.OldestWaitingTelegramDelivery(ctx)
+	waiting := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	failedDay, err := q.CountFailedTelegramDeliveriesSince(ctx, now.Add(-24*time.Hour))
+	if err != nil {
+		return err
+	}
+
+	if cfg.TelegramToken != "" {
+		fmt.Fprintln(stdout, "telegram: on in this environment (TELEGRAM_BOT_TOKEN is set)")
+	} else {
+		fmt.Fprintln(stdout, "telegram: off in this environment (TELEGRAM_BOT_TOKEN is not set); the server may differ")
+	}
+	fmt.Fprintf(stdout, "linked accounts: %d (%d of them blocked the bot)\n", links.Linked, links.Blocked)
+	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "STATE\tRECORDINGS")
+	for _, state := range telegramStates {
+		fmt.Fprintf(w, "%s\t%d\n", state, byState[state])
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if !waiting {
+		fmt.Fprintln(stdout, "waiting: nothing")
+	} else {
+		fmt.Fprintf(stdout, "oldest waiting since %s (%s ago)\n", oldest.UTC().Format("2006-01-02 15:04:05 UTC"), now.Sub(oldest).Round(time.Second))
+	}
+	fmt.Fprintf(stdout, "given up on in the last 24 hours: %d\n", failedDay)
+	latest, err := q.LatestFailedTelegramDelivery(ctx)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		fmt.Fprintf(stdout, "latest failure: %s, %s, message %s\n", formatTime(latest.FinishedAt), deref(latest.ErrorCode), latest.MessageID)
+		if latest.LastError != nil {
+			fmt.Fprintf(stdout, "  %s\n", *latest.LastError)
+		}
+	}
 	return nil
 }

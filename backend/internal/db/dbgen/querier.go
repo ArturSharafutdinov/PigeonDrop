@@ -15,19 +15,35 @@ type Querier interface {
 	// Approval also gives the watch a few more minutes to collect its token: a code approved in its last
 	// seconds must not expire before the next poll.
 	ApprovePairing(ctx context.Context, arg ApprovePairingParams) (uuid.UUID, error)
+	// Telegram says the chat cannot be written to: the link stops being used until the person links again. Only the link
+	// to that chat: one made to another chat since is not blocked.
+	BlockTelegramLink(ctx context.Context, arg BlockTelegramLinkParams) (int64, error)
+	// Takes the oldest delivery that is ready: waiting and past its pause, and either its recording's text is no longer being
+	// made (done, failed or skipped, or recognition is off and there is no entry) or the time to wait for it is up; or
+	// running with a lease that has run out (its worker died). SKIP LOCKED lets several workers take different ones.
+	// The attempt is counted here; the caller gives it back when Telegram was not reached.
+	// No row when nothing is ready.
+	ClaimTelegramDelivery(ctx context.Context, arg ClaimTelegramDeliveryParams) (ClaimTelegramDeliveryRow, error)
 	// Takes the oldest recording that is ready: waiting and past its pause, or running with a lease that has run out
 	// (its worker died). SKIP LOCKED lets several workers take different ones without waiting for each other.
 	// The attempt is counted here; the caller gives it back when the model was never reached.
 	// No row when nothing is ready.
 	ClaimTranscription(ctx context.Context, arg ClaimTranscriptionParams) (ClaimTranscriptionRow, error)
+	CompleteTelegramDelivery(ctx context.Context, arg CompleteTelegramDeliveryParams) (int64, error)
 	// Stores the text. Only the worker that took this attempt can: if the lease ran out and another worker took the
 	// recording, or the recording was deleted, no row matches and nothing changes (the caller sees 0 rows).
 	CompleteTranscription(ctx context.Context, arg CompleteTranscriptionParams) (int64, error)
 	// Spends the invitation. No row means it was unknown, expired, or already used (possibly a moment ago
 	// by someone else) - the caller cannot and need not tell which.
 	ConsumeInvitation(ctx context.Context, arg ConsumeInvitationParams) (uuid.UUID, error)
+	// Deliveries given up on since a moment.
+	CountFailedTelegramDeliveriesSince(ctx context.Context, since time.Time) (int64, error)
 	// Recordings given up on since a moment.
 	CountFailedTranscriptionsSince(ctx context.Context, since time.Time) (int64, error)
+	// The operator's counts by state, for `pigeondrop telegram status`.
+	CountTelegramDeliveries(ctx context.Context) ([]CountTelegramDeliveriesRow, error)
+	// How many accounts are linked, and how many of those links are blocked.
+	CountTelegramLinks(ctx context.Context) (CountTelegramLinksRow, error)
 	// The operator's counts by state, for `pigeondrop stt status`.
 	CountTranscriptions(ctx context.Context) ([]CountTranscriptionsRow, error)
 	CreateDevice(ctx context.Context, arg CreateDeviceParams) (CreateDeviceRow, error)
@@ -64,11 +80,16 @@ type Querier interface {
 	EnqueueMissingTranscriptions(ctx context.Context, arg EnqueueMissingTranscriptionsParams) ([]string, error)
 	// A new recording that is not going to the model (it cannot be decoded, or it is too long); error_code says why.
 	EnqueueSkippedTranscription(ctx context.Context, arg EnqueueSkippedTranscriptionParams) error
+	// The queue that sends recordings to a linked chat (internal/telegram/deliver.go).
+	// Puts a new recording in the queue, if its owner has a link that works. Does nothing if the account is not linked, or the
+	// link is blocked, or the recording is already there (an upload that ran twice).
+	EnqueueTelegramDelivery(ctx context.Context, arg EnqueueTelegramDeliveryParams) error
 	// The queue of recordings waiting to be turned into text, and the text. The worker (internal/transcribe) is the
 	// only caller except the upload, which puts a new recording in the queue. Every time passed in is the caller's
 	// clock, not the database's, so that tests can move it.
 	// Puts a new recording in the queue. Does nothing if it is already there (an upload that ran twice).
 	EnqueueTranscription(ctx context.Context, arg EnqueueTranscriptionParams) error
+	FailTelegramDelivery(ctx context.Context, arg FailTelegramDeliveryParams) (int64, error)
 	// Gives up on the recording.
 	FailTranscription(ctx context.Context, arg FailTranscriptionParams) (int64, error)
 	// Read-only look, to refuse an unusable code before spending a password hash on it.
@@ -87,6 +108,11 @@ type Querier interface {
 	GetPairingByDeviceCodeHash(ctx context.Context, deviceCodeHash []byte) (GetPairingByDeviceCodeHashRow, error)
 	// The session behind a cookie, with its user. No row when it is unknown or has expired.
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
+	GetTelegramDelivery(ctx context.Context, messageID uuid.UUID) (TelegramDelivery, error)
+	// What the worker needs to know to send a recording it took: the recording, the account's link now, what was already
+	// done for it, and its text. No row: the recording was deleted meanwhile. The link columns are null when the account
+	// has no link any more.
+	GetTelegramDeliverySubject(ctx context.Context, messageID uuid.UUID) (GetTelegramDeliverySubjectRow, error)
 	GetTelegramLink(ctx context.Context, userID uuid.UUID) (TelegramLink, error)
 	// Which account a chat is linked to, for /stop.
 	GetTelegramLinkByChat(ctx context.Context, chatID int64) (TelegramLink, error)
@@ -101,6 +127,8 @@ type Querier interface {
 	GetUserLanguage(ctx context.Context, id uuid.UUID) (string, error)
 	// Returns no row when this device already uploaded this name: a request with the same name won the race.
 	InsertMessage(ctx context.Context, arg InsertMessageParams) (InsertMessageRow, error)
+	// The latest failure, with Telegram's own words about it.
+	LatestFailedTelegramDelivery(ctx context.Context) (LatestFailedTelegramDeliveryRow, error)
 	// The latest failure, with the model's own words about it.
 	LatestFailedTranscription(ctx context.Context) (LatestFailedTranscriptionRow, error)
 	ListDevices(ctx context.Context, userID uuid.UUID) ([]ListDevicesRow, error)
@@ -117,13 +145,21 @@ type Querier interface {
 	// runs under this lock, so two uploads of one user cannot both see free room that only one of them gets.
 	// NO KEY UPDATE conflicts with itself but not with the key-share locks that inserts referencing the user take.
 	LockUserStorage(ctx context.Context, id uuid.UUID) error
+	// When the oldest delivery still waiting (pending, or running) was queued. No row when nothing waits.
+	OldestWaitingTelegramDelivery(ctx context.Context) (time.Time, error)
 	// When the oldest recording still waiting (pending, or running) was queued. No row when nothing waits.
 	OldestWaitingTranscription(ctx context.Context) (time.Time, error)
 	// Deletes the user's oldest messages, never keep_id, until the newest ones that are left fit in room bytes
 	// (the limit minus the message being kept, whatever its place in time). The files are removed by the caller.
 	PruneMessages(ctx context.Context, arg PruneMessagesParams) ([]uuid.UUID, error)
+	// The voice message is in Telegram: remember where, so that a retry does not send it again. Fenced by the attempt like
+	// the others, so only the worker that holds the delivery can.
+	RecordTelegramVoice(ctx context.Context, arg RecordTelegramVoiceParams) (int64, error)
 	// Hands out the approval exactly once: no row means someone else collected it first, or it was never approved.
 	RedeemPairing(ctx context.Context, arg RedeemPairingParams) (RedeemPairingRow, error)
+	// Puts the delivery back in the queue, to be taken again from run_after on. give_back is 1 when the attempt must not
+	// count (Telegram was not reached, or the server is stopping) and 0 when it must.
+	ReleaseTelegramDelivery(ctx context.Context, arg ReleaseTelegramDeliveryParams) (int64, error)
 	// Puts the recording back in the queue, to be taken again from run_after on. give_back is 1 when the attempt
 	// must not count (the model was not reached, or the server is stopping) and 0 when it must.
 	ReleaseTranscription(ctx context.Context, arg ReleaseTranscriptionParams) (int64, error)
@@ -137,6 +173,8 @@ type Querier interface {
 	// Only an unused invitation can be withdrawn; a used one stays as the record of who came through it.
 	RevokeInvitation(ctx context.Context, id uuid.UUID) (int64, error)
 	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error
+	// Decides that the recording is not going to the chat.
+	SkipTelegramDelivery(ctx context.Context, arg SkipTelegramDeliveryParams) (int64, error)
 	// Decides, after the recording was taken, that it is not going to the model.
 	SkipTranscription(ctx context.Context, arg SkipTranscriptionParams) (int64, error)
 	// What the user's recordings take. Only the original files count; the WAV played in a browser is made on demand.
