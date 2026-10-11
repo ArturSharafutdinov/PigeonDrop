@@ -61,6 +61,21 @@
       <p id="device-empty" class="hint" hidden>Ни одних часов пока не привязано.</p>
     </section>
 
+    <section id="telegram" hidden>
+      <h2>Telegram</h2>
+      <p id="telegram-state" class="hint"></p>
+      <p id="telegram-blocked" class="warn" hidden>Telegram сообщает, что бот заблокирован в этом чате, и записи туда не уходят. Привяжите чат заново.</p>
+      <div class="row">
+        <button type="button" id="telegram-link">Привязать Telegram</button>
+        <button type="button" id="telegram-unlink" class="link danger" hidden>Отключить</button>
+      </div>
+      <p id="telegram-wait" hidden>
+        <a id="telegram-open" class="button" href="#" target="_blank" rel="noopener noreferrer">Открыть в Telegram</a>
+        <span class="hint">Откройте ссылку и нажмите «Start» (она действует 10 минут). Эта страница сама заметит привязку.</span>
+      </p>
+      <p class="hint">Голосовое сообщение и его расшифровка отправляются на серверы Telegram. Отключить можно в любой момент.</p>
+    </section>
+
     <section id="messages">
       <div class="section-head">
         <h2>Записи</h2>

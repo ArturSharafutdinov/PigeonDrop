@@ -81,6 +81,24 @@ type Session struct {
 	AbsoluteExpiresAt time.Time
 }
 
+type TelegramLink struct {
+	UserID    uuid.UUID
+	ChatID    int64
+	Username  *string
+	FirstName *string
+	LinkedAt  time.Time
+	BlockedAt *time.Time
+}
+
+type TelegramLinkCode struct {
+	CodeHash   []byte
+	UserID     uuid.UUID
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	UsedAt     *time.Time
+	UsedChatID *int64
+}
+
 type Transcription struct {
 	MessageID   uuid.UUID
 	State       string

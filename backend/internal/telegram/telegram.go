@@ -104,8 +104,8 @@ func KindOf(err error) (kind Kind, ok bool) {
 	return 0, false
 }
 
-// Bot is the bot's own account, from getMe.
-type Bot struct {
+// Me is the bot's own account, from getMe.
+type Me struct {
 	ID        int64  `json:"id"`
 	Username  string `json:"username"`
 	FirstName string `json:"first_name"`
