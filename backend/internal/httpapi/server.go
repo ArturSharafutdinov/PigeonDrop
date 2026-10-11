@@ -17,6 +17,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/auth"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/telegram"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/transcribe"
 )
 
@@ -81,6 +82,11 @@ type Server struct {
 	TranscriptionWake func()
 	// Telegram is the bot people link their chat to; nil means the Telegram bot is off on this server.
 	Telegram TelegramBot
+	// TelegramDelivery puts each new recording of a linked account in the queue for its Telegram chat; nil means
+	// the bot is off and nothing is queued.
+	TelegramDelivery *telegram.Intake
+	// TelegramWake tells the delivery worker that there is something new in its queue (nil is fine).
+	TelegramWake func()
 
 	// userCodes draws the short code of a pairing; nil means auth.NewUserCode. Tests replace it to force collisions.
 	userCodes func() (display, canonical string, err error)

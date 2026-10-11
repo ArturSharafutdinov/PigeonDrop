@@ -10,6 +10,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/config"
 )
 
 // The operator's Telegram commands. `telegram check` needs no database.
@@ -168,5 +173,101 @@ func TestTelegramUnknownCommandShowsTheUsage(t *testing.T) {
 	// This one asks for the database (every command but the checks does), which is not there: either error is a refusal.
 	if err == nil {
 		t.Fatal("an unknown command was accepted")
+	}
+}
+
+// --- telegram status
+
+func TestTelegramStatusOnNothing(t *testing.T) {
+	c := newCLI(t)
+	var out bytes.Buffer
+
+	if err := telegramStatus(context.Background(), c.q, config.Config{}, nil, sttNow, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"telegram: off in this environment", "linked accounts: 0 (0 of them blocked the bot)", "pending  0", "running  0", "sent     0", "failed   0", "skipped  0",
+		"waiting: nothing", "given up on in the last 24 hours: 0"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "latest failure") {
+		t.Errorf("a failure out of nothing:\n%s", out.String())
+	}
+}
+
+func TestTelegramStatusShowsTheLinksTheQueueAndTheLatestFailure(t *testing.T) {
+	c := newCLI(t)
+	ctx := context.Background()
+	for i, state := range []string{"pending", "pending", "running", "sent", "sent", "sent", "failed", "failed", "skipped"} {
+		id := c.recording("m"+string(rune('a'+i)), true, 5000, sttNow)
+		switch state {
+		case "pending":
+			c.exec(`INSERT INTO telegram_deliveries (message_id, state, run_after, wait_until, enqueued_at) VALUES ($1, 'pending', $2, $2, $2)`, id, sttNow.Add(-time.Duration(i+1)*10*time.Minute))
+		case "running":
+			c.exec(`INSERT INTO telegram_deliveries (message_id, state, attempts, run_after, wait_until, enqueued_at, locked_until) VALUES ($1, 'running', 1, $2, $2, $2, $3)`, id, sttNow.Add(-time.Hour), sttNow.Add(time.Minute))
+		case "sent":
+			c.exec(`INSERT INTO telegram_deliveries (message_id, state, run_after, wait_until, enqueued_at, finished_at, with_text) VALUES ($1, 'sent', $2, $2, $2, $2, true)`, id, sttNow.Add(-time.Hour))
+		case "failed":
+			finished := sttNow.Add(-time.Duration(i-5) * 20 * time.Hour) // 20 h and 40 h ago
+			c.exec(`INSERT INTO telegram_deliveries (message_id, state, attempts, run_after, wait_until, enqueued_at, finished_at, error_code, last_error) VALUES ($1, 'failed', 5, $2, $2, $2, $2, 'rejected', $3)`,
+				id, finished, "telegram sendVoice: rejected (400): "+state)
+		case "skipped":
+			c.exec(`INSERT INTO telegram_deliveries (message_id, state, run_after, wait_until, enqueued_at, finished_at, error_code) VALUES ($1, 'skipped', $2, $2, $2, $2, 'blocked')`, id, sttNow)
+		}
+	}
+	// Two accounts are linked, one of whose chats blocked the bot.
+	users, err := c.pool.Query(ctx, `SELECT id FROM users ORDER BY email LIMIT 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []uuid.UUID
+	for users.Next() {
+		var id uuid.UUID
+		if err := users.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	users.Close()
+	for i, id := range ids {
+		c.exec(`INSERT INTO telegram_links (user_id, chat_id, linked_at, blocked_at) VALUES ($1, $2, $3, $4)`, id, 1000+i, sttNow, []*time.Time{nil, &sttNow}[i])
+	}
+	var out bytes.Buffer
+
+	if err := telegramStatus(ctx, c.q, config.Config{TelegramToken: tgTestToken}, nil, sttNow, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	got := out.String()
+	for _, want := range []string{"telegram: on in this environment", "linked accounts: 2 (1 of them blocked the bot)", "pending  2", "running  1", "sent     3", "failed   2", "skipped  1",
+		"oldest waiting since 2026-10-10 11:00:00 UTC (1h0m0s ago)", // the running one counts as waiting
+		"given up on in the last 24 hours: 1", "latest failure: 2026-10-09 16:00 UTC, rejected",
+		"rejected (400): failed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, secret := range []string{tgTestToken, "AAH-test"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("the token is in the output:\n%s", got)
+		}
+	}
+}
+
+func TestTelegramStatusTakesNoArguments(t *testing.T) {
+	c := newCLI(t)
+	_, _, err := c.run("", "telegram", "status", "now")
+	if err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestTelegramStatusRunsThroughTheCommandLine(t *testing.T) {
+	c := newCLI(t)
+	stdout, _ := c.mustRun("", "telegram", "status")
+	if !strings.Contains(stdout, "linked accounts: 0") {
+		t.Errorf("stdout:\n%s", stdout)
 	}
 }

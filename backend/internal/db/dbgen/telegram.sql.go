@@ -12,6 +12,153 @@ import (
 	"github.com/google/uuid"
 )
 
+const blockTelegramLink = `-- name: BlockTelegramLink :execrows
+UPDATE telegram_links SET blocked_at = $1::timestamptz
+WHERE user_id = $2 AND chat_id = $3 AND blocked_at IS NULL
+`
+
+type BlockTelegramLinkParams struct {
+	Now    time.Time
+	UserID uuid.UUID
+	ChatID int64
+}
+
+// Telegram says the chat cannot be written to: the link stops being used until the person links again. Only the link
+// to that chat: one made to another chat since is not blocked.
+func (q *Queries) BlockTelegramLink(ctx context.Context, arg BlockTelegramLinkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, blockTelegramLink, arg.Now, arg.UserID, arg.ChatID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const claimTelegramDelivery = `-- name: ClaimTelegramDelivery :one
+UPDATE telegram_deliveries
+SET state = 'running', attempts = attempts + 1, locked_until = $1::timestamptz
+WHERE message_id = (
+    SELECT d.message_id FROM telegram_deliveries d
+    WHERE (d.state = 'pending' AND d.run_after <= $2::timestamptz
+           AND (d.wait_until <= $2::timestamptz
+                OR NOT EXISTS (SELECT 1 FROM transcriptions t WHERE t.message_id = d.message_id AND t.state IN ('pending', 'running'))))
+       OR (d.state = 'running' AND d.locked_until < $2::timestamptz)
+    ORDER BY d.enqueued_at, d.message_id
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING message_id, attempts
+`
+
+type ClaimTelegramDeliveryParams struct {
+	LeaseUntil time.Time
+	Now        time.Time
+}
+
+type ClaimTelegramDeliveryRow struct {
+	MessageID uuid.UUID
+	Attempts  int32
+}
+
+// Takes the oldest delivery that is ready: waiting and past its pause, and either its recording's text is no longer being
+// made (done, failed or skipped, or recognition is off and there is no entry) or the time to wait for it is up; or
+// running with a lease that has run out (its worker died). SKIP LOCKED lets several workers take different ones.
+// The attempt is counted here; the caller gives it back when Telegram was not reached.
+// No row when nothing is ready.
+func (q *Queries) ClaimTelegramDelivery(ctx context.Context, arg ClaimTelegramDeliveryParams) (ClaimTelegramDeliveryRow, error) {
+	row := q.db.QueryRow(ctx, claimTelegramDelivery, arg.LeaseUntil, arg.Now)
+	var i ClaimTelegramDeliveryRow
+	err := row.Scan(&i.MessageID, &i.Attempts)
+	return i, err
+}
+
+const completeTelegramDelivery = `-- name: CompleteTelegramDelivery :execrows
+UPDATE telegram_deliveries
+SET state = 'sent', with_text = $1::boolean, chat_id = COALESCE(chat_id, $2),
+    finished_at = $3::timestamptz, locked_until = NULL, error_code = NULL, last_error = NULL
+WHERE message_id = $4 AND state = 'running' AND attempts = $5
+`
+
+type CompleteTelegramDeliveryParams struct {
+	WithText  bool
+	ChatID    *int64
+	Now       time.Time
+	MessageID uuid.UUID
+	Attempt   int32
+}
+
+func (q *Queries) CompleteTelegramDelivery(ctx context.Context, arg CompleteTelegramDeliveryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeTelegramDelivery,
+		arg.WithText,
+		arg.ChatID,
+		arg.Now,
+		arg.MessageID,
+		arg.Attempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countFailedTelegramDeliveriesSince = `-- name: CountFailedTelegramDeliveriesSince :one
+SELECT count(*)::bigint AS total FROM telegram_deliveries WHERE state = 'failed' AND finished_at >= $1::timestamptz
+`
+
+// Deliveries given up on since a moment.
+func (q *Queries) CountFailedTelegramDeliveriesSince(ctx context.Context, since time.Time) (int64, error) {
+	row := q.db.QueryRow(ctx, countFailedTelegramDeliveriesSince, since)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
+const countTelegramDeliveries = `-- name: CountTelegramDeliveries :many
+SELECT state, count(*)::bigint AS total FROM telegram_deliveries GROUP BY state ORDER BY state
+`
+
+type CountTelegramDeliveriesRow struct {
+	State string
+	Total int64
+}
+
+// The operator's counts by state, for `pigeondrop telegram status`.
+func (q *Queries) CountTelegramDeliveries(ctx context.Context) ([]CountTelegramDeliveriesRow, error) {
+	rows, err := q.db.Query(ctx, countTelegramDeliveries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountTelegramDeliveriesRow
+	for rows.Next() {
+		var i CountTelegramDeliveriesRow
+		if err := rows.Scan(&i.State, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countTelegramLinks = `-- name: CountTelegramLinks :one
+SELECT count(*)::bigint AS linked, (count(*) FILTER (WHERE blocked_at IS NOT NULL))::bigint AS blocked FROM telegram_links
+`
+
+type CountTelegramLinksRow struct {
+	Linked  int64
+	Blocked int64
+}
+
+// How many accounts are linked, and how many of those links are blocked.
+func (q *Queries) CountTelegramLinks(ctx context.Context) (CountTelegramLinksRow, error) {
+	row := q.db.QueryRow(ctx, countTelegramLinks)
+	var i CountTelegramLinksRow
+	err := row.Scan(&i.Linked, &i.Blocked)
+	return i, err
+}
+
 const createTelegramLinkCode = `-- name: CreateTelegramLinkCode :exec
 INSERT INTO telegram_link_codes (code_hash, user_id, created_at, expires_at)
 VALUES ($1, $2, $3::timestamptz, $4::timestamptz)
@@ -85,6 +232,132 @@ func (q *Queries) DeleteUnusedTelegramLinkCodes(ctx context.Context, userID uuid
 	return err
 }
 
+const enqueueTelegramDelivery = `-- name: EnqueueTelegramDelivery :exec
+
+INSERT INTO telegram_deliveries (message_id, state, run_after, wait_until, enqueued_at)
+SELECT m.id, 'pending', $1::timestamptz, $2::timestamptz, $1::timestamptz
+FROM messages m
+JOIN telegram_links l ON l.user_id = m.user_id AND l.blocked_at IS NULL
+WHERE m.id = $3
+ON CONFLICT (message_id) DO NOTHING
+`
+
+type EnqueueTelegramDeliveryParams struct {
+	Now       time.Time
+	WaitUntil time.Time
+	MessageID uuid.UUID
+}
+
+// The queue that sends recordings to a linked chat (internal/telegram/deliver.go).
+// Puts a new recording in the queue, if its owner has a link that works. Does nothing if the account is not linked, or the
+// link is blocked, or the recording is already there (an upload that ran twice).
+func (q *Queries) EnqueueTelegramDelivery(ctx context.Context, arg EnqueueTelegramDeliveryParams) error {
+	_, err := q.db.Exec(ctx, enqueueTelegramDelivery, arg.Now, arg.WaitUntil, arg.MessageID)
+	return err
+}
+
+const failTelegramDelivery = `-- name: FailTelegramDelivery :execrows
+UPDATE telegram_deliveries
+SET state = 'failed', error_code = $1::text, last_error = $2,
+    finished_at = $3::timestamptz, locked_until = NULL
+WHERE message_id = $4 AND state = 'running' AND attempts = $5
+`
+
+type FailTelegramDeliveryParams struct {
+	ErrorCode string
+	LastError *string
+	Now       time.Time
+	MessageID uuid.UUID
+	Attempt   int32
+}
+
+func (q *Queries) FailTelegramDelivery(ctx context.Context, arg FailTelegramDeliveryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failTelegramDelivery,
+		arg.ErrorCode,
+		arg.LastError,
+		arg.Now,
+		arg.MessageID,
+		arg.Attempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getTelegramDelivery = `-- name: GetTelegramDelivery :one
+SELECT message_id, state, attempts, run_after, wait_until, locked_until, enqueued_at, finished_at, chat_id,
+       voice_message_id, with_text, error_code, last_error
+FROM telegram_deliveries WHERE message_id = $1
+`
+
+func (q *Queries) GetTelegramDelivery(ctx context.Context, messageID uuid.UUID) (TelegramDelivery, error) {
+	row := q.db.QueryRow(ctx, getTelegramDelivery, messageID)
+	var i TelegramDelivery
+	err := row.Scan(
+		&i.MessageID,
+		&i.State,
+		&i.Attempts,
+		&i.RunAfter,
+		&i.WaitUntil,
+		&i.LockedUntil,
+		&i.EnqueuedAt,
+		&i.FinishedAt,
+		&i.ChatID,
+		&i.VoiceMessageID,
+		&i.WithText,
+		&i.ErrorCode,
+		&i.LastError,
+	)
+	return i, err
+}
+
+const getTelegramDeliverySubject = `-- name: GetTelegramDeliverySubject :one
+SELECT m.id, m.format, m.duration_ms,
+       d.chat_id AS delivery_chat_id, d.voice_message_id,
+       l.user_id AS link_user_id, l.chat_id AS link_chat_id, l.blocked_at AS link_blocked_at,
+       t.state AS transcript_state, t.text AS transcript_text
+FROM telegram_deliveries d
+JOIN messages m ON m.id = d.message_id
+LEFT JOIN telegram_links l ON l.user_id = m.user_id
+LEFT JOIN transcriptions t ON t.message_id = m.id
+WHERE d.message_id = $1
+`
+
+type GetTelegramDeliverySubjectRow struct {
+	ID              uuid.UUID
+	Format          string
+	DurationMs      *int32
+	DeliveryChatID  *int64
+	VoiceMessageID  *int64
+	LinkUserID      *uuid.UUID
+	LinkChatID      *int64
+	LinkBlockedAt   *time.Time
+	TranscriptState *string
+	TranscriptText  *string
+}
+
+// What the worker needs to know to send a recording it took: the recording, the account's link now, what was already
+// done for it, and its text. No row: the recording was deleted meanwhile. The link columns are null when the account
+// has no link any more.
+func (q *Queries) GetTelegramDeliverySubject(ctx context.Context, messageID uuid.UUID) (GetTelegramDeliverySubjectRow, error) {
+	row := q.db.QueryRow(ctx, getTelegramDeliverySubject, messageID)
+	var i GetTelegramDeliverySubjectRow
+	err := row.Scan(
+		&i.ID,
+		&i.Format,
+		&i.DurationMs,
+		&i.DeliveryChatID,
+		&i.VoiceMessageID,
+		&i.LinkUserID,
+		&i.LinkChatID,
+		&i.LinkBlockedAt,
+		&i.TranscriptState,
+		&i.TranscriptText,
+	)
+	return i, err
+}
+
 const getTelegramLink = `-- name: GetTelegramLink :one
 SELECT user_id, chat_id, username, first_name, linked_at, blocked_at FROM telegram_links WHERE user_id = $1
 `
@@ -156,6 +429,131 @@ func (q *Queries) GetUserLanguage(ctx context.Context, id uuid.UUID) (string, er
 	var language string
 	err := row.Scan(&language)
 	return language, err
+}
+
+const latestFailedTelegramDelivery = `-- name: LatestFailedTelegramDelivery :one
+SELECT message_id, finished_at, error_code, last_error FROM telegram_deliveries WHERE state = 'failed' ORDER BY finished_at DESC, message_id LIMIT 1
+`
+
+type LatestFailedTelegramDeliveryRow struct {
+	MessageID  uuid.UUID
+	FinishedAt *time.Time
+	ErrorCode  *string
+	LastError  *string
+}
+
+// The latest failure, with Telegram's own words about it.
+func (q *Queries) LatestFailedTelegramDelivery(ctx context.Context) (LatestFailedTelegramDeliveryRow, error) {
+	row := q.db.QueryRow(ctx, latestFailedTelegramDelivery)
+	var i LatestFailedTelegramDeliveryRow
+	err := row.Scan(
+		&i.MessageID,
+		&i.FinishedAt,
+		&i.ErrorCode,
+		&i.LastError,
+	)
+	return i, err
+}
+
+const oldestWaitingTelegramDelivery = `-- name: OldestWaitingTelegramDelivery :one
+SELECT enqueued_at FROM telegram_deliveries WHERE state IN ('pending', 'running') ORDER BY enqueued_at, message_id LIMIT 1
+`
+
+// When the oldest delivery still waiting (pending, or running) was queued. No row when nothing waits.
+func (q *Queries) OldestWaitingTelegramDelivery(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, oldestWaitingTelegramDelivery)
+	var enqueued_at time.Time
+	err := row.Scan(&enqueued_at)
+	return enqueued_at, err
+}
+
+const recordTelegramVoice = `-- name: RecordTelegramVoice :execrows
+UPDATE telegram_deliveries
+SET chat_id = $1::bigint, voice_message_id = $2::bigint
+WHERE message_id = $3 AND state = 'running' AND attempts = $4
+`
+
+type RecordTelegramVoiceParams struct {
+	ChatID         int64
+	VoiceMessageID int64
+	MessageID      uuid.UUID
+	Attempt        int32
+}
+
+// The voice message is in Telegram: remember where, so that a retry does not send it again. Fenced by the attempt like
+// the others, so only the worker that holds the delivery can.
+func (q *Queries) RecordTelegramVoice(ctx context.Context, arg RecordTelegramVoiceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordTelegramVoice,
+		arg.ChatID,
+		arg.VoiceMessageID,
+		arg.MessageID,
+		arg.Attempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const releaseTelegramDelivery = `-- name: ReleaseTelegramDelivery :execrows
+UPDATE telegram_deliveries
+SET state = 'pending', run_after = $1::timestamptz, locked_until = NULL,
+    attempts = GREATEST(attempts - $2::integer, 0), last_error = $3
+WHERE message_id = $4 AND state = 'running' AND attempts = $5
+`
+
+type ReleaseTelegramDeliveryParams struct {
+	RunAfter  time.Time
+	GiveBack  int32
+	LastError *string
+	MessageID uuid.UUID
+	Attempt   int32
+}
+
+// Puts the delivery back in the queue, to be taken again from run_after on. give_back is 1 when the attempt must not
+// count (Telegram was not reached, or the server is stopping) and 0 when it must.
+func (q *Queries) ReleaseTelegramDelivery(ctx context.Context, arg ReleaseTelegramDeliveryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseTelegramDelivery,
+		arg.RunAfter,
+		arg.GiveBack,
+		arg.LastError,
+		arg.MessageID,
+		arg.Attempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const skipTelegramDelivery = `-- name: SkipTelegramDelivery :execrows
+UPDATE telegram_deliveries
+SET state = 'skipped', error_code = $1::text, last_error = $2,
+    finished_at = $3::timestamptz, locked_until = NULL
+WHERE message_id = $4 AND state = 'running' AND attempts = $5
+`
+
+type SkipTelegramDeliveryParams struct {
+	ErrorCode string
+	LastError *string
+	Now       time.Time
+	MessageID uuid.UUID
+	Attempt   int32
+}
+
+// Decides that the recording is not going to the chat.
+func (q *Queries) SkipTelegramDelivery(ctx context.Context, arg SkipTelegramDeliveryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, skipTelegramDelivery,
+		arg.ErrorCode,
+		arg.LastError,
+		arg.Now,
+		arg.MessageID,
+		arg.Attempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertTelegramLink = `-- name: UpsertTelegramLink :exec

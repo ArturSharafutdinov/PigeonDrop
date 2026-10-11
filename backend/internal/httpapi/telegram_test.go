@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -370,5 +371,171 @@ func waitFor(t testing.TB, what string, done func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// --- the upload and the queue for Telegram
+
+// telegramDelivery turns the queue for Telegram on for a test and counts the times the worker was woken.
+func telegramDelivery(wait time.Duration, woken *atomic.Int32) func(*Server) {
+	return func(s *Server) {
+		s.TelegramDelivery = &telegram.Intake{Wait: wait}
+		s.TelegramWake = func() { woken.Add(1) }
+	}
+}
+
+type deliveryRow struct {
+	state     string
+	waitUntil time.Time
+	enqueued  time.Time
+}
+
+func (e *testEnv) deliveryEntry(t testing.TB, messageID string) (row deliveryRow, found bool) {
+	t.Helper()
+	rows, err := e.pool.Query(context.Background(), `SELECT state, wait_until, enqueued_at FROM telegram_deliveries WHERE message_id = $1`, messageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return deliveryRow{}, false
+	}
+	if err := rows.Scan(&row.state, &row.waitUntil, &row.enqueued); err != nil {
+		t.Fatal(err)
+	}
+	return row, true
+}
+
+func TestAnUploadOfALinkedAccountJoinsTheQueueForTelegramAndWakesTheWorker(t *testing.T) {
+	var woken atomic.Int32
+	e := newEnvWith(t, telegramDelivery(3*time.Minute, &woken))
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+	if err := e.db.UpsertTelegramLink(context.Background(), dbgen.UpsertTelegramLinkParams{UserID: e.userID(t, owner), ChatID: 42, Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	id := e.uploaded(t, token, "voice_1.opus", fixture(t, "tone.ogg"))["id"].(string)
+
+	row, found := e.deliveryEntry(t, id)
+	if !found || row.state != "pending" {
+		t.Fatalf("queue entry: %+v found=%v", row, found)
+	}
+	if d := row.waitUntil.Sub(row.enqueued); d != 3*time.Minute {
+		t.Errorf("the delivery waits %s for the text, want 3 minutes", d)
+	}
+	if woken.Load() != 1 {
+		t.Errorf("the worker was woken %d times, want 1", woken.Load())
+	}
+}
+
+func TestAnUploadOfAnAccountThatIsNotLinkedIsNotQueuedForTelegram(t *testing.T) {
+	var woken atomic.Int32
+	e := newEnvWith(t, telegramDelivery(3*time.Minute, &woken))
+	linked := e.signUp(t, "alice@example.com")
+	stranger := e.signUp(t, "bob@example.com")
+	linkedToken, _ := e.pairDevice(t, linked, "watch")
+	strangerToken, _ := e.pairDevice(t, stranger, "watch")
+	if err := e.db.UpsertTelegramLink(context.Background(), dbgen.UpsertTelegramLinkParams{UserID: e.userID(t, linked), ChatID: 42, Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	e.uploaded(t, linkedToken, "voice_1.opus", fixture(t, "tone.ogg"))
+	other := e.uploaded(t, strangerToken, "voice_1.opus", fixture(t, "tone.ogg"))["id"].(string)
+
+	if _, found := e.deliveryEntry(t, other); found {
+		t.Error("a recording of an account that is not linked was queued for Telegram")
+	}
+	if n := e.count(t, `SELECT count(*) FROM telegram_deliveries`); n != 1 {
+		t.Errorf("%d queue entries, want only the linked account's", n)
+	}
+}
+
+func TestAnUploadThatIsRepeatedIsNotQueuedForTelegramAgain(t *testing.T) {
+	var woken atomic.Int32
+	e := newEnvWith(t, telegramDelivery(time.Minute, &woken))
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+	if err := e.db.UpsertTelegramLink(context.Background(), dbgen.UpsertTelegramLinkParams{UserID: e.userID(t, owner), ChatID: 42, Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	first := e.uploaded(t, token, "voice_1.opus", fixture(t, "tone.ogg"))
+	again := e.uploaded(t, token, "voice_1.opus", fixture(t, "tone.ogg"))
+
+	if again["duplicate"] != true || again["id"] != first["id"] {
+		t.Fatalf("second answer: %v", again)
+	}
+	if n := e.count(t, `SELECT count(*) FROM telegram_deliveries`); n != 1 {
+		t.Fatalf("%d queue entries for one recording", n)
+	}
+	if woken.Load() != 1 {
+		t.Errorf("woken %d times: a repeat brought nothing new", woken.Load())
+	}
+}
+
+func TestWithTheBotOffNothingIsQueuedForTelegramAndNobodyIsWoken(t *testing.T) {
+	var woken atomic.Int32
+	e := newEnvWith(t, func(s *Server) { s.TelegramWake = func() { woken.Add(1) } }) // TelegramDelivery stays nil
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+	if err := e.db.UpsertTelegramLink(context.Background(), dbgen.UpsertTelegramLinkParams{UserID: e.userID(t, owner), ChatID: 42, Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	e.uploaded(t, token, "voice_1.opus", fixture(t, "tone.ogg"))
+
+	if n := e.count(t, `SELECT count(*) FROM telegram_deliveries`); n != 0 {
+		t.Fatalf("%d queue entries with the bot off", n)
+	}
+	if woken.Load() != 0 {
+		t.Errorf("woken %d times with the bot off", woken.Load())
+	}
+}
+
+func TestARecordingIsNeverAcceptedWithoutItsPlaceInTheQueueForTelegram(t *testing.T) {
+	var woken atomic.Int32
+	e := newEnvWith(t, telegramDelivery(time.Minute, &woken))
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+	if err := e.db.UpsertTelegramLink(context.Background(), dbgen.UpsertTelegramLinkParams{UserID: e.userID(t, owner), ChatID: 42, Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(context.Background(), `ALTER TABLE telegram_deliveries ADD CONSTRAINT never CHECK (false) NOT VALID`); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := e.uploadAs(token, "voice_1.opus", fixture(t, "tone.ogg"))
+
+	if rec.Code < 500 {
+		t.Fatalf("the upload answered %d although the recording could not be queued", rec.Code)
+	}
+	if n := e.count(t, `SELECT count(*) FROM messages`); n != 0 {
+		t.Errorf("%d recordings were accepted without their place in the queue", n)
+	}
+	if names := e.storedNames(t); len(names) != 0 {
+		t.Errorf("files left behind: %v", names)
+	}
+	if woken.Load() != 0 {
+		t.Error("the worker was woken for nothing")
+	}
+}
+
+func TestDeletingARecordingTakesItsPlaceInTheQueueForTelegram(t *testing.T) {
+	var woken atomic.Int32
+	e := newEnvWith(t, telegramDelivery(time.Minute, &woken))
+	owner := e.signUp(t, "alice@example.com")
+	token, _ := e.pairDevice(t, owner, "watch")
+	if err := e.db.UpsertTelegramLink(context.Background(), dbgen.UpsertTelegramLinkParams{UserID: e.userID(t, owner), ChatID: 42, Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	id := e.uploaded(t, token, "voice_1.opus", fixture(t, "tone.ogg"))["id"].(string)
+
+	if rec := e.call(http.MethodDelete, "/v1/messages/"+id, "", withCookie(owner)); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if _, found := e.deliveryEntry(t, id); found {
+		t.Fatal("the delivery outlived its recording")
 	}
 }

@@ -139,6 +139,12 @@ func (s *Server) UploadMessage(ctx context.Context, request api.UploadMessageReq
 				return fmt.Errorf("queue the recording for recognition: %w", err)
 			}
 		}
+		if s.TelegramDelivery != nil {
+			// Likewise: only an account with a working link gets an entry, and it is made with the message.
+			if err := s.TelegramDelivery.Enqueue(ctx, q, id, s.now()); err != nil {
+				return fmt.Errorf("queue the recording for Telegram: %w", err)
+			}
+		}
 		pruned, err = q.PruneMessages(ctx, dbgen.PruneMessagesParams{
 			Owner: dev.UserID, KeepID: id, Room: s.Storage.AccountBytes - int64(len(data)),
 		})
@@ -174,6 +180,9 @@ func (s *Server) UploadMessage(ctx context.Context, request api.UploadMessageReq
 	s.Logger.Info("saved recording", "message_id", id, "device_id", dev.ID, "bytes", len(data), "format", format, "decodable", decodable)
 	if s.Transcription != nil && s.TranscriptionWake != nil {
 		s.TranscriptionWake() // after the commit, so the worker finds the entry
+	}
+	if s.TelegramDelivery != nil && s.TelegramWake != nil {
+		s.TelegramWake()
 	}
 	if len(pruned) > 0 {
 		s.Logger.Info("storage was full: the account's oldest recordings were deleted", "user_id", dev.UserID, "deleted", len(pruned), "used_bytes", used)

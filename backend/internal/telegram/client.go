@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptrace"
@@ -306,6 +305,8 @@ func (c *Client) SendMessage(ctx context.Context, p MessageParams) (Sent, error)
 
 type field struct{ name, value string }
 
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
 func (c *Client) sendFile(ctx context.Context, method string, fields []field, fileField, fileName, fileType string, data []byte) (Sent, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
@@ -315,7 +316,10 @@ func (c *Client) sendFile(ctx context.Context, method string, fields []field, fi
 		}
 	}
 	header := textproto.MIMEHeader{}
-	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": fileField, "filename": fileName}))
+	// Written out, in the form every browser and HTTP library uses (name first, both values in quotes): mime.FormatMediaType
+	// would leave a value without quotes when it is a plain word, which is valid but not what a server's parser is most
+	// likely to have been tried with.
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, quoteEscaper.Replace(fileField), quoteEscaper.Replace(fileName)))
 	header.Set("Content-Type", fileType)
 	part, err := w.CreatePart(header)
 	if err != nil {

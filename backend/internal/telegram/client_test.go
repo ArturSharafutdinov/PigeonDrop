@@ -199,6 +199,28 @@ func TestSendVoice(t *testing.T) {
 	if string(data) != string(audio) {
 		t.Errorf("file bytes changed on the way")
 	}
+	// The way a browser writes it: a parser that only knows that form must read it.
+	if got := part.Header.Get("Content-Disposition"); got != `form-data; name="voice"; filename="voice.ogg"` {
+		t.Errorf("Content-Disposition = %q", got)
+	}
+	if !strings.Contains(string(c.Body), "Content-Disposition: form-data; name=\"chat_id\"\r\n") {
+		t.Errorf("the ordinary fields are not written the usual way: %q", c.Body[:80])
+	}
+}
+
+func TestAFileNameWithQuotesCannotBreakOutOfItsHeader(t *testing.T) {
+	client, f := newFakeAPI(t, ok(`{"message_id":4,"chat":{"id":9,"type":"private"},"document":{"file_id":"D"}}`))
+	// SendDocument turns slashes and backslashes into underscores and drops line breaks; a quote must be escaped, not trusted.
+	if _, err := client.SendDocument(context.Background(), DocumentParams{ChatID: 9, Data: []byte("data"), FileName: `a"b\c.opus`}); err != nil {
+		t.Fatal(err)
+	}
+	_, part, _ := parseMultipart(t, f.calls[0])
+	if part == nil || part.FileName() != `a"b_c.opus` {
+		t.Fatalf("file part %+v", part)
+	}
+	if !strings.Contains(string(f.calls[0].Body), `filename="a\"b_c.opus"`) {
+		t.Errorf("the name is not escaped in the header: %q", f.calls[0].Body)
+	}
 }
 
 func TestSendVoiceLeavesOutWhatIsEmpty(t *testing.T) {
