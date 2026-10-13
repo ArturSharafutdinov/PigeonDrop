@@ -7,6 +7,7 @@ export const push = (o) => { pushed.push(o) }
 export let paired = false
 export const setPaired = (v) => { paired = v }
 export const isPaired = () => paired
+export const getDeviceToken = () => (paired ? 'tok' : null)
 export let recordingCount = 3
 export const setRecordingCount = (n) => { recordingCount = n }
 export const listRecordings = () => Array.from({ length: recordingCount })
