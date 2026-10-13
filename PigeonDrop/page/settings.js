@@ -5,17 +5,23 @@
 import { createWidget, widget, align, prop, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
 import { push } from '@zos/router'
-import { isPaired } from '../utils/device'
+import { isPaired, getDeviceToken } from '../utils/device'
 import { listRecordings } from '../utils/recordings'
 import { clearAllRecordings } from '../utils/uploadQueue'
 
 const CLEAR_CONFIRM_MS = 5000 // how long "press again" stays armed before it falls back
 const CLEAR_LABEL = 'Очистить память'
+const CHECK_LABEL = 'Проверить связь'
+// Longer than the phone's own two steps of 10 s each (app-side/serverCheck.js), so its answer arrives in time.
+const CHECK_TIMEOUT_MS = 25000
 
 Page({
   state: {
     statusText: null, // on-screen status/instructions widget
     clearButton: null, // the "Очистить память" button, whose label changes while it waits for confirmation
+    checkButton: null, // the "Проверить связь" button
+    checking: false, // a check is under way
+    destroyed: false, // set in onDestroy, so a late reply touches nothing
     clearTimer: null, // setTimeout id that disarms the confirmation, or null when not armed
   },
 
@@ -26,9 +32,9 @@ Page({
     // clippable box.
     this.state.statusText = createWidget(widget.TEXT, {
       x: px(0),
-      y: px(10),
+      y: px(15),
       w: px(480),
-      h: px(60),
+      h: px(125),
       text: this.idleText(),
       text_size: px(20),
       color: 0xffffff,
@@ -52,11 +58,25 @@ Page({
       click_func: () => push({ url: 'page/pair' }),
     })
 
+    // Walks the way to the server through the phone and says where it breaks.
+    this.state.checkButton = createWidget(widget.BUTTON, {
+      x: px(100),
+      y: px(235),
+      w: px(280),
+      h: px(65),
+      radius: px(16),
+      normal_color: 0x2f2f2f,
+      press_color: 0x4a4a4a,
+      text: CHECK_LABEL,
+      text_size: px(22),
+      click_func: () => this.onCheck(),
+    })
+
     // Deletes every recording and resets the send queue. Asks for a second
     // press first, since there is no undo.
     this.state.clearButton = createWidget(widget.BUTTON, {
       x: px(100),
-      y: px(235),
+      y: px(320),
       w: px(280),
       h: px(65),
       radius: px(16),
@@ -70,6 +90,7 @@ Page({
 
   // Only the timer is dropped here - the widgets are already being torn down.
   onDestroy() {
+    this.state.destroyed = true
     if (this.state.clearTimer !== null) {
       clearTimeout(this.state.clearTimer)
       this.state.clearTimer = null
@@ -82,6 +103,36 @@ Page({
 
   updateStatus(text) {
     this.state.statusText.setProperty(prop.MORE, { text })
+  },
+
+  // "Проверить связь": the phone checks the server and the device token (app-side/serverCheck.js);
+  // the status line says in a few words where it went wrong, or that all is well.
+  onCheck() {
+    if (this.state.checking) return
+    this.state.checking = true
+    this.updateStatus('Проверяю связь...')
+    const { messageBuilder } = getApp()._options.globalData
+    messageBuilder
+      .request({ type: 'checkServer', deviceToken: getDeviceToken() || '' }, { timeout: CHECK_TIMEOUT_MS })
+      .then(
+        (reply) => reply,
+        () => ({ noPhone: true }),
+      )
+      .then((reply) => {
+        this.state.checking = false
+        if (this.state.destroyed) return
+        this.updateStatus(this.checkText(reply))
+      })
+  },
+
+  // The words for a check's result. `error` is the technical reason, cut to fit a line.
+  checkText(reply) {
+    const why = String((reply && reply.error) || '').replace(/^server: /, '').slice(0, 30)
+    if (!reply || reply.noPhone) return 'Телефон не отвечает\nПерезапустите\nприложение Zepp'
+    if (reply.ok === true) return reply.paired === false ? 'Сервер доступен,\nчасы не привязаны' : 'Связь в порядке:\nсервер доступен,\nчасы привязаны'
+    if (reply.stage === 'server') return 'Сервер недоступен\n(' + why + ')'
+    if (reply.stage === 'token') return 'Сервер доступен, но\nпривязка часов\nотозвана'
+    return 'Ошибка сервера\n(' + (why || 'нет ответа') + ')'
   },
 
   // "Очистить память": the first press only asks for confirmation (and shows

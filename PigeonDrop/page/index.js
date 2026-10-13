@@ -365,10 +365,12 @@ Page({
     } else if (state.state === 'error') {
       // A broken link between the phone and the watch, or between the phone and the server, is told in words
       // the person can act on (utils/linkProblem.js); any other failure shows its own reason.
+      // The reason is added under the text for the server case: the same words cover very different causes.
       const problem = problemText(state.kind)
+      const reason = String(state.message || '').replace(/^server: /, '').slice(0, 30)
       this.updateStatus(
         problem
-          ? problem + '\nВ очереди: ' + state.pending
+          ? problem + (state.kind === 'server' && reason ? '\n(' + reason + ')' : '') + '\nВ очереди: ' + state.pending
           : 'Не удалось отправить\n' + state.message + '\nВ очереди: ' + state.pending,
       )
     } else if (state.state === 'unpaired') {

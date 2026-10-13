@@ -7,6 +7,7 @@ import { MessageBuilder } from '../shared/message-side'
 import { SERVER_URL } from '../config'
 import { handleUploadChunk } from './uploads'
 import { startPairing, pollPairing } from './pairing'
+import { checkServer } from './serverCheck'
 
 // This used to run alongside a parallel @zos/ble/TransferFile receive path
 // (global `transferFile`), removed after it was decided its FileObject - only
@@ -31,6 +32,7 @@ AppSideService({
     //                 carries the server's result.
     //   pairStart   - page/pair.js asks for the codes of a new pairing (see ./pairing.js).
     //   pairPoll    - page/pair.js asks whether the pairing was approved yet.
+    //   checkServer - the settings page's "Проверить связь": walks the way to the server (./serverCheck.js).
     //   ping        - the watch asks whether anybody is here before it starts an upload; any reply will do
     //                 (utils/uploadQueue.js), so that a phone that does not answer is found in seconds.
     messageBuilder.on('request', ({ request, response }) => {
@@ -49,6 +51,8 @@ AppSideService({
         reply(startPairing(payload, SERVER_URL))
       } else if (type === 'pairPoll') {
         reply(pollPairing(payload, SERVER_URL))
+      } else if (type === 'checkServer') {
+        reply(checkServer(payload, SERVER_URL))
       } else if (type === 'ping') {
         reply(Promise.resolve({ ok: true }))
       } else {
