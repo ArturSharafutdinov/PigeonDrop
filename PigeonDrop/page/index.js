@@ -15,7 +15,7 @@ import {
   pausePalmScreenOff,
   resetPalmScreenOff,
 } from '@zos/display'
-import { newRecordingPath, listRecordings } from '../utils/recordings'
+import { newRecordingPath, listRecordings, discardRecording } from '../utils/recordings'
 import {
   pruneRecordings,
   retryPendingUploads,
@@ -54,6 +54,9 @@ Page({
     recorder: null, // active Recorder instance, or null when idle
     player: null, // lazily created Player instance, reused across plays (see getPlayer)
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
+    settingsButton: null, // "Настройки" and "Список записей" are hidden while recording (see showControls)
+    listButton: null,
+    cancelButton: null, // "Отмена": shown only while recording, in the place of the two above
     pendingAlert: null, // a storage warning that arrived during a recording, shown once it ends
     startedAt: null, // Date.now() when the current recording began (drives the stopwatch)
     ticker: null, // setInterval id of the once-a-second stopwatch refresh, or null when idle
@@ -84,7 +87,7 @@ Page({
     // it - side-by-side placement leaves much tighter margins near the
     // bezel, while stacking lets this reuse the same proven-safe width/x as
     // the button below it.
-    createWidget(widget.BUTTON, {
+    this.state.settingsButton = createWidget(widget.BUTTON, {
       x: px(100),
       y: px(270),
       w: px(280),
@@ -95,6 +98,7 @@ Page({
       text: 'Настройки',
       text_size: px(24),
       click_func: () => {
+        if (this.state.recording) return
         push({ url: 'page/settings' })
       },
     })
@@ -103,7 +107,7 @@ Page({
     // round display a wide rectangle placed too close to the top/bottom edge
     // gets its corners clipped by the bezel, so this button is kept
     // comfortably within the circle instead of spanning the full width.
-    createWidget(widget.BUTTON, {
+    this.state.listButton = createWidget(widget.BUTTON, {
       x: px(100),
       y: px(350),
       w: px(280),
@@ -114,9 +118,28 @@ Page({
       text: 'Список записей',
       text_size: px(24),
       click_func: () => {
+        if (this.state.recording) return
         push({ url: 'page/list' })
       },
     })
+
+    // Cancels the recording in progress and deletes it: it goes neither to the watch's memory nor to the upload
+    // queue. It takes the place of the two buttons above, which are hidden while recording (a third button does
+    // not fit the round display), and it is created last so that it lies on top of them. It sits right under
+    // the stopwatch, with the same size and place as "Настройки", so it is inside the same safe zone.
+    this.state.cancelButton = createWidget(widget.BUTTON, {
+      x: px(100),
+      y: px(270),
+      w: px(280),
+      h: px(65),
+      radius: px(16),
+      normal_color: 0x5c2a2a,
+      press_color: 0x7a3a3a,
+      text: 'Отмена',
+      text_size: px(24),
+      click_func: () => this.cancelRecording(),
+    })
+    this.showControls(false)
 
     // The watch only exposes one physical "shortcut" button, so it's
     // overloaded with two gestures: a click toggles recording, a long press
@@ -186,6 +209,7 @@ Page({
     this.state.recorder = recorder
     this.state.currentFile = filePath
     this.state.recording = true
+    this.showControls(true)
     this.startStopwatch()
   },
 
@@ -196,10 +220,7 @@ Page({
   // limitReached is true when the stop came from the MAX_RECORDING_SECONDS
   // safety limit rather than from the user.
   stopRecording(limitReached) {
-    this.stopStopwatch()
-    this.state.recorder.stop()
-    this.state.recorder = null
-    this.state.recording = false
+    this.endRecording()
     // The recording is over but the upload isn't: keep the screen on for it.
     this.holdScreenForUpload()
     setActiveRecording(null)
@@ -224,6 +245,51 @@ Page({
 
     // A storage warning that came in while this was being recorded.
     if (this.state.pendingAlert) this.alertStorage(this.state.pendingAlert)
+  },
+
+  // The part of ending a recording that stopping and cancelling share: the stopwatch, the recorder, the flag, and
+  // the buttons back to the normal ones.
+  endRecording() {
+    this.stopStopwatch()
+    this.state.recorder.stop()
+    this.state.recorder = null
+    this.state.recording = false
+    this.showControls(false)
+  },
+
+  // "Отмена": the recording in progress is thrown away. The file is deleted (the queue and the list never see
+  // it: it is the active file until it is gone), no sweep is started and nothing is pruned, since nothing was
+  // added. The screen was held for the recording; it is let go, and an upload that is still running takes the
+  // hold again with its next chunk (extendUploadHold).
+  cancelRecording() {
+    if (!this.state.recording) return
+
+    const fileName = this.state.currentFile.split('/').pop()
+    this.endRecording()
+
+    if (discardRecording(fileName)) {
+      setActiveRecording(null)
+      this.endUploadHold()
+      this.updateStatus('Запись отменена\n\n' + this.idleText())
+    } else {
+      // The file could not be removed. It stays a recording like any other, and the person is told so rather
+      // than left to think it is gone.
+      this.holdScreenForUpload()
+      setActiveRecording(null)
+      pruneRecordings()
+      retryPendingUploads()
+      this.updateStatus('Не удалось отменить:\nзапись сохранена и\nбудет отправлена')
+    }
+
+    // A storage warning that came in while this was being recorded.
+    if (this.state.pendingAlert) this.alertStorage(this.state.pendingAlert)
+  },
+
+  // While recording, the screen is the stopwatch and "Отмена"; otherwise the way to settings and the list.
+  showControls(recording) {
+    this.state.settingsButton.setProperty(prop.VISIBLE, !recording)
+    this.state.listButton.setProperty(prop.VISIBLE, !recording)
+    this.state.cancelButton.setProperty(prop.VISIBLE, recording)
   },
 
   // Keeps the display awake for `durationMs`. By default Zepp OS puts the

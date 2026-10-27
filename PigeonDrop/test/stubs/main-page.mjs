@@ -2,12 +2,18 @@ export const log = []                       // ordered record of every platform 
 export const texts = []                     // every status text shown
 export let displayResult = 0                // flip to non-zero to simulate a failing display call
 export const setDisplayResult = (v) => { displayResult = v }
-export const widget = { TEXT: 'TEXT', BUTTON: 'BUTTON' }, align = { CENTER_H: 1, CENTER_V: 1 }, prop = { MORE: 'MORE' }, text_style = { WRAP: 1 }
+export const widget = { TEXT: 'TEXT', BUTTON: 'BUTTON' }, align = { CENTER_H: 1, CENTER_V: 1 }, prop = { MORE: 'MORE', VISIBLE: 'VISIBLE' }, text_style = { WRAP: 1 }
 export const px = (n) => n
 export const KEY_SHORTCUT = 'S', KEY_EVENT_CLICK = 'C', KEY_EVENT_LONG_PRESS = 'L'
 export const id = { RECORDER: 'REC', PLAYER: 'PLY' }, codec = { OPUS: 'OPUS' }
 export const created = []                   // the options of every widget created
-export const createWidget = (type, opts) => { created.push({ type, ...opts }); return { setProperty: (_p, v) => texts.push(v.text) } }
+export const widgets = []                   // the same widgets, with whether each is visible now
+export const createWidget = (type, opts) => {
+  created.push({ type, ...opts })
+  const w = { type, opts, visible: true, setProperty: (p, v) => { if (p === 'VISIBLE') w.visible = v; else texts.push(v.text) } }
+  widgets.push(w)
+  return w
+}
 export const onKey = () => {}
 export const push = (o) => log.push('push ' + o.url + ' ' + (o.params || ''))
 export const create = (what) => ({ setFormat: () => log.push('recorder.setFormat'), start: () => log.push('recorder.start'), stop: () => log.push('recorder.stop') })
@@ -18,6 +24,9 @@ export const resetDropWristScreenOff = () => { log.push('resetDropWristScreenOff
 export const pausePalmScreenOff = (o) => { log.push('pausePalmScreenOff ' + o.duration); return displayResult }
 export const resetPalmScreenOff = () => { log.push('resetPalmScreenOff'); return 0 }
 export const newRecordingPath = () => 'data://voice_messages/voice_1.opus'
+export let discardWorks = true
+export const setDiscardWorks = (v) => { discardWorks = v }
+export const discardRecording = (name) => { log.push('discard ' + name); return discardWorks }
 export const listRecordings = () => [{ fileName: 'voice_1.opus', filePath: 'x' }]
 export const pruneRecordings = () => log.push('pruneRecordings')
 export const retryPendingUploads = () => log.push('retryPendingUploads')

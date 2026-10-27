@@ -2,7 +2,7 @@
 // Both page/index.js (recording) and page/list.js (playback) rely on this
 // module so the file naming/storage scheme only needs to live in one place.
 
-import { readdirSync, mkdirSync } from '@zos/fs'
+import { readdirSync, mkdirSync, rmSync } from '@zos/fs'
 
 // Sub-folder inside the Mini Program's private /data directory where all
 // recordings live, e.g. data://voice_messages/voice_1785056400000.opus
@@ -29,6 +29,21 @@ export function ensureRecordingsDir() {
     mkdirSync({ path: RECORDINGS_DIR })
   } catch (e) {
     // Folder already exists - nothing to do.
+  }
+}
+
+// Deletes one recording's file (a cancelled recording). True when the file is gone afterwards, which is judged
+// from the folder, not from what rmSync says: a file that was never created counts as gone.
+export function discardRecording(fileName) {
+  try {
+    rmSync({ path: RECORDINGS_DIR + '/' + fileName })
+  } catch (e) {
+    // Judged below.
+  }
+  try {
+    return (readdirSync({ path: RECORDINGS_DIR }) || []).indexOf(fileName) === -1
+  } catch (e) {
+    return false
   }
 }
 
