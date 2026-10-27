@@ -237,6 +237,8 @@ func (d *Deliverer) process(ctx context.Context, id uuid.UUID, attempt int32) er
 	}
 	caption, message := splitText(text)
 	sendFailed := func(err error) error { return d.afterFailure(ctx, log, id, attempt, userID, chat, err) }
+	// Under every message of the recording: the button that deletes them from the chat (seen.go).
+	buttons := []Button{{Text: seenLabel(languageOf(subject.UserLanguage)), Data: SeenData(id)}}
 
 	voiceID := int64(0)
 	if subject.VoiceMessageID != nil {
@@ -277,11 +279,11 @@ func (d *Deliverer) process(ctx context.Context, id uuid.UUID, attempt int32) er
 		}
 		started := time.Now()
 		sent, err := d.send(ctx, chat, func() (Sent, error) {
-			sent, err := d.api.SendVoice(ctx, VoiceParams{ChatID: chat, Audio: data, Caption: caption, Duration: duration})
+			sent, err := d.api.SendVoice(ctx, VoiceParams{ChatID: chat, Audio: data, Caption: caption, Duration: duration, Buttons: buttons})
 			if kind, isCall := KindOf(err); isCall && kind == VoiceForbidden {
 				// The person's privacy settings do not allow voice messages: the same recording goes as a file.
 				log.Info("voice messages are not allowed in the chat; sending the recording as a file")
-				return d.api.SendDocument(ctx, DocumentParams{ChatID: chat, Data: data, FileName: "recording.ogg", Caption: caption})
+				return d.api.SendDocument(ctx, DocumentParams{ChatID: chat, Data: data, FileName: "recording.ogg", Caption: caption, Buttons: buttons})
 			}
 			return sent, err
 		})
@@ -304,16 +306,19 @@ func (d *Deliverer) process(ctx context.Context, id uuid.UUID, attempt int32) er
 		}
 	}
 
+	var textID int64 // the message that carries the text, when it is one of its own; zero when there is none
 	if message != "" {
-		if _, err := d.send(ctx, chat, func() (Sent, error) {
-			return d.api.SendMessage(ctx, MessageParams{ChatID: chat, Text: message, ReplyTo: voiceID})
-		}); err != nil {
+		sent, err := d.send(ctx, chat, func() (Sent, error) {
+			return d.api.SendMessage(ctx, MessageParams{ChatID: chat, Text: message, ReplyTo: voiceID, Buttons: buttons})
+		})
+		if err != nil {
 			return sendFailed(err)
 		}
+		textID = sent.MessageID
 	}
 
 	withText := caption != "" || message != ""
-	done, err := d.complete(ctx, id, attempt, chat, withText)
+	done, err := d.complete(ctx, id, attempt, chat, withText, textID)
 	if err != nil {
 		return err
 	}
@@ -433,10 +438,14 @@ func (d *Deliverer) read(id uuid.UUID) ([]byte, error) {
 // The ways a delivery leaves the running state. Each is fenced by the attempt: if the delivery is no longer this
 // worker's, no row changes and the call is a no-op.
 
-func (d *Deliverer) complete(ctx context.Context, id uuid.UUID, attempt int32, chat int64, withText bool) (bool, error) {
+func (d *Deliverer) complete(ctx context.Context, id uuid.UUID, attempt int32, chat int64, withText bool, textMessageID int64) (bool, error) {
 	ctx, done := finishing(ctx)
 	defer done()
-	n, err := d.db.CompleteTelegramDelivery(ctx, dbgen.CompleteTelegramDeliveryParams{MessageID: id, Attempt: attempt, WithText: withText, ChatID: &chat, Now: d.now()})
+	var text *int64
+	if textMessageID != 0 {
+		text = &textMessageID
+	}
+	n, err := d.db.CompleteTelegramDelivery(ctx, dbgen.CompleteTelegramDeliveryParams{MessageID: id, Attempt: attempt, WithText: withText, ChatID: &chat, TextMessageID: text, Now: d.now()})
 	if err != nil {
 		return false, fmt.Errorf("mark the recording as sent: %w", err)
 	}

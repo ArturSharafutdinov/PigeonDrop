@@ -232,11 +232,11 @@ func (c *Client) GetWebhookInfo(ctx context.Context) (WebhookInfo, error) {
 }
 
 // GetUpdates waits up to wait for messages to the bot. offset is the id of the first update wanted: every update
-// before it is taken as received and Telegram forgets it, so pass the last id seen plus one. Only messages are asked
-// for.
+// before it is taken as received and Telegram forgets it, so pass the last id seen plus one. Only messages and
+// presses on buttons are asked for.
 func (c *Client) GetUpdates(ctx context.Context, offset int64, wait time.Duration) ([]Update, error) {
 	body, err := jsonBody(map[string]any{
-		"offset": offset, "timeout": int(wait / time.Second), "limit": 100, "allowed_updates": []string{"message"},
+		"offset": offset, "timeout": int(wait / time.Second), "limit": 100, "allowed_updates": []string{"message", "callback_query"},
 	})
 	if err != nil {
 		return nil, err
@@ -269,6 +269,9 @@ func (c *Client) SendVoice(ctx context.Context, p VoiceParams) (Sent, error) {
 	if seconds := int(p.Duration.Round(time.Second) / time.Second); seconds > 0 {
 		fields = append(fields, field{"duration", strconv.Itoa(seconds)})
 	}
+	if markup := keyboard(p.Buttons); markup != "" {
+		fields = append(fields, field{"reply_markup", markup})
+	}
 	return c.sendFile(ctx, "sendVoice", fields, "voice", "voice.ogg", "audio/ogg", p.Audio)
 }
 
@@ -277,6 +280,9 @@ func (c *Client) SendDocument(ctx context.Context, p DocumentParams) (Sent, erro
 	fields := []field{{"chat_id", strconv.FormatInt(p.ChatID, 10)}}
 	if p.Caption != "" {
 		fields = append(fields, field{"caption", p.Caption})
+	}
+	if markup := keyboard(p.Buttons); markup != "" {
+		fields = append(fields, field{"reply_markup", markup})
 	}
 	name := strings.NewReplacer("\r", "", "\n", "", "/", "_", "\\", "_").Replace(p.FileName)
 	if name == "" {
@@ -292,6 +298,9 @@ func (c *Client) SendMessage(ctx context.Context, p MessageParams) (Sent, error)
 	if p.ReplyTo != 0 {
 		payload["reply_parameters"] = map[string]any{"message_id": p.ReplyTo, "allow_sending_without_reply": true}
 	}
+	if len(p.Buttons) > 0 {
+		payload["reply_markup"] = inlineKeyboard(p.Buttons)
+	}
 	body, err := jsonBody(payload)
 	if err != nil {
 		return Sent{}, err
@@ -301,6 +310,75 @@ func (c *Client) SendMessage(ctx context.Context, p MessageParams) (Sent, error)
 		return Sent{}, err
 	}
 	return sentFrom(message), nil
+}
+
+// AnswerCallbackQuery answers a press on a button. Telegram shows the person a progress bar until it is answered,
+// so every press is, even when there is nothing to say. text (up to 200 characters) appears at the top of the chat,
+// or, with alert, in a window the person has to close.
+func (c *Client) AnswerCallbackQuery(ctx context.Context, id, text string, alert bool) error {
+	payload := map[string]any{"callback_query_id": id}
+	if text != "" {
+		payload["text"] = text
+		payload["show_alert"] = alert
+	}
+	body, err := jsonBody(payload)
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, "answerCallbackQuery", true, 0, "application/json", body, nil)
+}
+
+// DeleteMessage deletes a message of the bot's from a private chat. Telegram only allows it for 48 hours after the
+// message was sent; a later try is a Rejected error, as is one for a message that is no longer there (see
+// AlreadyGone). Doing it twice is harmless, so a failure after the request went out is an Unavailable one.
+func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	body, err := jsonBody(map[string]any{"chat_id": chatID, "message_id": messageID})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, "deleteMessage", true, 0, "application/json", body, nil)
+}
+
+// RemoveButtons takes the buttons off a message and leaves the message as it is. Telegram answers "message is not
+// modified" (Rejected) when there were none.
+func (c *Client) RemoveButtons(ctx context.Context, chatID, messageID int64) error {
+	body, err := jsonBody(map[string]any{"chat_id": chatID, "message_id": messageID, "reply_markup": inlineKeyboard(nil)})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, "editMessageReplyMarkup", true, 0, "application/json", body, nil)
+}
+
+// inlineKeyboard is the reply_markup for buttons in one row; no buttons make an empty keyboard, which removes it.
+func inlineKeyboard(buttons []Button) map[string]any {
+	row := make([]map[string]string, 0, len(buttons))
+	for _, b := range buttons {
+		row = append(row, map[string]string{"text": b.Text, "callback_data": b.Data})
+	}
+	rows := [][]map[string]string{}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return map[string]any{"inline_keyboard": rows}
+}
+
+// keyboard is inlineKeyboard as the JSON text a multipart request carries it in; empty when there are no buttons.
+func keyboard(buttons []Button) string {
+	if len(buttons) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(inlineKeyboard(buttons))
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// AlreadyGone says whether err is Telegram's answer to deleting a message that is not there (the person deleted it
+// themselves): for what the bot wants, the message is deleted.
+func AlreadyGone(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Kind == Rejected && strings.Contains(strings.ToLower(e.Description), "message to delete not found")
 }
 
 type field struct{ name, value string }

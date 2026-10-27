@@ -325,6 +325,14 @@ func (s *scriptedTelegram) SendMessage(_ context.Context, p telegram.MessagePara
 	return telegram.Sent{MessageID: 1, Kind: "text"}, nil
 }
 
+func (s *scriptedTelegram) AnswerCallbackQuery(context.Context, string, string, bool) error {
+	return nil
+}
+
+func (s *scriptedTelegram) DeleteMessage(context.Context, int64, int64) error { return nil }
+
+func (s *scriptedTelegram) RemoveButtons(context.Context, int64, int64) error { return nil }
+
 func (s *scriptedTelegram) SetMyCommands(context.Context, []telegram.Command, string) error {
 	return nil
 }
@@ -356,6 +364,13 @@ func TestTheLinkFromThePageLinksTheChatThroughTheBot(t *testing.T) {
 	if link["username"] != "ann" || link["blocked"] != false {
 		t.Errorf("link = %v", link)
 	}
+	// The link is stored first and the answer goes out after it, so the page can see the link a moment before Telegram
+	// has been asked to send "Done": wait for the answer instead of looking for it at once.
+	waitFor(t, "the bot's answer", func() bool {
+		api.mu.Lock()
+		defer api.mu.Unlock()
+		return len(api.sent) > 0
+	})
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	if len(api.sent) != 1 || api.sent[0].ChatID != 42 {

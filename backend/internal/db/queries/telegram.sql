@@ -85,12 +85,13 @@ RETURNING message_id, attempts;
 -- done for it, and its text. No row: the recording was deleted meanwhile. The link columns are null when the account
 -- has no link any more.
 -- name: GetTelegramDeliverySubject :one
-SELECT m.id, m.format, m.duration_ms,
+SELECT m.id, m.format, m.duration_ms, u.language AS user_language,
        d.chat_id AS delivery_chat_id, d.voice_message_id,
        l.user_id AS link_user_id, l.chat_id AS link_chat_id, l.blocked_at AS link_blocked_at,
        t.state AS transcript_state, t.text AS transcript_text
 FROM telegram_deliveries d
 JOIN messages m ON m.id = d.message_id
+JOIN users u ON u.id = m.user_id
 LEFT JOIN telegram_links l ON l.user_id = m.user_id
 LEFT JOIN transcriptions t ON t.message_id = m.id
 WHERE d.message_id = $1;
@@ -105,6 +106,7 @@ WHERE message_id = sqlc.arg(message_id) AND state = 'running' AND attempts = sql
 -- name: CompleteTelegramDelivery :execrows
 UPDATE telegram_deliveries
 SET state = 'sent', with_text = sqlc.arg(with_text)::boolean, chat_id = COALESCE(chat_id, sqlc.narg(chat_id)),
+    text_message_id = sqlc.narg(text_message_id)::bigint,
     finished_at = sqlc.arg(now)::timestamptz, locked_until = NULL, error_code = NULL, last_error = NULL
 WHERE message_id = sqlc.arg(message_id) AND state = 'running' AND attempts = sqlc.arg(attempt);
 
@@ -137,8 +139,18 @@ WHERE user_id = sqlc.arg(user_id) AND chat_id = sqlc.arg(chat_id) AND blocked_at
 
 -- name: GetTelegramDelivery :one
 SELECT message_id, state, attempts, run_after, wait_until, locked_until, enqueued_at, finished_at, chat_id,
-       voice_message_id, with_text, error_code, last_error
+       voice_message_id, with_text, error_code, last_error, text_message_id
 FROM telegram_deliveries WHERE message_id = $1;
+
+-- The messages of a recording in the chat, for the "Просмотрено" button, and the language of its account. Only for the
+-- chat the button was pressed in: the ids mean nothing in another one. No row: the recording is gone from the server
+-- (deleted, or pushed out by the storage limit), or was sent to another chat.
+-- name: GetTelegramDeliveryMessages :one
+SELECT d.voice_message_id, d.text_message_id, u.language AS user_language
+FROM telegram_deliveries d
+JOIN messages m ON m.id = d.message_id
+JOIN users u ON u.id = m.user_id
+WHERE d.message_id = sqlc.arg(message_id) AND d.chat_id = sqlc.arg(chat_id)::bigint;
 
 -- The operator's counts by state, for `pigeondrop telegram status`.
 -- name: CountTelegramDeliveries :many

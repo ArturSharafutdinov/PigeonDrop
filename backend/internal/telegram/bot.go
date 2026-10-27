@@ -21,6 +21,9 @@ type API interface {
 	GetUpdates(ctx context.Context, offset int64, wait time.Duration) ([]Update, error)
 	SendMessage(ctx context.Context, p MessageParams) (Sent, error)
 	SetMyCommands(ctx context.Context, commands []Command, languageCode string) error
+	AnswerCallbackQuery(ctx context.Context, id, text string, alert bool) error
+	DeleteMessage(ctx context.Context, chatID, messageID int64) error
+	RemoveButtons(ctx context.Context, chatID, messageID int64) error
 }
 
 var _ API = (*Client)(nil)
@@ -66,7 +69,8 @@ func (s BotSettings) withDefaults() BotSettings {
 }
 
 // Bot receives what people write to the bot and answers. It links a chat to an account when the person opens the
-// link the page gave them and presses Start, and unlinks it on /stop. Run it in a goroutine.
+// link the page gave them and presses Start, unlinks it on /stop, and deletes a recording from the chat when the
+// button under it is pressed (seen.go). Run it in a goroutine.
 type Bot struct {
 	api      API
 	db       dbgen.Querier
@@ -131,8 +135,11 @@ func (b *Bot) Run(ctx context.Context) {
 
 		for _, update := range updates {
 			offset = max(offset, update.UpdateID+1)
-			if update.Message != nil {
+			switch {
+			case update.Message != nil:
 				b.handle(ctx, *update.Message)
+			case update.CallbackQuery != nil:
+				b.handleCallback(ctx, *update.CallbackQuery)
 			}
 		}
 	}

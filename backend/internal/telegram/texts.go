@@ -34,6 +34,7 @@ const (
 	phrasePrivateOnly
 	phraseTryAgain
 	phraseHelp
+	phraseTooOld
 )
 
 // say returns the text of a phrase; page is the address of the page where a person signs in to link their chat.
@@ -54,6 +55,8 @@ func say(l language, p phrase, page string) string {
 			return "Я работаю только в личных сообщениях."
 		case phraseTryAgain:
 			return "Не получилось, попробуйте ещё раз через минуту."
+		case phraseTooOld:
+			return "Telegram не позволяет боту удалять сообщения старше 48 часов. Удалите это сообщение сами."
 		default:
 			return fmt.Sprintf("Я присылаю записи с ваших часов PigeonDrop: голосовое сообщение и его расшифровку.\n\nПривязать чат: откройте %s, войдите и нажмите «Привязать Telegram».\n/stop: отключить отправку в этот чат.", page)
 		}
@@ -73,9 +76,19 @@ func say(l language, p phrase, page string) string {
 		return "I only work in private messages."
 	case phraseTryAgain:
 		return "That did not work, please try again in a minute."
+	case phraseTooOld:
+		return "Telegram does not let a bot delete messages older than 48 hours. Please delete this message yourself."
 	default:
 		return fmt.Sprintf("I send you the recordings from your PigeonDrop watch: a voice message and its transcript.\n\nTo link this chat, open %s, sign in and press “Link Telegram”.\n/stop: stop sending recordings to this chat.", page)
 	}
+}
+
+// seenLabel is the text of the button under a recording that deletes it from the chat.
+func seenLabel(l language) string {
+	if l == langRU {
+		return "Просмотрено"
+	}
+	return "Seen"
 }
 
 // menu is the list of commands Telegram shows in the bot's menu, in each language.

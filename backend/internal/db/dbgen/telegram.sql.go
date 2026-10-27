@@ -74,22 +74,25 @@ func (q *Queries) ClaimTelegramDelivery(ctx context.Context, arg ClaimTelegramDe
 const completeTelegramDelivery = `-- name: CompleteTelegramDelivery :execrows
 UPDATE telegram_deliveries
 SET state = 'sent', with_text = $1::boolean, chat_id = COALESCE(chat_id, $2),
-    finished_at = $3::timestamptz, locked_until = NULL, error_code = NULL, last_error = NULL
-WHERE message_id = $4 AND state = 'running' AND attempts = $5
+    text_message_id = $3::bigint,
+    finished_at = $4::timestamptz, locked_until = NULL, error_code = NULL, last_error = NULL
+WHERE message_id = $5 AND state = 'running' AND attempts = $6
 `
 
 type CompleteTelegramDeliveryParams struct {
-	WithText  bool
-	ChatID    *int64
-	Now       time.Time
-	MessageID uuid.UUID
-	Attempt   int32
+	WithText      bool
+	ChatID        *int64
+	TextMessageID *int64
+	Now           time.Time
+	MessageID     uuid.UUID
+	Attempt       int32
 }
 
 func (q *Queries) CompleteTelegramDelivery(ctx context.Context, arg CompleteTelegramDeliveryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, completeTelegramDelivery,
 		arg.WithText,
 		arg.ChatID,
+		arg.TextMessageID,
 		arg.Now,
 		arg.MessageID,
 		arg.Attempt,
@@ -287,7 +290,7 @@ func (q *Queries) FailTelegramDelivery(ctx context.Context, arg FailTelegramDeli
 
 const getTelegramDelivery = `-- name: GetTelegramDelivery :one
 SELECT message_id, state, attempts, run_after, wait_until, locked_until, enqueued_at, finished_at, chat_id,
-       voice_message_id, with_text, error_code, last_error
+       voice_message_id, with_text, error_code, last_error, text_message_id
 FROM telegram_deliveries WHERE message_id = $1
 `
 
@@ -308,17 +311,48 @@ func (q *Queries) GetTelegramDelivery(ctx context.Context, messageID uuid.UUID) 
 		&i.WithText,
 		&i.ErrorCode,
 		&i.LastError,
+		&i.TextMessageID,
 	)
 	return i, err
 }
 
+const getTelegramDeliveryMessages = `-- name: GetTelegramDeliveryMessages :one
+SELECT d.voice_message_id, d.text_message_id, u.language AS user_language
+FROM telegram_deliveries d
+JOIN messages m ON m.id = d.message_id
+JOIN users u ON u.id = m.user_id
+WHERE d.message_id = $1 AND d.chat_id = $2::bigint
+`
+
+type GetTelegramDeliveryMessagesParams struct {
+	MessageID uuid.UUID
+	ChatID    int64
+}
+
+type GetTelegramDeliveryMessagesRow struct {
+	VoiceMessageID *int64
+	TextMessageID  *int64
+	UserLanguage   string
+}
+
+// The messages of a recording in the chat, for the "Просмотрено" button, and the language of its account. Only for the
+// chat the button was pressed in: the ids mean nothing in another one. No row: the recording is gone from the server
+// (deleted, or pushed out by the storage limit), or was sent to another chat.
+func (q *Queries) GetTelegramDeliveryMessages(ctx context.Context, arg GetTelegramDeliveryMessagesParams) (GetTelegramDeliveryMessagesRow, error) {
+	row := q.db.QueryRow(ctx, getTelegramDeliveryMessages, arg.MessageID, arg.ChatID)
+	var i GetTelegramDeliveryMessagesRow
+	err := row.Scan(&i.VoiceMessageID, &i.TextMessageID, &i.UserLanguage)
+	return i, err
+}
+
 const getTelegramDeliverySubject = `-- name: GetTelegramDeliverySubject :one
-SELECT m.id, m.format, m.duration_ms,
+SELECT m.id, m.format, m.duration_ms, u.language AS user_language,
        d.chat_id AS delivery_chat_id, d.voice_message_id,
        l.user_id AS link_user_id, l.chat_id AS link_chat_id, l.blocked_at AS link_blocked_at,
        t.state AS transcript_state, t.text AS transcript_text
 FROM telegram_deliveries d
 JOIN messages m ON m.id = d.message_id
+JOIN users u ON u.id = m.user_id
 LEFT JOIN telegram_links l ON l.user_id = m.user_id
 LEFT JOIN transcriptions t ON t.message_id = m.id
 WHERE d.message_id = $1
@@ -328,6 +362,7 @@ type GetTelegramDeliverySubjectRow struct {
 	ID              uuid.UUID
 	Format          string
 	DurationMs      *int32
+	UserLanguage    string
 	DeliveryChatID  *int64
 	VoiceMessageID  *int64
 	LinkUserID      *uuid.UUID
@@ -347,6 +382,7 @@ func (q *Queries) GetTelegramDeliverySubject(ctx context.Context, messageID uuid
 		&i.ID,
 		&i.Format,
 		&i.DurationMs,
+		&i.UserLanguage,
 		&i.DeliveryChatID,
 		&i.VoiceMessageID,
 		&i.LinkUserID,
