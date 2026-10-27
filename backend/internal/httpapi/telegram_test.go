@@ -364,6 +364,13 @@ func TestTheLinkFromThePageLinksTheChatThroughTheBot(t *testing.T) {
 	if link["username"] != "ann" || link["blocked"] != false {
 		t.Errorf("link = %v", link)
 	}
+	// The link is stored first and the answer goes out after it, so the page can see the link a moment before Telegram
+	// has been asked to send "Done": wait for the answer instead of looking for it at once.
+	waitFor(t, "the bot's answer", func() bool {
+		api.mu.Lock()
+		defer api.mu.Unlock()
+		return len(api.sent) > 0
+	})
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	if len(api.sent) != 1 || api.sent[0].ChatID != 42 {
