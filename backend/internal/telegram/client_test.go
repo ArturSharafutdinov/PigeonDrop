@@ -103,7 +103,7 @@ func TestGetWebhookInfo(t *testing.T) {
 	}
 }
 
-func TestGetUpdatesAsksForMessagesOnly(t *testing.T) {
+func TestGetUpdatesAsksForMessagesAndButtonPresses(t *testing.T) {
 	client, f := newFakeAPI(t, ok(`[{"update_id":41,"message":{"message_id":5,"from":{"id":9,"is_bot":false,"first_name":"Ann","username":"ann","language_code":"ru"},"chat":{"id":9,"type":"private","first_name":"Ann"},"text":"/start abc"}},{"update_id":42}]`))
 	updates, err := client.GetUpdates(context.Background(), 41, 25*time.Second)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestGetUpdatesAsksForMessagesOnly(t *testing.T) {
 	if sent["offset"] != float64(41) || sent["timeout"] != float64(25) || sent["limit"] != float64(100) {
 		t.Errorf("request = %v", sent)
 	}
-	if got := fmt.Sprint(sent["allowed_updates"]); got != "[message]" {
+	if got := fmt.Sprint(sent["allowed_updates"]); got != "[message callback_query]" {
 		t.Errorf("allowed_updates = %s", got)
 	}
 	if len(updates) != 2 || updates[0].UpdateID != 41 || updates[1].UpdateID != 42 || updates[1].Message != nil {

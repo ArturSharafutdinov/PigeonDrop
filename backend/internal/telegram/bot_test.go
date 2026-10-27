@@ -35,6 +35,21 @@ type fakeTelegram struct {
 	commands    map[string][]Command // by language code
 	sendError   error
 	updatesDone chan struct{}
+
+	// Presses on buttons: what the bot answered, tried to delete and deleted, and whose buttons it took off.
+	answers     []callbackAnswer
+	answerError error
+	deleteTries [][2]int64 // chat, message
+	deleted     [][2]int64
+	deleteError map[int64]error // by message id: what deleting it answers (nil: it works)
+	unbuttoned  [][2]int64
+	unbuttonErr error
+}
+
+type callbackAnswer struct {
+	ID    string
+	Text  string
+	Alert bool
 }
 
 func newFakeTelegram() *fakeTelegram {
@@ -91,6 +106,31 @@ func (f *fakeTelegram) SetMyCommands(ctx context.Context, commands []Command, la
 	defer f.mu.Unlock()
 	f.commands[languageCode] = commands
 	return nil
+}
+
+func (f *fakeTelegram) AnswerCallbackQuery(_ context.Context, id, text string, alert bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.answers = append(f.answers, callbackAnswer{ID: id, Text: text, Alert: alert})
+	return f.answerError
+}
+
+func (f *fakeTelegram) DeleteMessage(_ context.Context, chatID, messageID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteTries = append(f.deleteTries, [2]int64{chatID, messageID})
+	if err := f.deleteError[messageID]; err != nil {
+		return err
+	}
+	f.deleted = append(f.deleted, [2]int64{chatID, messageID})
+	return nil
+}
+
+func (f *fakeTelegram) RemoveButtons(_ context.Context, chatID, messageID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unbuttoned = append(f.unbuttoned, [2]int64{chatID, messageID})
+	return f.unbuttonErr
 }
 
 func (f *fakeTelegram) replies() []MessageParams {

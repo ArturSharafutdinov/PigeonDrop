@@ -325,6 +325,14 @@ func (s *scriptedTelegram) SendMessage(_ context.Context, p telegram.MessagePara
 	return telegram.Sent{MessageID: 1, Kind: "text"}, nil
 }
 
+func (s *scriptedTelegram) AnswerCallbackQuery(context.Context, string, string, bool) error {
+	return nil
+}
+
+func (s *scriptedTelegram) DeleteMessage(context.Context, int64, int64) error { return nil }
+
+func (s *scriptedTelegram) RemoveButtons(context.Context, int64, int64) error { return nil }
+
 func (s *scriptedTelegram) SetMyCommands(context.Context, []telegram.Command, string) error {
 	return nil
 }

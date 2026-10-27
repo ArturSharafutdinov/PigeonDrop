@@ -109,6 +109,10 @@ type Querier interface {
 	// The session behind a cookie, with its user. No row when it is unknown or has expired.
 	GetSessionByTokenHash(ctx context.Context, arg GetSessionByTokenHashParams) (GetSessionByTokenHashRow, error)
 	GetTelegramDelivery(ctx context.Context, messageID uuid.UUID) (TelegramDelivery, error)
+	// The messages of a recording in the chat, for the "Просмотрено" button, and the language of its account. Only for the
+	// chat the button was pressed in: the ids mean nothing in another one. No row: the recording is gone from the server
+	// (deleted, or pushed out by the storage limit), or was sent to another chat.
+	GetTelegramDeliveryMessages(ctx context.Context, arg GetTelegramDeliveryMessagesParams) (GetTelegramDeliveryMessagesRow, error)
 	// What the worker needs to know to send a recording it took: the recording, the account's link now, what was already
 	// done for it, and its text. No row: the recording was deleted meanwhile. The link columns are null when the account
 	// has no link any more.

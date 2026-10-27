@@ -147,10 +147,26 @@ type Message struct {
 	Document  *Attachment `json:"document"`
 }
 
-// Update is one thing that happened to the bot. Only messages are asked for.
+// CallbackQuery is a press on a button under one of the bot's messages. Message is the message the button is under;
+// when it is more than 48 hours old Telegram sends only its chat and id (no date, no text).
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    *User    `json:"from"`
+	Message *Message `json:"message"`
+	Data    string   `json:"data"`
+}
+
+// Update is one thing that happened to the bot. Messages and presses on buttons are asked for.
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
+}
+
+// Button is a button under a message; pressing it sends Data back to the bot (1 to 64 bytes).
+type Button struct {
+	Text string
+	Data string
 }
 
 // WebhookInfo is what getWebhookInfo says; while a webhook is set, getUpdates does not work.
@@ -186,6 +202,8 @@ type VoiceParams struct {
 	Caption string
 	// Duration is the recording's length; Telegram works it out itself when it is zero.
 	Duration time.Duration
+	// Buttons are shown under the message, in one row.
+	Buttons []Button
 }
 
 // DocumentParams is a file to send as it is.
@@ -194,6 +212,8 @@ type DocumentParams struct {
 	Data     []byte
 	FileName string
 	Caption  string
+	// Buttons are shown under the message, in one row.
+	Buttons []Button
 }
 
 // MessageParams is a text message.
@@ -203,4 +223,6 @@ type MessageParams struct {
 	Text string
 	// ReplyTo is the message this one answers; zero for none. A reply to a message that is gone is still sent.
 	ReplyTo int64
+	// Buttons are shown under the message, in one row.
+	Buttons []Button
 }

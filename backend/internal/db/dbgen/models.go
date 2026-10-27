@@ -95,6 +95,7 @@ type TelegramDelivery struct {
 	WithText       *bool
 	ErrorCode      *string
 	LastError      *string
+	TextMessageID  *int64
 }
 
 type TelegramLink struct {
