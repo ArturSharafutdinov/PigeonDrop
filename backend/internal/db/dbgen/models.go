@@ -10,13 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type Account struct {
-	Code            string
-	CustomServerUrl *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
 type Device struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
@@ -61,14 +54,6 @@ type Message struct {
 	DurationMs      *int32
 	HasWav          bool
 	ReceivedAt      time.Time
-}
-
-type ProcessedUpload struct {
-	FileName      string
-	BytesReceived int64
-	SavedAs       string
-	WavFile       *string
-	ReceivedAt    time.Time
 }
 
 type Session struct {

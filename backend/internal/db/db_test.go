@@ -5,8 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/testdb"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/migrations"
 )
 
 func TestMigrationsApplyAndAreIdempotent(t *testing.T) {
@@ -22,11 +27,105 @@ func TestMigrationsApplyAndAreIdempotent(t *testing.T) {
 		t.Fatalf("second MigrateUp applied %d, %v", applied, err)
 	}
 
-	for _, table := range []string{"accounts", "processed_uploads", "users", "invitations", "sessions", "devices", "device_pairings"} {
-		var exists bool
-		if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, "public."+table).Scan(&exists); err != nil || !exists {
-			t.Errorf("table %s missing (%v)", table, err)
+	for _, table := range []string{"users", "invitations", "sessions", "devices", "device_pairings"} {
+		if !tableExists(t, pool, table) {
+			t.Errorf("table %s missing", table)
 		}
+	}
+	for _, table := range []string{"accounts", "processed_uploads"} {
+		if tableExists(t, pool, table) {
+			t.Errorf("table %s of the Node prototype is still there", table)
+		}
+	}
+}
+
+func tableExists(t *testing.T, pool *pgxpool.Pool, table string) bool {
+	t.Helper()
+	var exists bool
+	if err := pool.QueryRow(context.Background(), `SELECT to_regclass($1) IS NOT NULL`, "public."+table).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	return exists
+}
+
+// legacyVersion is the migration before the one that drops the tables of the Node prototype.
+const legacyVersion = 8
+
+// backToLegacy takes the database back to the schema with the two old tables, empty, the way production has them
+// until the migration that drops them is applied.
+func backToLegacy(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	defer sqlDB.Close()
+	p, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.DownTo(context.Background(), legacyVersion); err != nil {
+		t.Fatalf("migrate down to %d: %v", legacyVersion, err)
+	}
+	if !tableExists(t, pool, "accounts") || !tableExists(t, pool, "processed_uploads") {
+		t.Fatal("the old tables did not come back")
+	}
+}
+
+func TestTheOldTablesAreDroppedWhenTheyAreEmpty(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	backToLegacy(t, pool)
+
+	if pending, err := db.Pending(ctx, pool); err != nil || pending != 1 {
+		t.Fatalf("pending = %d, %v, want the one migration that drops them", pending, err)
+	}
+	if applied, err := db.MigrateUp(ctx, pool); err != nil || applied != 1 {
+		t.Fatalf("MigrateUp applied %d, %v", applied, err)
+	}
+	if tableExists(t, pool, "accounts") || tableExists(t, pool, "processed_uploads") {
+		t.Error("the old tables are still there")
+	}
+}
+
+// Dropping a table cannot be undone: while a row is left in either, the migration fails and nothing is dropped.
+func TestTheOldTablesAreNotDroppedWhileTheyHoldARow(t *testing.T) {
+	for _, tc := range []struct{ table, insert, remove string }{
+		{"accounts", `INSERT INTO accounts (code) VALUES ('ABCD')`, `DELETE FROM accounts`},
+		{"processed_uploads", `INSERT INTO processed_uploads (file_name, bytes_received, saved_as) VALUES ('voice_1.opus', 10, 'x')`, `DELETE FROM processed_uploads`},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			ctx := context.Background()
+			pool := testdb.New(t)
+			backToLegacy(t, pool)
+			if _, err := pool.Exec(ctx, tc.insert); err != nil {
+				t.Fatal(err)
+			}
+
+			applied, err := db.MigrateUp(ctx, pool)
+
+			if err == nil || !strings.Contains(err.Error(), "the table "+tc.table+" is not empty") {
+				t.Fatalf("MigrateUp applied %d, err = %v: it must refuse and say which table", applied, err)
+			}
+			if !tableExists(t, pool, "accounts") || !tableExists(t, pool, "processed_uploads") {
+				t.Fatal("a table was dropped although it held a row")
+			}
+			var rows int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+tc.table).Scan(&rows); err != nil || rows != 1 {
+				t.Errorf("rows left = %d, %v", rows, err)
+			}
+			if pending, err := db.Pending(ctx, pool); err != nil || pending != 1 {
+				t.Errorf("pending = %d, %v: the failed migration must not count as applied", pending, err)
+			}
+
+			// Once the row is gone, the same migration goes through.
+			if _, err := pool.Exec(ctx, tc.remove); err != nil {
+				t.Fatal(err)
+			}
+			if applied, err := db.MigrateUp(ctx, pool); err != nil || applied != 1 {
+				t.Fatalf("after the row was deleted: applied %d, %v", applied, err)
+			}
+			if tableExists(t, pool, "accounts") || tableExists(t, pool, "processed_uploads") {
+				t.Error("the old tables are still there")
+			}
+		})
 	}
 }
 
