@@ -2,12 +2,20 @@
   "name": "pigeondrop",
   "version": "0.1.0",
   "description": "Zepp OS Mini Program: PigeonDrop — record and send voice messages from your watch",
-  "main": "app.js",
+  "private": true,
+  "license": "MIT",
+  "author": "Artur Sharafutdinov",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ArturSharafutdinov/PigeonDrop.git",
+    "directory": "PigeonDrop"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node --test \"test/*.test.mjs\""
   },
-  "author": "",
-  "license": "ISC",
   "devDependencies": {
     "@zeppos/device-types": "^4.0.0"
   }

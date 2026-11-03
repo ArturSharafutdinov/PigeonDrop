@@ -1,4 +1,21 @@
-.idea/
-.ai/
+# Operating system and editor leftovers
 .DS_Store
+.idea/
+.junie/
+.ai/
+.vscode/
+
+# Dependencies and build output
 node_modules/
+coverage/
+
+# Local configuration and secrets: never commit these (copy the *.example.* file instead)
+.env
+.env.*
+!.env.example
+*.local.*
+.claude/settings.local.json
+.claude/worktrees/
+
+# Throwaway experiments with local tunnel URLs
+PigeonDrop/spike.config.js
