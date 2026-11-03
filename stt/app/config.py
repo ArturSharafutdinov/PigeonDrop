@@ -7,6 +7,10 @@ from typing import Mapping, Optional
 
 LOG_LEVELS = ("debug", "info", "warning", "error")
 
+# The shortest token the service starts with (`openssl rand -hex 32` makes 64 characters). The token is the only
+# thing between the model and whoever can reach the port, so a one-letter one is a mistake, not a choice.
+MIN_TOKEN_LENGTH = 16
+
 
 class ConfigError(Exception):
     """One or more settings are wrong; the message lists them all."""
@@ -53,6 +57,9 @@ def load(environ: Mapping[str, str]) -> Config:
         insecure = False
     if not token and not insecure:
         problems.append("STT_TOKEN is required (STT_INSECURE=true allows running without one, for trying by hand only)")
+    elif token and len(token) < MIN_TOKEN_LENGTH and not insecure:  # insecure mode never looks at the token
+        problems.append(f"STT_TOKEN must be at least {MIN_TOKEN_LENGTH} characters, got {len(token)} "
+                        "(make one with `openssl rand -hex 32`)")
 
     port = 8000
     raw = environ.get("PORT", "").strip()

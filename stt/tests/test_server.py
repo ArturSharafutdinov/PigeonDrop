@@ -14,18 +14,18 @@ from app import server
 
 from .helpers import FakeEngine, wav
 
-TOKEN = "s3cret-token"
+TOKEN = "s3cret-token-0123456789"
 
 
 class ServerTest(unittest.TestCase):
-    def start(self, engine=None, loaded=True, **env):
+    def start(self, engine=None, loaded=True, max_connections=server.MAX_CONNECTIONS, **env):
         environment = {"STT_TOKEN": TOKEN}
         environment.update(env)
         self.engine = engine or FakeEngine()
         self.service = server.Service(configuration.load(environment), lambda: self.engine)
         if loaded:
             self.service.load()
-        httpd = server.make_server(self.service, "127.0.0.1", 0)
+        httpd = self.httpd = server.make_server(self.service, "127.0.0.1", 0, max_connections)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self.stop, httpd, thread)
@@ -53,6 +53,10 @@ class ServerTest(unittest.TestCase):
             sent["Authorization"] = "Bearer " + token
         sent.update(headers or {})
         return self.request("POST", "/v1/transcribe", wav(1.0) if body is None else body, sent)
+
+    @staticmethod
+    def bearer(token=TOKEN):
+        return b"Authorization: Bearer " + token.encode() + b"\r\n"
 
     def raw(self, data, shutdown_write=False):
         """Sends bytes as they are and returns (status, body) of whatever comes back."""
@@ -177,6 +181,39 @@ class AuthTest(ServerTest):
         status, _, body = self.transcribe(wav(30.0), token="wrong")
         self.assertEqual((status, body["code"]), (401, "unauthorized"))
 
+    def test_the_token_is_checked_before_the_body_is_read(self):
+        # The request promises a megabyte and sends none of it. A service that reads the body first waits for it
+        # (up to its socket timeout) and only then says the token is wrong, so anybody could tie up a thread of it
+        # without knowing the token. This one answers at once.
+        self.start()
+        for label, authorization in (("wrong token", self.bearer("wrong-" + TOKEN)), ("no token", b"")):
+            with self.subTest(label):
+                request = (b"POST /v1/transcribe HTTP/1.1\r\nHost: x\r\nContent-Type: audio/wav\r\n" + authorization +
+                           b"Content-Length: 1000000\r\n\r\n")
+                with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
+                    s.sendall(request)  # the body never comes
+                    chunks = []
+                    while True:  # the answer comes in pieces; the service ends the connection after it
+                        piece = s.recv(65536)
+                        if not piece:
+                            break
+                        chunks.append(piece)
+                answer = b"".join(chunks)
+                head, _, body = answer.partition(b"\r\n\r\n")
+                self.assertEqual(int(head.split(b" ", 2)[1]), 401)
+                self.assertEqual(json.loads(body)["code"], "unauthorized")
+        self.assertEqual(self.engine.received, [])
+
+    def test_a_refused_request_is_not_answered_with_a_reset_while_its_body_is_still_coming(self):
+        # The body is not read, but the client is given the time to finish sending it, so that it gets the answer.
+        self.start()
+        body = wav(60.0)  # about 1.9 MB, close to the limit
+        for token in ("wrong-" + TOKEN, None):
+            with self.subTest(token):
+                for _ in range(3):  # a reset is a matter of timing; one pass can be lucky
+                    status, _, answer = self.transcribe(body, token=token)
+                    self.assertEqual((status, answer["code"]), (401, "unauthorized"))
+
     def test_without_a_token_only_insecure_mode_starts(self):
         with self.assertRaises(configuration.ConfigError):
             configuration.load({})
@@ -188,6 +225,77 @@ class AuthTest(ServerTest):
         with self.assertLogs("stt", level="DEBUG") as logs:
             status, response, body = self.transcribe(token="wrong-" + TOKEN)
         self.assertNotIn(TOKEN, json.dumps(body) + str(response.headers) + "".join(logs.output))
+
+
+class ConnectionLimitTest(ServerTest):
+    def idle_connection(self):
+        """A client that has begun a request and not finished it: the service holds a thread for it until it gives
+        up. Connections are taken in the order they arrive, so once this returns, the service has the place for it
+        (or has turned it away) before it looks at any connection made afterwards."""
+        connection = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+        self.addCleanup(connection.close)
+        connection.sendall(b"GET /healthz HTTP/1.0\r\n")  # no empty line: more is to come
+        return connection
+
+    def test_connections_beyond_the_limit_are_turned_away_with_a_busy_answer(self):
+        self.start(max_connections=2)
+        self.idle_connection()
+        self.idle_connection()
+
+        with self.assertLogs("stt", level="WARNING") as logs:
+            status, response, body = self.request("GET", "/healthz")
+
+        self.assertEqual((status, body["code"], response.getheader("Retry-After")), (503, "busy", "5"))
+        self.assertIn("refused", logs.records[0].getMessage())
+
+    def test_the_refusals_are_not_logged_one_by_one(self):
+        self.start(max_connections=1)
+        self.idle_connection()
+        with self.assertLogs("stt", level="WARNING") as logs:
+            for _ in range(5):
+                self.assertEqual(self.request("GET", "/healthz")[0], 503)
+        self.assertEqual(len(logs.records), 1)
+
+    def test_a_place_is_free_again_when_a_connection_ends(self):
+        self.start(max_connections=1)
+        held = self.idle_connection()
+        with self.assertLogs("stt", level="WARNING"):
+            self.assertEqual(self.request("GET", "/healthz")[0], 503)
+
+        held.close()
+
+        for _ in range(100):  # the thread notices the end of the connection a moment later
+            if self.request("GET", "/healthz")[0] == 200:
+                break
+            threading.Event().wait(0.05)
+        else:
+            self.fail("the place of the closed connection was never freed")
+
+    def test_a_client_that_went_away_is_logged_quietly_and_a_real_failure_is_logged_as_one_line(self):
+        for error, level in ((BrokenPipeError("gone"), "DEBUG"), (ConnectionResetError("reset"), "DEBUG"),
+                             (ValueError("a bug"), "ERROR")):
+            with self.subTest(type(error).__name__):
+                self.start()
+                try:
+                    raise error
+                except Exception:  # handle_error reads the exception being handled, as socketserver calls it
+                    with self.assertLogs("stt", level="DEBUG") as logs:
+                        self.httpd.handle_error(None, ("127.0.0.1", 1234))
+                self.assertEqual([record.levelname for record in logs.records], [level])
+                self.assertIn(type(error).__name__, logs.records[0].fields["error"])
+
+    def test_ordinary_requests_one_after_another_never_use_the_places_up(self):
+        self.start(max_connections=2)
+        for _ in range(30):
+            self.assertEqual(self.transcribe()[0], 200)
+        self.assertEqual(self.request("GET", "/healthz")[0], 200)
+
+    def test_a_request_that_fails_inside_still_gives_its_place_back(self):
+        self.start(FakeEngine(fail=RuntimeError("boom")), max_connections=1)
+        for _ in range(3):
+            with self.assertLogs("stt", level="ERROR"):
+                self.assertEqual(self.transcribe()[0], 500)
+        self.assertEqual(self.request("GET", "/healthz")[0], 200)
 
 
 class BadInputTest(ServerTest):
@@ -231,13 +339,13 @@ class BadInputTest(ServerTest):
         for label, header in (("missing", b""), ("not a number", b"Content-Length: many\r\n"),
                               ("negative", b"Content-Length: -5\r\n")):
             with self.subTest(label):
-                request = (b"POST /v1/transcribe HTTP/1.1\r\nHost: x\r\nContent-Type: audio/wav\r\n" + header + b"\r\n")
+                request = (b"POST /v1/transcribe HTTP/1.1\r\nHost: x\r\nContent-Type: audio/wav\r\n" + self.bearer() + header + b"\r\n")
                 status, body = self.raw(request)
                 self.assertEqual((status, body["code"]), (411, "length_required"))
 
     def test_a_body_shorter_than_declared(self):
         self.start()
-        request = (b"POST /v1/transcribe HTTP/1.1\r\nHost: x\r\nContent-Type: audio/wav\r\n"
+        request = (b"POST /v1/transcribe HTTP/1.1\r\nHost: x\r\nContent-Type: audio/wav\r\n" + self.bearer() +
                    b"Content-Length: 5000\r\n\r\n" + b"x" * 100)
         status, body = self.raw(request, shutdown_write=True)
         self.assertEqual((status, body["code"]), (400, "bad_audio"))

@@ -37,6 +37,10 @@ const (
 	secureCookieName = "__Host-" + cookieName
 )
 
+// passwordTooLong is what a password over auth.MaxPasswordInputBytes is refused with where it is only being checked
+// (sign-in, the current password of a password change); a new password gets the weak_password answer instead.
+const passwordTooLong = "password is too long"
+
 // TxFunc runs fn in one database transaction (see db.InTx).
 type TxFunc func(ctx context.Context, fn func(q dbgen.Querier) error) error
 
@@ -195,6 +199,8 @@ func (s *Server) clearedCookie() string {
 // that carry neither - curl, the apps - pass, and the session cookie is SameSite=Lax besides.
 func (s *Server) crossOriginGuard(next http.Handler) http.Handler {
 	protection := http.NewCrossOriginProtection()
+	// AllowedOrigins only lets those pages past this check. It is not CORS: no Access-Control-* header is sent
+	// anywhere, so browsers still keep their scripts from reading the answers.
 	for _, origin := range s.AllowedOrigins {
 		if err := protection.AddTrustedOrigin(origin); err != nil {
 			s.Logger.Warn("ignoring a trusted origin", "origin", origin, "error", err)
@@ -415,6 +421,10 @@ func (s *Server) Login(ctx context.Context, request api.LoginRequestObject) (api
 	if body == nil {
 		return api.Login400JSONResponse(coded(api.ErrorCodeInvalidRequest, "expected a JSON body")), nil
 	}
+	// Before anything is computed from the password (see auth.MaxPasswordInputBytes): the body may be megabytes.
+	if !auth.InputSizeOK(body.Password) {
+		return api.Login400JSONResponse(coded(api.ErrorCodeInvalidRequest, passwordTooLong)), nil
+	}
 	badCredentials := api.Login401JSONResponse(coded(api.ErrorCodeInvalidCredentials, "wrong email or password"))
 
 	if wait, blocked := s.Limits.LoginIP.Blocked(client); blocked {
@@ -507,6 +517,9 @@ func (s *Server) ChangePassword(ctx context.Context, request api.ChangePasswordR
 	body := request.Body
 	if body == nil {
 		return api.ChangePassword400JSONResponse(coded(api.ErrorCodeInvalidRequest, "expected a JSON body")), nil
+	}
+	if !auth.InputSizeOK(body.CurrentPassword) {
+		return api.ChangePassword400JSONResponse(coded(api.ErrorCodeInvalidRequest, passwordTooLong)), nil
 	}
 	if err := auth.ValidatePassword(body.NewPassword); err != nil {
 		return api.ChangePassword400JSONResponse(coded(api.ErrorCodeWeakPassword, err.Error())), nil

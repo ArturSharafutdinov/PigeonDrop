@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/tphakala/go-opus/opus"
 )
@@ -35,6 +36,18 @@ func toWAV(data []byte, newDecoder func() (Decoder, error)) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %d packets (limit %d)", ErrTooLong, len(packets), MaxPackets)
 	}
 
+	// What the packets claim to hold, read from their headers: a recording that claims too much is refused before
+	// any memory is spent on it.
+	var claimed int
+	for _, packet := range packets {
+		if samples, ok := packetSamples(packet); ok {
+			claimed += samples
+		}
+	}
+	if claimed > maxSamples {
+		return nil, fmt.Errorf("%w: %s of audio (limit %s)", ErrTooLong, time.Duration(claimed/(SampleRate/1000))*time.Millisecond, MaxDuration)
+	}
+
 	decoder, err := newDecoder()
 	if err != nil {
 		return nil, fmt.Errorf("create decoder: %w", err)
@@ -42,6 +55,7 @@ func toWAV(data []byte, newDecoder func() (Decoder, error)) ([]byte, error) {
 
 	frame := make([]int16, maxFrameSamples)
 	pcm := make([]byte, 0, len(packets)*SampleRate/50*2) // 20 ms per packet, 2 bytes per sample
+	decoded := 0
 	for i, packet := range packets {
 		n, err := decoder.Decode(packet, frame)
 		if err != nil {
@@ -49,6 +63,11 @@ func toWAV(data []byte, newDecoder func() (Decoder, error)) ([]byte, error) {
 		}
 		if n < 0 || n > len(frame) {
 			return nil, errors.New("decoder reported an impossible sample count")
+		}
+		// The decoder may make more of a packet than its header says (it conceals a lost one with as much as the
+		// one before it held), so what comes out is counted too.
+		if decoded += n; decoded > maxSamples {
+			return nil, fmt.Errorf("%w: more than %s decoded by packet %d", ErrTooLong, MaxDuration, i)
 		}
 		for _, sample := range frame[:n] {
 			pcm = binary.LittleEndian.AppendUint16(pcm, uint16(sample))

@@ -71,7 +71,10 @@ type Server struct {
 	Storage StorageLimits
 	// CookieSecure marks the session cookie Secure. On for HTTPS, off only for local development over http.
 	CookieSecure bool
-	// AllowedOrigins are other web pages (scheme://host[:port]) allowed to call the /v1 API with a session.
+	// AllowedOrigins are other web pages (scheme://host[:port]) that the cross-origin check (crossOriginGuard, against
+	// CSRF) lets through to the /v1 API. That is all they feed: no CORS headers (Access-Control-*) are ever sent, so
+	// a browser still stops those pages from reading the answers, and their requests with a body in JSON are stopped
+	// by the browser's own preflight. A front end in development is served from this server's own address (a proxy).
 	AllowedOrigins []string
 	// TrustProxyHeaders reads the client's address from X-Forwarded-For (only behind a proxy that sets it).
 	TrustProxyHeaders bool
@@ -170,7 +173,19 @@ func NewHandler(s *Server) http.Handler {
 		writeError(w, http.StatusNotFound, "not found")
 	})
 
-	return recoverer(s.Logger, logRequests(s.Logger, s.limitBody(s.crossOriginGuard(s.authContext(mux)))))
+	return recoverer(s.Logger, logRequests(s.Logger, noStoreV1(s.limitBody(s.crossOriginGuard(s.authContext(mux))))))
+}
+
+// noStoreV1 tells browsers and proxies not to keep any answer of the /v1 API - they are about one person's account,
+// sessions and recordings, and errors included (it wraps the guards, so their refusals have it too). The handlers
+// that serve files set a policy of their own afterwards, which replaces this one.
+func noStoreV1(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // limitBody caps how much of a request body any handler can read.
@@ -214,12 +229,18 @@ func writeBadRequest(w http.ResponseWriter, r *http.Request, message string) {
 	writeError(w, http.StatusBadRequest, message)
 }
 
-// statusRecorder remembers the status code a handler wrote.
+// statusRecorder remembers the status code a handler wrote. It must stay transparent to http.ResponseController
+// (see Unwrap): the handlers move write deadlines and flush through it.
 type statusRecorder struct {
 	http.ResponseWriter
 	status  int
 	written bool
 }
+
+// Unwrap gives http.ResponseController the ResponseWriter underneath. Without it SetWriteDeadline, Flush and the like
+// find nothing to work on and answer http.ErrNotSupported, which the archive download once ignored: its deadline
+// never moved, and a download over a slow link was cut off by the server's WriteTimeout.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	if !r.written {

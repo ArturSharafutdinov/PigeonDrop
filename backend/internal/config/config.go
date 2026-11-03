@@ -32,8 +32,11 @@ type Config struct {
 	// CookieSecure marks the session cookie Secure (HTTPS only). Leave it on everywhere but local development
 	// over plain http, where browsers would refuse to send the cookie back.
 	CookieSecure bool
-	// AllowedOrigins are web pages, besides this server's own address, whose scripts may call the API with a
-	// signed-in session - for example the front end's dev server. Each is scheme://host[:port].
+	// AllowedOrigins are web pages, besides this server's own address, that the API's cross-origin check (the CSRF
+	// guard) lets send requests with a signed-in session - for example the front end's dev server. Each is
+	// scheme://host[:port]. It feeds that check and nothing else: the server sends no CORS headers
+	// (Access-Control-*), so listing a page here does not let its scripts read the answers; for that the front end
+	// has to be served from the server's own address, through a proxy.
 	AllowedOrigins []string
 	// TrustProxyHeaders believes X-Forwarded-For for the client's address (the sign-in limits are per address).
 	// Turn it on only behind a reverse proxy that sets the header itself, such as Coolify's Traefik.
@@ -240,6 +243,7 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 
+	// ALLOWED_ORIGINS: see Config.AllowedOrigins - the CSRF check's list, not CORS.
 	for _, origin := range strings.Split(getenv("ALLOWED_ORIGINS"), ",") {
 		origin = strings.TrimRight(strings.TrimSpace(origin), "/")
 		if origin == "" {

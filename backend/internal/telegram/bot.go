@@ -82,6 +82,27 @@ type Bot struct {
 
 	mu       sync.RWMutex
 	username string
+
+	// offset is the id of the next update to ask Telegram for; every update before it is confirmed, which makes
+	// Telegram forget it. Only Run touches it. It lives in the Bot, not in Run, so that when the supervisor starts a
+	// Run again after a panic, the update that caused the panic is not handed over once more (the same update would
+	// panic again and the bot would never get past it); the updates after it in that batch were never confirmed and
+	// are handed over again, so they are not lost.
+	//
+	// A process restart starts from zero, and Telegram then re-delivers the updates it was not told to forget. That
+	// is at most the batch that was being handled when the old process died (a stop between two batches has already
+	// told Telegram everything that was handled), and handling a repeated update is nearly harmless, so the offset is
+	// deliberately not kept in the database: that would not close the window (the process can still die between
+	// handling and saving), and it would cost a table and a migration. What repeating does to each kind of update:
+	//   - /start with a code: a code already used from this chat is answered as before and changes nothing;
+	//   - a press of the "seen" button: deleting messages that are already gone counts as done;
+	//   - /stop: unlinks again (answered "not linked" the second time);
+	//   - anything else: the same answer is sent again.
+	// The one thing a repeat can undo is a /stop that was followed by a new /start in the same batch: the repeated
+	// /stop unlinks the chat, and the repeated /start only answers "linked" because the code is already used. The
+	// person has to press Start on the page once more; that takes a crash after the whole batch was handled and
+	// before the next call to Telegram confirmed it.
+	offset int64
 }
 
 // NewBot returns a bot that talks through api and keeps its links in db.
@@ -112,11 +133,10 @@ func (b *Bot) Run(ctx context.Context) {
 	}
 	b.setMenu(ctx)
 
-	var offset int64
 	var failures int
 	pause := b.settings.ErrorPause
 	for ctx.Err() == nil {
-		updates, err := b.api.GetUpdates(ctx, offset, b.settings.Poll)
+		updates, err := b.api.GetUpdates(ctx, b.offset, b.settings.Poll)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -134,7 +154,7 @@ func (b *Bot) Run(ctx context.Context) {
 		failures, pause = 0, b.settings.ErrorPause
 
 		for _, update := range updates {
-			offset = max(offset, update.UpdateID+1)
+			b.offset = max(b.offset, update.UpdateID+1)
 			switch {
 			case update.Message != nil:
 				b.handle(ctx, *update.Message)

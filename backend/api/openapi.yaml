@@ -762,7 +762,9 @@ components:
         password:
           type: string
           maxLength: 1024
-          description: At least 12 characters, at most 256 bytes (after Unicode NFKC normalisation).
+          description: |
+            At least 12 characters, at most 256 bytes (after Unicode NFKC normalisation). A value of more than 1024
+            bytes as sent is refused before it is normalised.
         language:
           $ref: '#/components/schemas/Language'
     LoginRequest:
@@ -775,6 +777,7 @@ components:
         password:
           type: string
           maxLength: 1024
+          description: A value of more than 1024 bytes as sent is refused with `invalid_request` before anything is computed from it.
     ChangePasswordRequest:
       type: object
       required: [currentPassword, newPassword]
@@ -782,9 +785,11 @@ components:
         currentPassword:
           type: string
           maxLength: 1024
+          description: A value of more than 1024 bytes as sent is refused with `invalid_request` before anything is computed from it.
         newPassword:
           type: string
           maxLength: 1024
+          description: The same rules as at registration; a value of more than 1024 bytes as sent is `weak_password`.
     User:
       type: object
       required: [id, email, plan, language, createdAt]
