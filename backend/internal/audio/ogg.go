@@ -64,7 +64,7 @@ func oggPackets(data []byte) ([][]byte, error) {
 
 		page := data[pos : pos+pageLen]
 		if pageCRC(page) != binary.LittleEndian.Uint32(page[22:26]) {
-			return nil, fmt.Errorf("Ogg page checksum mismatch at byte %d", pos)
+			return nil, fmt.Errorf("checksum mismatch in the Ogg page at byte %d", pos)
 		}
 
 		body := page[27+segments:]
