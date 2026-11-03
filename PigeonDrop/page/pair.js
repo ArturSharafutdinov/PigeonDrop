@@ -6,7 +6,7 @@
 // watch shows them as a QR code and as text; the person opens the address on their phone, signs in,
 // checks the code against this screen and approves; meanwhile the watch asks every few seconds
 // whether that happened, and on the answer that it did, receives the device token (utils/device.js)
-// that every later upload carries. See API_SPEC.md and backend/README.md.
+// that every later upload carries. See docs/api.md and backend/README.md.
 //
 // The screen is held on while it waits, which has a limit (the code's lifetime), and a code that
 // runs out is not renewed behind the person's back: the screen says so and is opened again.
@@ -155,7 +155,7 @@ Page({
     this.state.expiresAt = Date.now() + (reply.expiresIn > 0 ? reply.expiresIn * 1000 : HOLD_MS)
 
     // Centered QR, sized so its background quiet zone stays within the round display's safe
-    // radius (~230px from the 240,240 center) - see ARCHITECTURE.md §4 for the clipping math.
+    // radius (~230px from the 240,240 center) - see docs/architecture.md (round display) for the clipping math.
     this.state.qr = createWidget(widget.QRCODE, {
       content: reply.verificationUriComplete,
       x: px(150),

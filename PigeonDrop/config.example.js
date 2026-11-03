@@ -26,5 +26,5 @@ export const MAX_RECORDING_SECONDS = 60
 
 // The PigeonDrop server: where the watch is paired (page/pair.js) and where recordings are
 // uploaded (app-side/uploads.js). Put the address of your own deployment here - see
-// backend/README.md and backend/DEPLOY.md. No trailing slash.
+// backend/README.md and docs/deployment.md. No trailing slash.
 export const SERVER_URL = 'https://your-server.example.com'

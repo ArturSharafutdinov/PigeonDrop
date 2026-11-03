@@ -2,7 +2,7 @@
 //
 // Zepp's recorder emits [8-byte header][Opus packet] repeated, where the first
 // 4 header bytes are the payload length (big-endian) and the other 4 are
-// ignored (see ARCHITECTURE.md section 4). Every packet is a valid 20 ms mono
+// ignored (see docs/architecture.md, section 6). Every packet is a valid 20 ms mono
 // SILK-wideband Opus packet (TOC byte 0x48), so the payloads can be copied
 // verbatim into an Ogg stream (RFC 3533 container, RFC 7845 Opus mapping).
 //

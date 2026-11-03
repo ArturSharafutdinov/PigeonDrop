@@ -1,5 +1,5 @@
 -- +goose Up
--- The tables behind today's HTTP contract (see API_SPEC.md at the repository root).
+-- The tables behind today's HTTP contract (see docs/api.md).
 -- They deliberately mirror what the Node prototype kept in JSON files; the account
 -- and message model of the real service replaces them in later migrations.
 

@@ -6,7 +6,7 @@
 // hands over the device token. Both return a Promise of the reply the watch receives. A reply is always
 // { ok: true, ... } or { ok: false, code, error }, and a transport failure is { ok: false, noServer: true, error } with
 // no code: the phone could not reach the server, which the watch tells apart from a phone that does not answer at all.
-// Endpoint details are in API_SPEC.md.
+// Endpoint details are in docs/api.md.
 
 import { withTimeout } from './timeout'
 
