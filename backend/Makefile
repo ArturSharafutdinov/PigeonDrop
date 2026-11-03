@@ -4,9 +4,9 @@ TOOL = $(GO) tool -modfile=tools/go.mod
 
 .PHONY: generate build test vet fmt check db-up db-down run
 
-generate: ## Regenerate code from api/openapi.yaml (and, once queries exist, sqlc)
+generate: ## Regenerate code from api/openapi.yaml (oapi-codegen) and internal/db/queries (sqlc)
 	$(TOOL) oapi-codegen -config oapi-codegen.yaml api/openapi.yaml
-	@if [ -f sqlc.yaml ]; then $(TOOL) sqlc generate; fi
+	$(TOOL) sqlc generate
 
 build:
 	$(GO) build -o bin/pigeondrop ./cmd/pigeondrop
