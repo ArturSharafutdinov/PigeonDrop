@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Format names a container.
@@ -31,13 +32,19 @@ const (
 	// Channels of the decoded audio: always mono.
 	Channels = 1
 
-	// MaxPackets bounds how much a single recording can expand when decoded: 30 000 packets are
-	// 10 minutes, about 19 MB of WAV. The product limit is 60 s; without a bound, a few megabytes
-	// of one-byte packets would decode into gigabytes of silence.
+	// MaxPackets bounds how many packets a recording can have: 30 000 packets of the watch's 20 ms are 10 minutes.
+	// It does not bound how much they decode to, because a packet may hold up to 120 ms: 30 000 of those are an
+	// hour, 115 MB of WAV, for each of the recordings decoded at the same time. MaxDuration does.
 	MaxPackets = 30000
+	// MaxDuration is the longest recording that is decoded, whatever its packets claim and whatever the decoder
+	// makes of them: 10 minutes are about 19 MB of WAV. The product limit is 60 s.
+	MaxDuration = 10 * time.Minute
+
+	// maxSamples is MaxDuration in samples.
+	maxSamples = int(MaxDuration/time.Second) * SampleRate
 )
 
-// ErrTooLong is returned for a recording with more than MaxPackets packets.
+// ErrTooLong is returned for a recording with more than MaxPackets packets or more than MaxDuration of audio.
 var ErrTooLong = errors.New("recording is too long")
 
 // Detect says which container data looks like, from its first bytes.

@@ -258,6 +258,100 @@ func TestRecordingLongerThanTheLimitIsRefusedBeforeDecoding(t *testing.T) {
 	}
 }
 
+// oggOf puts packets in an Ogg/Opus file, however many (pages hold at most 255 segments).
+func oggOf(packets [][]byte) []byte {
+	file := append(oggPage(0, 0x02, false, opusHead(1)), oggPage(1, 0, false, opusTags())...)
+	for seq, rest := uint32(2), packets; len(rest) > 0; seq++ {
+		n := min(200, len(rest))
+		file = append(file, oggPage(seq, 0, false, rest[:n]...)...)
+		rest = rest[n:]
+	}
+	return file
+}
+
+func TestPacketSamplesReadsTheTableOfContents(t *testing.T) {
+	cases := []struct {
+		name    string
+		packet  []byte
+		samples int // at 16 kHz
+		ok      bool
+	}{
+		{"SILK wideband 20 ms, one frame (what the watch sends)", []byte{0x48, 1, 2, 3}, 320, true},
+		{"SILK narrowband 10 ms", []byte{0x00, 1}, 160, true},
+		{"SILK 60 ms", []byte{0x58, 1}, 960, true},
+		{"SILK 60 ms, two frames of equal size", []byte{0x59, 1, 2}, 1920, true},
+		{"SILK 60 ms, two frames of different size", []byte{0x5a, 1, 1, 2}, 1920, true},
+		{"SILK 60 ms, two frames by the count byte", []byte{0x5b, 2}, 1920, true},
+		{"SILK 20 ms, forty-eight frames by the count byte", []byte{0x4b, 48 | 0x40}, 48 * 320, true}, // 0x40: padding flag, not part of the count
+		{"hybrid 20 ms", []byte{0x68, 1}, 320, true},
+		{"CELT 2.5 ms", []byte{0x80, 1}, 40, true},
+		{"CELT 20 ms", []byte{0xf8, 1}, 320, true},
+		{"empty", nil, 0, false},
+		{"count byte missing", []byte{0x5b}, 0, false},
+	}
+	for _, c := range cases {
+		samples, ok := packetSamples(c.packet)
+		if samples != c.samples || ok != c.ok {
+			t.Errorf("%s: %d samples, ok=%v; want %d, %v", c.name, samples, ok, c.samples, c.ok)
+		}
+	}
+}
+
+// A packet is a few bytes and can stand for 120 ms, so the number of packets is not what limits a recording: 30 000
+// of them, within what an upload may be, would decode to an hour of audio, 115 MB of WAV for every recording being
+// decoded at the same time.
+func TestRecordingThatClaimsMoreAudioThanTheLimitIsRefusedBeforeDecoding(t *testing.T) {
+	packets := make([][]byte, MaxPackets)
+	for i := range packets {
+		packets[i] = []byte{0x5b, 2} // SILK 60 ms twice: 120 ms in two bytes
+	}
+
+	called := false
+	_, err := toWAV(oggOf(packets), func() (Decoder, error) { called = true; return nil, errors.New("must not be reached") })
+
+	if !errors.Is(err, ErrTooLong) || called {
+		t.Fatalf("got %v (decoder created: %v), want ErrTooLong before any decoding", err, called)
+	}
+	if !strings.Contains(err.Error(), "limit 10m") {
+		t.Errorf("the error should name the limit: %v", err)
+	}
+}
+
+// The header only says what a packet should hold. A decoder can make more of it (a lost packet is concealed with as
+// much as the one before it), so the limit is kept on what actually comes out, too.
+type longDecoder struct{ samples int }
+
+func (d longDecoder) Decode(_ []byte, pcm []int16) (int, error) { return min(d.samples, len(pcm)), nil }
+
+func TestRecordingThatDecodesToMoreAudioThanTheLimitIsStopped(t *testing.T) {
+	packets := make([][]byte, 6000)
+	for i := range packets {
+		packets[i] = []byte{0x48} // says 20 ms
+	}
+
+	_, err := toWAV(oggOf(packets), func() (Decoder, error) { return longDecoder{samples: maxFrameSamples}, nil }) // 120 ms each: 12 minutes
+
+	if !errors.Is(err, ErrTooLong) || !strings.Contains(err.Error(), "decoded") {
+		t.Fatalf("got %v, want ErrTooLong from the decoding", err)
+	}
+}
+
+func TestRecordingJustWithinTheLimitIsDecoded(t *testing.T) {
+	packets := make([][]byte, 5000) // 5000 packets of 120 ms: ten minutes
+	for i := range packets {
+		packets[i] = []byte{0x5b, 2}
+	}
+
+	wav, err := toWAV(oggOf(packets), func() (Decoder, error) { return longDecoder{samples: maxFrameSamples}, nil })
+
+	if err != nil {
+		t.Fatalf("a recording of exactly the limit was refused: %v", err)
+	}
+	if want := 44 + maxSamples*2; len(wav) != want {
+		t.Errorf("%d bytes, want %d", len(wav), want)
+	}
+}
+
 // --- decoding failures ---
 
 type failingDecoder struct{}
