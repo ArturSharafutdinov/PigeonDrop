@@ -23,6 +23,7 @@ docker image inspect "$IMAGE" > /dev/null 2>&1 || { echo "no image $IMAGE: docke
 [ -d "$DIR" ] || { echo "$DIR is not a directory" >&2; exit 1; }
 docker rm -f "$NAME" > /dev/null 2>&1 || true
 
+# shellcheck disable=SC2329 # run by the trap below
 cleanup() {
   docker logs "$NAME" 2>&1 | tail -n 5 || true
   docker rm -f "$NAME" > /dev/null 2>&1 || true

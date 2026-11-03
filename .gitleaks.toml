@@ -1,0 +1,10 @@
+# Extends gitleaks' own rules. The values below are made up and live in tests.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Made-up values used by tests"
+regexes = [
+  '''123456789:AAH-test_token0123456789abcdefghijk''', # a Telegram token that was never issued
+  '''voice_\d{10,}\.opus''',                           # a recording's file name, which looks like a key to the generic rule
+]
