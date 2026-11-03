@@ -6,6 +6,7 @@ import logging
 import os
 import socket
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -290,12 +291,27 @@ class ConnectionLimitTest(ServerTest):
             self.assertEqual(self.transcribe()[0], 200)
         self.assertEqual(self.request("GET", "/healthz")[0], 200)
 
+    def when_a_place_is_free(self, ask):
+        """Asks until the service has a place for the connection. The place of the request that was answered is given
+        back a moment after the answer is written, so a client that asks again at once, as these tests do, can find
+        the one place taken and is turned away (a busy answer, or a connection closed before it has sent its body).
+        That is the limit working; the tests are about whether the place comes back at all."""
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                result = ask()
+            except (BrokenPipeError, ConnectionResetError):
+                result = (503, None, None)
+            if result[0] != 503 or time.monotonic() > deadline:
+                return result
+            time.sleep(0.02)
+
     def test_a_request_that_fails_inside_still_gives_its_place_back(self):
         self.start(FakeEngine(fail=RuntimeError("boom")), max_connections=1)
         for _ in range(3):
             with self.assertLogs("stt", level="ERROR"):
-                self.assertEqual(self.transcribe()[0], 500)
-        self.assertEqual(self.request("GET", "/healthz")[0], 200)
+                self.assertEqual(self.when_a_place_is_free(self.transcribe)[0], 500)
+        self.assertEqual(self.when_a_place_is_free(lambda: self.request("GET", "/healthz"))[0], 200)
 
 
 class BadInputTest(ServerTest):
@@ -401,6 +417,21 @@ class ModelFailureTest(ServerTest):
         # The service lives on and the lock was given back.
         self.engine.fail = None
         self.assertEqual(self.transcribe()[0], 200)
+
+    def test_the_model_is_free_again_by_the_time_a_failure_is_answered(self):
+        # The lock is let go before the 500 is written, not after: a client that has the answer may send the next
+        # recording at once and must not be told "busy" by the one it has just heard back from.
+        self.start(FakeEngine(fail=RuntimeError("boom")))
+        release = self.service.release
+
+        def slow_release():  # makes the order of the two steps show: a release that comes after the answer is seen as late
+            time.sleep(0.2)
+            release()
+
+        self.service.release = slow_release
+        with self.assertLogs("stt", level="ERROR"):
+            self.assertEqual(self.transcribe()[0], 500)
+        self.assertFalse(self.service._busy.locked())
 
 
 class LoggingTest(ServerTest):
