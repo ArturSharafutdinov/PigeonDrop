@@ -4,19 +4,53 @@
 (function () {
   'use strict'
 
-  var MESSAGES = {
-    invalid_credentials: 'Неверная почта или пароль.',
-    too_many_attempts: 'Слишком много попыток. Подождите немного и повторите.',
-    invalid_invite: 'Код приглашения недействителен, просрочен или уже использован.',
-    email_taken: 'Эта почта уже зарегистрирована.',
-    invalid_email: 'Это не похоже на адрес почты.',
-    weak_password: 'Пароль слишком короткий: нужно не меньше 12 символов.',
-    invalid_user_code: 'Такого кода нет, или он устарел. Откройте экран привязки на часах заново.',
-    forbidden_origin: 'Запрос отклонён: он пришёл с другого сайта.',
-    invalid_request: 'Проверьте введённые данные.',
-    not_found: 'Не найдено: возможно, это уже удалили.',
-    conflict: 'Эту запись сейчас нельзя расшифровать заново: список мог устареть.',
-    unavailable: 'Telegram сейчас недоступен. Попробуйте позже.',
+  // The texts are in pair.en.json and pair.ru.json; the server hands them to the page as window.PAIR_TEXTS (pair.texts.js).
+  var TEXTS = window.PAIR_TEXTS
+  var LANG_KEY = 'pigeondrop.lang'
+  var lang = 'en'
+  var chosen = false // the person picked a language with the EN / RU buttons (kept in this browser)
+
+  // The text for a key in the page's language. {name} placeholders are filled from vars; one with no value stays as it is.
+  function tr(key, vars) {
+    var text = TEXTS[lang][key]
+    if (text === undefined) text = TEXTS.en[key]
+    if (text === undefined) return key
+    return text.replace(/\{(\w+)\}/g, function (all, name) { return vars && Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : all })
+  }
+
+  function hasText(key) { return Object.prototype.hasOwnProperty.call(TEXTS.en, key) }
+
+  function savedLanguage() {
+    try {
+      var l = localStorage.getItem(LANG_KEY)
+      return l === 'en' || l === 'ru' ? l : null
+    } catch (e) {
+      return null // storage blocked: the page still works, it just does not remember
+    }
+  }
+
+  // Fills every element that has a text key (see pair.html).
+  function applyTexts() {
+    document.documentElement.lang = lang
+    Array.prototype.forEach.call(document.querySelectorAll('[data-i18n]'), function (node) { node.textContent = tr(node.getAttribute('data-i18n')) })
+    Array.prototype.forEach.call(document.querySelectorAll('[data-i18n-label]'), function (node) { node.setAttribute('aria-label', tr(node.getAttribute('data-i18n-label'))) })
+    $('lang-en').setAttribute('aria-pressed', String(lang === 'en'))
+    $('lang-ru').setAttribute('aria-pressed', String(lang === 'ru'))
+  }
+
+  // Switches the page's language. refresh: redraw what was loaded from the server (the lists, the Telegram line), which
+  // is drawn with text. A person's own choice is remembered; the browser's or the account's language is not.
+  function setLanguage(next, byPerson, refresh) {
+    lang = next
+    if (byPerson) {
+      chosen = true
+      try { localStorage.setItem(LANG_KEY, next) } catch (e) { /* not remembered */ }
+    }
+    applyTexts()
+    if (refresh) {
+      notice('')
+      if (!$('user').hidden) { loadDevices(); loadTelegram(); loadStorage(); loadMessages(true) }
+    }
   }
 
   var $ = function (id) { return document.getElementById(id) }
@@ -44,9 +78,11 @@
   }
 
   function explain(res) {
-    var base = MESSAGES[res.data && res.data.code] || 'Не получилось (ошибка ' + res.status + ').'
+    var code = res.data && res.data.code
+    var known = code && code !== 'default' && code !== 'retry_in' && hasText('err.' + code)
+    var base = known ? tr('err.' + code) : tr('err.default', { status: res.status })
     var wait = res.retryAfter
-    return wait && res.data && res.data.code === 'too_many_attempts' ? base + ' Через ' + wait + ' с.' : base
+    return wait && code === 'too_many_attempts' ? base + tr('err.retry_in', { seconds: wait }) : base
   }
 
   // Calls the API. Resolves with { status, data, retryAfter }; a 401 sends the person back to signing in.
@@ -103,7 +139,7 @@
         else notice(explain(res), 'error')
       }, function () {
         busy(form, false)
-        notice('Нет связи с сервером.', 'error')
+        notice(tr('no_connection'), 'error')
       })
     })
   }
@@ -111,6 +147,8 @@
   // ---- signed in --------------------------------------------------------------------------------
 
   function showUser(user) {
+    // Until the person picks a language here, the page speaks the one their account is set to.
+    if (!chosen && (user.language === 'en' || user.language === 'ru') && user.language !== lang) setLanguage(user.language, false, false)
     $('guest').hidden = true
     $('user').hidden = false
     $('who').textContent = user.email
@@ -123,7 +161,7 @@
   }
 
   function when(iso) {
-    return iso ? new Date(iso).toLocaleString('ru-RU') : '—'
+    return iso ? new Date(iso).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-GB') : '—'
   }
 
   function loadDevices() {
@@ -132,17 +170,17 @@
       var list = $('device-list')
       list.textContent = ''
       res.data.devices.forEach(function (d) {
-        var revoke = el('button', { type: 'button', class: 'link danger', text: 'Отозвать' })
+        var revoke = el('button', { type: 'button', class: 'link danger', text: tr('revoke') })
         revoke.addEventListener('click', function () {
-          if (!confirm('Отозвать «' + d.name + '»? Эти часы перестанут отправлять записи.')) return
+          if (!confirm(tr('revoke_confirm', { name: d.name }))) return
           api('DELETE', '/v1/devices/' + d.id).then(function (r) {
-            if (r.status === 204) { notice('Устройство отозвано.', 'ok'); loadDevices() }
+            if (r.status === 204) { notice(tr('revoked'), 'ok'); loadDevices() }
             else notice(explain(r), 'error')
           })
         })
         list.appendChild(el('li', {}, [
           el('div', { class: 'title', text: d.name }),
-          el('div', { class: 'meta', text: 'Привязано: ' + when(d.createdAt) + ' · Последний раз на связи: ' + (d.lastSeenAt ? when(d.lastSeenAt) : 'ещё не было') }),
+          el('div', { class: 'meta', text: tr('device_meta', { paired: when(d.createdAt), seen: d.lastSeenAt ? when(d.lastSeenAt) : tr('never') }) }),
           el('div', { class: 'actions' }, [revoke]),
         ]))
       })
@@ -151,32 +189,33 @@
   }
 
   function duration(ms) {
-    if (ms === null || ms === undefined) return 'длина неизвестна'
+    if (ms === null || ms === undefined) return tr('length_unknown')
     var s = Math.round(ms / 1000)
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0')
   }
 
-  // 1 МБ here is 1 MiB, the unit the limit is set in, so that the limit reads as a round number.
+  // 1 MB here is 1 MiB, the unit the limit is set in, so that the limit reads as a round number.
   function size(bytes) {
-    if (bytes < 1048576) return Math.round(bytes / 1024) + ' КБ'
+    if (bytes < 1048576) return Math.round(bytes / 1024) + ' ' + tr('unit_kb')
     var mb = bytes / 1048576
-    return String(mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10).replace('.', ',') + ' МБ'
+    var text = String(mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10)
+    return (lang === 'ru' ? text.replace('.', ',') : text) + ' ' + tr('unit_mb')
   }
 
   function loadStorage() {
     api('GET', '/v1/storage').then(function (res) {
       if (res.status !== 200) return
       var percent = Math.floor(res.data.usedBytes * 100 / res.data.limitBytes)
-      $('storage-line').textContent = 'Занято ' + size(res.data.usedBytes) + ' из ' + size(res.data.limitBytes) + ' (' + percent + '%).'
+      $('storage-line').textContent = tr('storage_line', { used: size(res.data.usedBytes), limit: size(res.data.limitBytes), percent: percent })
       $('storage-warning').hidden = res.data.state === 'ok'
     })
   }
 
   // ---- the text of a recording ------------------------------------------------------------------
 
-  var SKIPPED = {
-    not_decodable: 'Запись не удалось прочитать, расшифровать её нельзя.',
-    too_long: 'Запись слишком длинная для расшифровки.',
+  // The text for why a recording is not transcribed, by the error code the server gives.
+  function skippedText(code) {
+    return hasText('skip.' + code) && code !== 'default' ? tr('skip.' + code) : tr('skip.default')
   }
 
   // Shows what the server says about a recording's text in its box: waiting, the text, or what went wrong (with a
@@ -191,23 +230,23 @@
     if (!transcript) return
 
     var kind = transcript.state
-    if (kind === 'pending') box.appendChild(el('p', { class: 'hint', text: 'Ждёт расшифровки…' }))
-    else if (kind === 'running') box.appendChild(el('p', { class: 'hint', text: 'Расшифровывается…' }))
+    if (kind === 'pending') box.appendChild(el('p', { class: 'hint', text: tr('transcript_pending') }))
+    else if (kind === 'running') box.appendChild(el('p', { class: 'hint', text: tr('transcript_running') }))
     else if (kind === 'done') {
       if (transcript.text) box.appendChild(el('p', { class: 'transcript-text', text: transcript.text }))
-      else box.appendChild(el('p', { class: 'hint', text: 'Речь не обнаружена.' }))
+      else box.appendChild(el('p', { class: 'hint', text: tr('transcript_empty') }))
     } else if (kind === 'failed') {
-      var again = el('button', { type: 'button', class: 'link', text: 'Повторить' })
+      var again = el('button', { type: 'button', class: 'link', text: tr('retry') })
       again.addEventListener('click', function () {
         again.disabled = true
         api('POST', '/v1/messages/' + id + '/transcribe').then(function (res) {
           if (res.status === 202) { paintTranscript(id, res.data); schedulePoll() }
           else { again.disabled = false; notice(explain(res), 'error'); if (res.status === 409) loadMessages(true) }
-        }, function () { again.disabled = false; notice('Нет связи с сервером.', 'error') })
+        }, function () { again.disabled = false; notice(tr('no_connection'), 'error') })
       })
-      box.appendChild(el('p', { class: 'hint' }, [document.createTextNode('Не удалось расшифровать. '), again]))
+      box.appendChild(el('p', { class: 'hint' }, [document.createTextNode(tr('transcript_failed')), again]))
     } else {
-      box.appendChild(el('p', { class: 'hint', text: SKIPPED[transcript.errorCode] || 'Эту запись не расшифровывают.' }))
+      box.appendChild(el('p', { class: 'hint', text: skippedText(transcript.errorCode) }))
     }
   }
 
@@ -244,16 +283,16 @@
       if (res.status !== 200) return
       var list = $('message-list')
       res.data.messages.forEach(function (m) {
-        var remove = el('button', { type: 'button', class: 'link danger', text: 'Удалить' })
+        var remove = el('button', { type: 'button', class: 'link danger', text: tr('delete') })
         remove.addEventListener('click', function () {
-          if (!confirm('Удалить эту запись насовсем?')) return
+          if (!confirm(tr('delete_confirm'))) return
           api('DELETE', '/v1/messages/' + m.id).then(function (r) {
             if (r.status === 204) { loadMessages(true); loadStorage() }
             else notice(explain(r), 'error')
           })
         })
         var actions = el('div', { class: 'actions' }, [
-          el('a', { href: '/v1/messages/' + m.id + '/audio?format=original', download: '', text: 'Скачать оригинал' }),
+          el('a', { href: '/v1/messages/' + m.id + '/audio?format=original', download: '', text: tr('download_original') }),
           remove,
         ])
         var children = [
@@ -261,7 +300,7 @@
           el('div', { class: 'meta', text: m.deviceName + ' · ' + duration(m.durationMs) }),
         ]
         if (m.hasWav) children.push(el('audio', { controls: '', preload: 'none', src: '/v1/messages/' + m.id + '/audio' }))
-        else children.push(el('div', { class: 'meta', text: 'Не удалось преобразовать для прослушивания; оригинал можно скачать.' }))
+        else children.push(el('div', { class: 'meta', text: tr('no_playback') }))
         var box = el('div', { class: 'transcript' })
         state.boxes[m.id] = box
         children.push(box)
@@ -288,12 +327,12 @@
     var link = status.link
     state.tgLinkedAt = link ? link.linkedAt : null
     if (!status.available) return
-    $('telegram-link').textContent = link ? 'Привязать другой чат' : 'Привязать Telegram'
+    $('telegram-link').textContent = link ? tr('telegram_link_other') : tr('telegram_link')
     $('telegram-unlink').hidden = !link
     $('telegram-blocked').hidden = !(link && link.blocked)
     $('telegram-state').textContent = link
-      ? 'Записи приходят в Telegram: ' + (link.username ? '@' + link.username : link.firstName || 'личный чат') + ' (привязано ' + when(link.linkedAt) + ').'
-      : 'Не привязан. Привяжите чат, и новые записи с часов будут приходить в него голосовым сообщением с расшифровкой.'
+      ? tr('telegram_linked_to', { who: link.username ? '@' + link.username : link.firstName || tr('telegram_private_chat'), when: when(link.linkedAt) })
+      : tr('telegram_not_linked')
   }
 
   function loadTelegram() {
@@ -328,7 +367,7 @@
       if (state.tgUntil === null) return
       if (res.status === 200 && res.data.link && res.data.link.linkedAt !== state.tgBefore) {
         endTelegramWait()
-        notice('Telegram привязан.', 'ok')
+        notice(tr('telegram_now_linked'), 'ok')
         return
       }
       scheduleTelegramPoll()
@@ -363,6 +402,13 @@
 
   // ---- start ------------------------------------------------------------------------------------
 
+  var saved = savedLanguage()
+  chosen = saved !== null
+  lang = saved || (/^ru\b/i.test(navigator.language || '') ? 'ru' : 'en')
+  applyTexts()
+  $('lang-en').addEventListener('click', function () { setLanguage('en', true, true) })
+  $('lang-ru').addEventListener('click', function () { setLanguage('ru', true, true) })
+
   $('tab-login').addEventListener('click', function () { showTab('login') })
   $('tab-register').addEventListener('click', function () { showTab('register') })
 
@@ -371,8 +417,8 @@
   }, function (res) { $('login-form').reset(); showUser(res.data) })
 
   submit($('register-form'), function (f) {
-    return api('POST', '/v1/auth/register', { inviteCode: f.get('inviteCode'), email: f.get('email'), password: f.get('password'), language: 'ru' })
-  }, function (res) { $('register-form').reset(); notice('Аккаунт создан.', 'ok'); showUser(res.data) })
+    return api('POST', '/v1/auth/register', { inviteCode: f.get('inviteCode'), email: f.get('email'), password: f.get('password'), language: lang })
+  }, function (res) { $('register-form').reset(); notice(tr('account_created'), 'ok'); showUser(res.data) })
 
   submit($('lookup-form'), function (f) {
     return lookup(String(f.get('code')).trim()).then(function () { return { status: 200 } })
@@ -381,14 +427,14 @@
   submit($('approve-form'), function (f) {
     return api('POST', '/v1/device/approve', { userCode: state.pendingCode, name: f.get('name') })
   }, function () {
-    notice('Готово. Часы получат доступ в течение нескольких секунд.', 'ok')
+    notice(tr('pair_done'), 'ok')
     endPairing()
     loadDevices()
   })
   $('approve-cancel').addEventListener('click', function () { notice(''); endPairing() })
 
   $('logout').addEventListener('click', function () {
-    api('POST', '/v1/auth/logout').then(function () { notice('Вы вышли.', 'ok'); showGuest() })
+    api('POST', '/v1/auth/logout').then(function () { notice(tr('signed_out'), 'ok'); showGuest() })
   })
   $('more').addEventListener('click', function () { loadMessages(false) })
 
@@ -401,28 +447,28 @@
       if (res.status !== 200) { if (res.status !== 401) notice(explain(res), 'error'); return }
       var url = null
       try { url = new URL(res.data.url) } catch (e) { url = null }
-      if (!url || url.hostname !== 't.me') { notice('Сервер вернул не ту ссылку, которую ждали. Не открывайте её.', 'error'); return }
+      if (!url || url.hostname !== 't.me') { notice(tr('telegram_bad_link'), 'error'); return }
       $('telegram-open').setAttribute('href', url.href)
       $('telegram-wait').hidden = false
       state.tgBefore = state.tgLinkedAt
       state.tgUntil = Date.now() + TELEGRAM_LINK_MS
       scheduleTelegramPoll()
-    }, function () { button.disabled = false; notice('Нет связи с сервером.', 'error') })
+    }, function () { button.disabled = false; notice(tr('no_connection'), 'error') })
   })
 
   $('telegram-unlink').addEventListener('click', function () {
-    if (!confirm('Перестать присылать записи в Telegram?')) return
+    if (!confirm(tr('telegram_unlink_confirm'))) return
     api('DELETE', '/v1/telegram').then(function (res) {
-      if (res.status === 204) { endTelegramWait(); notice('Telegram отключён.', 'ok'); loadTelegram() }
+      if (res.status === 204) { endTelegramWait(); notice(tr('telegram_unlinked'), 'ok'); loadTelegram() }
       else if (res.status !== 401) notice(explain(res), 'error')
     })
   })
 
   $('delete-all').addEventListener('click', function () {
-    if (!confirm('Удалить все записи насовсем? Это нельзя отменить.')) return
+    if (!confirm(tr('delete_all_confirm'))) return
     api('DELETE', '/v1/messages').then(function (r) {
       if (r.status === 200) {
-        notice('Удалено записей: ' + r.data.deleted + '.', 'ok')
+        notice(tr('deleted_count', { count: r.data.deleted }), 'ok')
         loadMessages(true)
         loadStorage()
       } else if (r.status !== 401) {
@@ -433,8 +479,8 @@
 
   api('GET', '/v1/me').then(function (res) {
     if (res.status === 200) showUser(res.data)
-    else if (res.status !== 401) notice('Не удалось связаться с сервером.', 'error')
+    else if (res.status !== 401) notice(tr('server_unreachable'), 'error')
     // A pairing link opened while signed out: say what is going on.
-    else if (new URLSearchParams(location.search).get('code')) notice('Войдите, чтобы привязать часы.')
-  }, function () { notice('Нет связи с сервером.', 'error') })
+    else if (new URLSearchParams(location.search).get('code')) notice(tr('sign_in_to_pair'))
+  }, function () { notice(tr('no_connection'), 'error') })
 })()

@@ -11,7 +11,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 )
 
-// The button under every recording in the chat ("Просмотрено" / "Seen"). Pressing it deletes the recording's messages
+// The button under every recording in the chat ("Seen", or its Russian equivalent for a Russian-speaking chat). Pressing it deletes the recording's messages
 // from the chat, so that the chat does not fill up with recordings that were already looked at. It deletes nothing on
 // the server: the recording and its text stay on the page and in the archive.
 //
