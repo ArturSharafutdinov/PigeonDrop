@@ -205,15 +205,20 @@ def make_handler(service: Service):
             if not service.try_acquire():
                 return self._error(429, "busy", "another recording is being recognized",
                                    {"Retry-After": str(BUSY_RETRY_AFTER_S)}, audio_ms=audio.milliseconds)
+            failure = None
             try:
                 began = time.perf_counter()
                 transcript = service.engine.transcribe(audio.pcm)
                 stt_ms = round((time.perf_counter() - began) * 1000)
             except Exception as error:  # noqa: BLE001 (any failure of the model is this request's 500, never the service's end)
-                log(logging.ERROR, "recognition failed", request_id=self.request_id, error=f"{type(error).__name__}: {error}")
-                return self._error(500, "internal", "recognition failed", audio_ms=audio.milliseconds)
+                failure = error
             finally:
+                # Before anything is written, whatever the outcome: a client that has the answer may ask again at
+                # once, and must not be told "busy" by the request it has just heard back from.
                 service.release()
+            if failure is not None:
+                log(logging.ERROR, "recognition failed", request_id=self.request_id, error=f"{type(failure).__name__}: {failure}")
+                return self._error(500, "internal", "recognition failed", audio_ms=audio.milliseconds)
             self._answer(200, {
                 "text": transcript.text, "language": transcript.language, "engine": service.engine.name,
                 "audio_ms": audio.milliseconds, "stt_ms": stt_ms,
