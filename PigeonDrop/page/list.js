@@ -4,7 +4,7 @@
 
 import { createWidget, widget, align, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
-import { create, id } from '@zos/media'
+import { playAudio } from '../utils/player'
 import { listRecordings } from '../utils/recordings'
 
 // Layout constants for the list items. The screen is a 480x480 round
@@ -19,10 +19,6 @@ const ITEM_WIDTH = 320
 const TOP_MARGIN = 70
 
 Page({
-  state: {
-    player: null, // single Player instance shared by every item's play button
-  },
-
   build() {
     const recordings = listRecordings()
 
@@ -41,22 +37,6 @@ Page({
       })
       return
     }
-
-    // One Player is created for the whole page and reused for every item
-    // below - creating a fresh Player per click fails once a previous one
-    // is still alive (see the identical note in page/index.js).
-    const player = create(id.PLAYER)
-    this.state.player = player
-
-    player.addEventListener(player.event.PREPARE, (result) => {
-      if (result) {
-        player.start()
-      }
-    })
-
-    player.addEventListener(player.event.COMPLETE, () => {
-      player.stop()
-    })
 
     // Renders one button per recording, stacked top to bottom. The page
     // scrolls automatically once the buttons no longer fit on screen, so
@@ -79,10 +59,9 @@ Page({
         // sorts newest first, so the index here doubles as the display rank.
         text: '№' + (index + 1) + '  ' + item.label,
         text_size: px(20),
-        click_func: () => {
-          player.setSource(player.source.FILE, { file: item.filePath })
-          player.prepare()
-        },
+        // The app's one shared Player (utils/player.js): a second one would throw if the
+        // main page has played anything before.
+        click_func: () => playAudio(item.filePath),
       })
     })
   },

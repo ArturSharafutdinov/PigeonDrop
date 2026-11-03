@@ -40,3 +40,7 @@ export const MAX_RECORDING_SECONDS = 5
 export let paired = true
 export const setPaired = (v) => { paired = v }
 export const isPaired = () => paired
+export const playback = []                  // every playAudio() call: { file, callbacks } (not in `log`, which some tests compare exactly)
+export const detached = []                  // the callbacks every detachPlayback() call was given
+export const playAudio = (file, callbacks) => { playback.push({ file, callbacks }) }
+export const detachPlayback = (callbacks) => { detached.push(callbacks) }

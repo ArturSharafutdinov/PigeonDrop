@@ -17,7 +17,7 @@ const LINK = generate('utils/linkProblem.js', {})   // the real texts: what the 
 const SCREEN = generate('utils/screen.js', { '@zos/display': S })   // the real hold logic on top of the stubbed display
 const PAGE = generate('page/index.js', {
   '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S,
-  '../utils/screen': SCREEN, '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S,
+  '../utils/screen': SCREEN, '../utils/player': S, '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S,
   '../utils/linkProblem': LINK, '../config': S,
 })
 await import(fileUrl(PAGE))
@@ -299,4 +299,21 @@ console.log('--- 11. "Отмена": a recording in progress can be thrown away 
   ok(stubs.log.includes('pruneRecordings') && stubs.log.includes('retryPendingUploads') && stubs.log.includes('setActive null'), '11f: it is then treated as an ordinary recording: queued for upload')
   ok(page.state.recording === false && find('Настройки').visible && !find('Отмена').visible, '11f: and the screen is the main one again')
   stubs.setDiscardWorks(true)
+}
+
+console.log('--- 12. playback goes through the shared player (utils/player.js) ---')
+{
+  const page = mk(); page.build(); reset(); stubs.playback.length = 0; stubs.detached.length = 0
+  page.playLatestRecording()
+  ok(stubs.playback.length === 1 && stubs.playback[0].file === 'x', '12a: the newest recording is handed to the shared player -> ' + JSON.stringify(stubs.playback.map((p) => p.file)))
+  ok(last() === 'Воспроизведение...', '12a: the status says it is playing')
+  const callbacks = stubs.playback[0].callbacks
+  callbacks.onError()
+  ok(last().startsWith('Ошибка чтения\nзаписи'), '12b: a file that cannot be prepared is reported on the screen -> ' + JSON.stringify(last().split('\n')[0]))
+  callbacks.onComplete()
+  ok(last() === page.idleText(), '12c: the end of playback brings the idle text back')
+  page.playLatestRecording()
+  ok(stubs.playback[1].callbacks === callbacks, '12d: playing again hands over the same callbacks, so they can be detached')
+  page.onDestroy()
+  ok(stubs.detached[stubs.detached.length - 1] === callbacks, '12e: destroying the page detaches them, so a late event cannot touch its widgets')
 }
