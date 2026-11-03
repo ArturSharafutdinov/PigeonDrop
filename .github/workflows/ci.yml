@@ -47,6 +47,7 @@ jobs:
       watch: ${{ steps.areas.outputs.watch }}
       scripts: ${{ steps.areas.outputs.scripts }}
       stt: ${{ steps.areas.outputs.stt }}
+      shell: ${{ steps.areas.outputs.shell }}
     steps:
       # The checkout of a pull request is the merge of it into its base branch; two commits are enough to see what
       # the pull request changes (HEAD^1 is the base branch).
@@ -60,12 +61,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          all() { printf '%s=true\n' backend watch scripts stt >> "$GITHUB_OUTPUT"; exit 0; }
+          all() { printf '%s=true\n' backend watch scripts stt shell >> "$GITHUB_OUTPUT"; exit 0; }
           [ "$EVENT_NAME" = pull_request ] || all
           files=$(git diff --name-only HEAD^1 HEAD) || all # cannot tell: run everything
           echo "$files"
           this='\.github/workflows/ci\.yml'
-          for area in "backend:backend/" "watch:PigeonDrop/" "scripts:\.github/scripts/" "stt:stt/"; do
+          for area in "backend:backend/" "watch:PigeonDrop/" "scripts:\.github/scripts/" "stt:stt/" "shell:.*\.sh$"; do
             if grep -Eq "^(${area#*:}|${this}$)" <<< "$files"; then value=true; else value=false; fi
             echo "${area%%:*}=$value" | tee -a "$GITHUB_OUTPUT"
           done
@@ -113,6 +114,15 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: go vet
         run: go vet ./...
+      # The linters are configured in backend/.golangci.yml.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: backend
+      # Fails only when a vulnerable function is actually reachable from this code, in the standard library or in a module.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Tests (with the race detector)
         run: go test -race ./...
       # A push to main builds the image in the deploy job anyway (when it is needed at all), so this is only for
@@ -140,6 +150,8 @@ jobs:
       # The tests load the app's real source with the Zepp OS modules stubbed, so nothing needs installing.
       - name: Run tests
         run: npm test
+      - name: Audit the dependencies
+        run: npm audit --audit-level=high
       # The CLI is installed globally, so there is no lock file for setup-node to cache by: npm's download cache is
       # kept under the CLI's version instead.
       - name: Cache the npm downloads
@@ -155,6 +167,35 @@ jobs:
           cp config.example.js config.js
           zeus build < /dev/null
           ls dist
+
+  # Every shell script of the repository (the .shellcheckrc files next to some of them are picked up). The benchmark
+  # scripts in bench/ are cleaned up separately.
+  shell:
+    name: Shell scripts
+    needs: changes
+    if: needs.changes.outputs.shell == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck
+        run: git ls-files -z '*.sh' ':!bench' | xargs -0 shellcheck
+
+  # Looks for passwords, tokens and keys in the whole history, not only in what the pull request changes. The made-up
+  # values the tests use are allowed in .gitleaks.toml.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            detect --source /repo --redact --no-banner
 
   # The deploy script is the one part of the pipeline that can only fail on release day, so it is tested here
   # against a fake Coolify API (every outcome: success, failure, refusal, unreachable, no secrets).
@@ -182,8 +223,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: shellcheck
-        run: shellcheck tools/backup/*.sh tools/backup/test/*.sh
       - name: Run the scripts against PostgreSQL 17
         run: tools/backup/test/test-backup.sh
 
@@ -213,7 +252,7 @@ jobs:
   deploy:
     name: Deploy to Coolify
     needs: [backend, deploy-script]
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.repository == 'ArturSharafutdinov/PigeonDrop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -284,7 +323,7 @@ jobs:
   deploy-stt:
     name: Deploy the speech recognition service to Coolify
     needs: [stt, deploy-script]
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.repository == 'ArturSharafutdinov/PigeonDrop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

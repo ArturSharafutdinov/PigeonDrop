@@ -446,11 +446,11 @@ func telegramCheck(ctx context.Context, cfg config.Config, args []string, stdout
 	bot, err := client.GetMe(ctx)
 	if err != nil {
 		if kind, isCall := telegram.KindOf(err); isCall && kind == telegram.Unavailable {
-			return fmt.Errorf("Telegram cannot be used: %w\n"+
+			return fmt.Errorf("the Telegram bot cannot be used: %w\n"+
 				"check that this server can open the Bot API (api.telegram.org: DNS and outgoing HTTPS are not blocked) and that "+
 				"TELEGRAM_BOT_TOKEN is the token @BotFather gave for this bot (a 401 means it is not)", err)
 		}
-		return fmt.Errorf("Telegram answered badly: %w", err)
+		return fmt.Errorf("the Telegram API answered badly: %w", err)
 	}
 
 	info, err := client.GetWebhookInfo(ctx)
