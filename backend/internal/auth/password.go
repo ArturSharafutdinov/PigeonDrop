@@ -46,6 +46,13 @@ const (
 const (
 	MinPasswordRunes = 12
 	MaxPasswordBytes = 256
+	// MaxPasswordInputBytes is the most a password may be as it arrives, before it is normalized (it is the
+	// maxLength of the password fields in api/openapi.yaml, which counts bytes for this purpose). NFKC can make text
+	// shorter, by 4 to 1 at the most (a mathematical letter of four bytes becomes an ASCII letter of one), so every
+	// password that is within MaxPasswordBytes once normalized is within four times that before; nothing larger
+	// can be right, and it is refused before any work is spent on it. Without this a request body of megabytes
+	// (the server reads up to 8 MiB of any request) would be normalized and hashed.
+	MaxPasswordInputBytes = 4 * MaxPasswordBytes
 )
 
 var (
@@ -53,8 +60,16 @@ var (
 	ErrPasswordTooLong  = fmt.Errorf("password must be at most %d bytes", MaxPasswordBytes)
 )
 
+// InputSizeOK reports whether password is small enough to be looked at: checked, or turned into a hash. Every
+// request that carries a password asks this before it does anything with it (ValidatePassword does so itself);
+// when it says no, the password cannot be one that was ever accepted, so nobody is told more than "too long".
+func InputSizeOK(password string) bool { return len(password) <= MaxPasswordInputBytes }
+
 // ValidatePassword applies the length rules to the password as it will be hashed.
 func ValidatePassword(password string) error {
+	if !InputSizeOK(password) {
+		return ErrPasswordTooLong // before normalizing: that costs time and memory in proportion to the size
+	}
 	password = normalizePassword(password)
 	if len(password) > MaxPasswordBytes {
 		return ErrPasswordTooLong
@@ -101,6 +116,9 @@ func (h *Hasher) acquire(ctx context.Context) (func(), error) {
 
 // Hash returns the PHC string for password: $argon2id$v=19$m=...,t=...,p=...$salt$hash.
 func (h *Hasher) Hash(ctx context.Context, password string) (string, error) {
+	if !InputSizeOK(password) {
+		return "", ErrPasswordTooLong
+	}
 	release, err := h.acquire(ctx)
 	if err != nil {
 		return "", err
@@ -118,6 +136,9 @@ func (h *Hasher) Hash(ctx context.Context, password string) (string, error) {
 // Verify reports whether password matches the stored hash. needsRehash is true when it does, but the
 // hash was made with other settings than this Hasher's current ones: the caller should store a new one.
 func (h *Hasher) Verify(ctx context.Context, encoded, password string) (ok, needsRehash bool, err error) {
+	if !InputSizeOK(password) {
+		return false, false, ErrPasswordTooLong
+	}
 	params, salt, want, err := decode(encoded)
 	if err != nil {
 		return false, false, err

@@ -467,6 +467,10 @@ func (s *Server) handleMessageAudio(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", row.ReceivedAt, content)
 }
 
+// archiveFileTimeout is how long the write of one file of the archive may take; a file is at most the size of a
+// recording (StorageLimits.MaxAudioBytes).
+const archiveFileTimeout = 2 * time.Minute
+
 // handleMessagesArchive streams every recording of the user as one zip, each file as it was received and stored
 // without compression (recordings are already compressed audio). Files are named after the time they were received,
 // the zip after the time of the request, both in UTC like the single-file download. A recording whose text is ready
@@ -496,12 +500,19 @@ func (s *Server) handleMessagesArchive(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="PigeonDrop-%s.zip"`, s.now().UTC().Format(stamp)))
 
 	// The archive can be the whole 100 MiB of an account, more than the server's write timeout allows on a slow link:
-	// the deadline is moved forward for each file instead.
+	// the deadline is moved forward for each file instead. That needs every wrapper of w on the way to the connection
+	// to be transparent to http.ResponseController (statusRecorder.Unwrap); when it is not, the download still goes on
+	// but the server's write timeout applies to all of it, and the log says so (once per download).
 	rc := http.NewResponseController(w)
+	warned := false
 	zw := zip.NewWriter(w)
 	taken := map[string]int{} // two recordings in one second would otherwise get one name
 	for _, row := range rows {
-		_ = rc.SetWriteDeadline(time.Now().Add(2 * time.Minute))
+		if err := rc.SetWriteDeadline(time.Now().Add(archiveFileTimeout)); err != nil && !warned {
+			warned = true
+			s.Logger.Warn("could not extend the write deadline of an archive download; a slow download may be cut off by the server's write timeout",
+				"user_id", p.User.Id, "error", err)
+		}
 		if err := s.addToArchive(zw, row.ID, row.ReceivedAt, row.TranscriptText, taken); err != nil {
 			// The answer is already on its way, so all that is left is to cut the archive short: a zip without its
 			// directory is rejected by unzip tools, which tells the person it is incomplete.

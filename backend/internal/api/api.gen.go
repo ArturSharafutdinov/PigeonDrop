@@ -219,8 +219,11 @@ type ApprovePairingRequest struct {
 
 // ChangePasswordRequest defines model for ChangePasswordRequest.
 type ChangePasswordRequest struct {
+	// CurrentPassword A value of more than 1024 bytes as sent is refused with `invalid_request` before anything is computed from it.
 	CurrentPassword string `json:"currentPassword"`
-	NewPassword     string `json:"newPassword"`
+
+	// NewPassword The same rules as at registration; a value of more than 1024 bytes as sent is `weak_password`.
+	NewPassword string `json:"newPassword"`
 }
 
 // DeleteAllResult defines model for DeleteAllResult.
@@ -271,7 +274,9 @@ type Language string
 
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
-	Email    string `json:"email"`
+	Email string `json:"email"`
+
+	// Password A value of more than 1024 bytes as sent is refused with `invalid_request` before anything is computed from it.
 	Password string `json:"password"`
 }
 
@@ -374,7 +379,8 @@ type RegisterRequest struct {
 	InviteCode string    `json:"inviteCode"`
 	Language   *Language `json:"language,omitempty"`
 
-	// Password At least 12 characters, at most 256 bytes (after Unicode NFKC normalisation).
+	// Password At least 12 characters, at most 256 bytes (after Unicode NFKC normalisation). A value of more than 1024
+	// bytes as sent is refused before it is normalised.
 	Password string `json:"password"`
 }
 

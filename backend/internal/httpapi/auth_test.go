@@ -977,3 +977,53 @@ func readSpec(t testing.TB) string {
 	}
 	return string(spec)
 }
+
+// api/openapi.yaml limits the password fields; the server must hold to it before it spends a password hash on
+// whatever a client sends (up to the 8 MiB the server reads of any request).
+func TestSignInRefusesAPasswordTooBigToBeRightWithoutHashingIt(t *testing.T) {
+	e := newEnv(t)
+	e.signUp(t, "alice@example.com")
+	limit := strings.Repeat("x", auth.MaxPasswordInputBytes)
+	huge := strings.Repeat("x", 5<<20)
+
+	for name, tc := range map[string]struct {
+		email, password string
+		status          int
+		code            string
+	}{
+		"registered email":   {"alice@example.com", huge, http.StatusBadRequest, "invalid_request"},
+		"unregistered email": {"nobody@example.com", huge, http.StatusBadRequest, "invalid_request"},
+		"one byte over":      {"alice@example.com", limit + "x", http.StatusBadRequest, "invalid_request"},
+		"at the limit":       {"alice@example.com", limit, http.StatusUnauthorized, "invalid_credentials"}, // wrong, but looked at
+	} {
+		rec := e.login(tc.email, tc.password, fromIP("192.0.2.90"))
+		if rec.Code != tc.status || codeOf(t, rec) != tc.code {
+			t.Errorf("%s: %d %s, want %d %s", name, rec.Code, rec.Body.String(), tc.status, tc.code)
+		}
+	}
+	// Refusing by size is not a failed sign-in: it must not count towards blocking the email or the address.
+	for range 20 {
+		e.login("alice@example.com", huge, fromIP("192.0.2.91"))
+	}
+	if rec := e.login("alice@example.com", goodPassword, fromIP("192.0.2.91")); rec.Code != http.StatusOK {
+		t.Errorf("sign-in after oversized attempts: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChangingThePasswordRefusesAPasswordTooBigToBeRightWithoutHashingIt(t *testing.T) {
+	e := newEnv(t)
+	c := e.signUp(t, "alice@example.com")
+	huge := strings.Repeat("x", 5<<20)
+
+	rec := e.changePassword(c, huge, "a brand new passphrase")
+	if rec.Code != http.StatusBadRequest || codeOf(t, rec) != "invalid_request" {
+		t.Errorf("huge current password: %d %s, want 400 invalid_request (not 403 wrong_password: it was hashed)", rec.Code, rec.Body.String())
+	}
+	rec = e.changePassword(c, goodPassword, huge)
+	if rec.Code != http.StatusBadRequest || codeOf(t, rec) != "weak_password" {
+		t.Errorf("huge new password: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := e.login("alice@example.com", goodPassword, fromIP("192.0.2.92")); rec.Code != http.StatusOK {
+		t.Error("a refused change altered the password")
+	}
+}

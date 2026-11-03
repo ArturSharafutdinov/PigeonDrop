@@ -145,6 +145,10 @@ func TestValidatePassword(t *testing.T) {
 		{"257 bytes", strings.Repeat("a", 257), ErrPasswordTooLong},
 		// NFKC turns the fullwidth letters into plain ones (same length), and the ligature "ﬃ" into three.
 		{"compatibility characters", strings.Repeat("ａ", 12), nil},
+		// NFKC makes "𝐀" (four bytes) the plain letter "A" (one byte): 1024 bytes as sent are the 256 allowed once
+		// normalized, which is as much as can come in; a byte more is refused.
+		{"1024 bytes that normalize to 256", strings.Repeat("𝐀", 256), nil},
+		{"1025 bytes", strings.Repeat("𝐀", 256) + "a", ErrPasswordTooLong},
 	}
 	for _, c := range cases {
 		if err := ValidatePassword(c.password); !errors.Is(err, c.want) {
@@ -203,5 +207,37 @@ func TestSlotsAreReleasedAfterEveryOutcome(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("a slot was never released")
+	}
+}
+
+// The server reads up to 8 MiB of any request. A password that big must be refused without being normalized or
+// hashed, which cost time and memory in proportion to its size, for anybody who can send a request.
+func TestAnOversizedPasswordIsRefusedBeforeItIsNormalizedOrHashed(t *testing.T) {
+	huge := strings.Repeat("ａ", 1<<20) // 3 MiB; NFKC would turn it into 1 MiB of plain letters
+
+	if InputSizeOK(huge) || !InputSizeOK(strings.Repeat("a", MaxPasswordInputBytes)) || InputSizeOK(strings.Repeat("a", MaxPasswordInputBytes+1)) {
+		t.Error("InputSizeOK does not stop at MaxPasswordInputBytes")
+	}
+	if err := ValidatePassword(huge); !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("ValidatePassword: %v", err)
+	}
+	// Normalizing allocates a copy; refusing does not.
+	if allocs := testing.AllocsPerRun(3, func() { _ = ValidatePassword(huge) }); allocs != 0 {
+		t.Errorf("ValidatePassword allocated %v times for a password it should refuse by size alone: it normalized it", allocs)
+	}
+
+	h := fastHasher()
+	stored, err := h.Hash(context.Background(), "a long enough password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Hash(context.Background(), huge); !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("Hash: %v", err)
+	}
+	if ok, _, err := h.Verify(context.Background(), stored, huge); ok || !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("Verify: ok=%v err=%v", ok, err)
+	}
+	if err := h.VerifyUnknown(context.Background(), huge); !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("VerifyUnknown: %v", err)
 	}
 }
