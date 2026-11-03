@@ -4,14 +4,21 @@
 # network and starts without downloading anything. Run it with a memory limit of 3 GB and without swap
 # (--memory=3g --memory-swap=3g): memory was measured up to a 60 second recording (STT_COMPARISON.md, 7.4).
 
-FROM python:3.12-slim
+# The tag says which Python this is; the digest is what is pulled (Dependabot moves both).
+FROM python:3.12-slim@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 HF_HOME=/models
-# The same versions as the benchmark in bench/stt, which is where the numbers in STT_COMPARISON.md come from.
-RUN pip install "onnx-asr[cpu,hub]==0.12.0"
-# The model is fetched into HF_HOME once; the permissions let the unprivileged user below read (and, if the
-# library wants to, touch) the cache.
+# onnx-asr 0.12.0 is the version of the benchmark in bench/stt, where the numbers in STT_COMPARISON.md come from;
+# requirements.txt pins it together with everything it pulls in.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+# The model is fetched into HF_HOME once, from the Hugging Face repository that onnx-asr names, and its revision must be
+# the one that was measured: when this step stops with a mismatch the upstream model has changed, so run
+# stt/smoke-synthetic.sh (and the comparison in docs, if the text changed) before moving MODEL_REVISION. The cache
+# then belongs to the unprivileged user below, which only reads it.
+ARG MODEL_REVISION=8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce
 RUN python -c "import onnx_asr; onnx_asr.load_model('nemo-parakeet-tdt-0.6b-v3', quantization='int8')" \
-    && chmod -R a+rwX /models
+    && test "$(cat /models/hub/models--istupakov--parakeet-tdt-0.6b-v3-onnx/refs/main)" = "$MODEL_REVISION" \
+    && chown -R 65532:65532 /models
 ENV HF_HUB_OFFLINE=1
 
 COPY app /app/app

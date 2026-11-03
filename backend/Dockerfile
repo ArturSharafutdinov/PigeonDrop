@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 # The PigeonDrop server as one static binary in a minimal image (no shell, runs as a non-root user).
 
-FROM golang:1.26-alpine AS build
+# Tags say what the images are; the digests are what is pulled (Dependabot moves both). The Go version matches
+# `toolchain` in go.mod, so the build never has to download another one.
+FROM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
 WORKDIR /src
 # Dependencies first, so this layer is reused until go.mod or go.sum change.
 COPY go.mod go.sum ./
@@ -11,7 +13,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/pigeondrop ./cmd/pigeondrop
 RUN mkdir /data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/pigeondrop /pigeondrop
 # STORAGE_DIR must be a persistent volume mounted at /data (recordings go to /data/messages); it is
 # created here and owned by the unprivileged user so that a fresh Docker volume is writable.
