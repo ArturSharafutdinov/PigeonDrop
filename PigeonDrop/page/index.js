@@ -7,14 +7,7 @@ import { px } from '@zos/utils'
 import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos/interaction'
 import { create, id, codec } from '@zos/media'
 import { push } from '@zos/router'
-import {
-  setPageBrightTime,
-  resetPageBrightTime,
-  pauseDropWristScreenOff,
-  resetDropWristScreenOff,
-  pausePalmScreenOff,
-  resetPalmScreenOff,
-} from '@zos/display'
+import { holdScreen, releaseScreen } from '../utils/screen'
 import { newRecordingPath, listRecordings, discardRecording } from '../utils/recordings'
 import {
   pruneRecordings,
@@ -33,10 +26,6 @@ import { MAX_RECORDING_SECONDS } from '../config'
 // extendUploadHold), so a long queue is not cut off, while a stalled upload still
 // lets the screen go dark once nothing has moved for this long.
 const UPLOAD_SCREEN_HOLD_MS = 60 * 1000
-
-// Extra time on the page-brightness timeout beyond a hold: the stopwatch ticks
-// once a second, so an auto-stop can land a moment after the recording limit.
-const SCREEN_SLACK_MS = 5 * 1000
 
 // 75 -> "01:15", 3725 -> "1:02:05". Elapsed time shown on the recording screen.
 function formatElapsed(totalSeconds) {
@@ -195,7 +184,7 @@ Page({
     // Before the recorder starts, so the display can't time out in the gap. Any
     // hold left over from the previous recording's upload is replaced by this one.
     this.cancelUploadHold()
-    this.keepScreenOn(MAX_RECORDING_SECONDS * 1000)
+    holdScreen(MAX_RECORDING_SECONDS * 1000)
 
     const filePath = newRecordingPath()
     // Tell the upload queue this file is still being written, so a retry
@@ -292,37 +281,18 @@ Page({
     this.state.cancelButton.setProperty(prop.VISIBLE, recording)
   },
 
-  // Keeps the display awake for `durationMs`. By default Zepp OS puts the
-  // screen to sleep after ~10 s and then closes the Mini Program, which
-  // silently killed long recordings - and uploads still in progress - before
-  // they were ever sent. Three things can sleep the screen - the page timeout,
-  // lowering the wrist, and resting a palm on it - so all three are suspended.
-  // Every duration is bounded (by the recording limit while recording, by
-  // UPLOAD_SCREEN_HOLD_MS while uploading), so nothing can hold the screen on
-  // (and drain the battery) forever; releaseScreen() undoes it all. Calling this
-  // again replaces the hold that was active.
-  keepScreenOn(durationMs) {
-    this.releaseScreen()
-    this.checkDisplay('setPageBrightTime', setPageBrightTime({ brightTime: durationMs + SCREEN_SLACK_MS }))
-    this.checkDisplay('pauseDropWristScreenOff', pauseDropWristScreenOff({ duration: durationMs }))
-    this.checkDisplay('pausePalmScreenOff', pausePalmScreenOff({ duration: durationMs }))
-  },
-
-  releaseScreen() {
-    resetPageBrightTime()
-    resetDropWristScreenOff()
-    resetPalmScreenOff()
-  },
-
   // The screen stays on while recordings are being sent - after a recording
   // stops, and also for older ones still queued (sent when the app opens or the
   // phone reconnects), which used to be cut off when the screen went dark. Each
   // hold lasts UPLOAD_SCREEN_HOLD_MS and is renewed by upload progress
   // (extendUploadHold). It ends early once everything is sent (showUploadState)
-  // and is replaced if a new recording starts (startRecording).
+  // and is replaced if a new recording starts (startRecording). Every hold is
+  // bounded (by the recording limit while recording, by UPLOAD_SCREEN_HOLD_MS
+  // while uploading), so nothing can keep the screen on and drain the battery
+  // forever; see utils/screen.js for what a hold does.
   holdScreenForUpload() {
     this.cancelUploadHold()
-    this.keepScreenOn(UPLOAD_SCREEN_HOLD_MS)
+    holdScreen(UPLOAD_SCREEN_HOLD_MS)
     this.state.uploadHoldUntil = Date.now() + UPLOAD_SCREEN_HOLD_MS
     this.state.uploadHoldTimer = setTimeout(() => this.endUploadHold(), UPLOAD_SCREEN_HOLD_MS)
   },
@@ -338,21 +308,13 @@ Page({
   endUploadHold() {
     this.cancelUploadHold()
     // A recording owns the screen hold while it runs; never release it from here.
-    if (!this.state.recording) this.releaseScreen()
+    if (!this.state.recording) releaseScreen()
   },
 
   cancelUploadHold() {
     if (this.state.uploadHoldTimer !== null) {
       clearTimeout(this.state.uploadHoldTimer)
       this.state.uploadHoldTimer = null
-    }
-  },
-
-  // Display calls return 0 on success. A failure doesn't stop the recording,
-  // but it is logged because it would bring the old "screen turns off" bug back.
-  checkDisplay(name, result) {
-    if (result !== 0) {
-      console.log('display call failed:', name, result)
     }
   },
 
@@ -399,7 +361,7 @@ Page({
       }
       this.state.recorder = null
       this.state.recording = false
-      this.releaseScreen()
+      releaseScreen()
       setActiveRecording(null)
     }
     if (this.state.uploadHoldTimer !== null) this.endUploadHold()

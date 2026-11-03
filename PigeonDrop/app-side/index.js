@@ -9,17 +9,13 @@ import { handleUploadChunk } from './uploads'
 import { startPairing, pollPairing } from './pairing'
 import { checkServer } from './serverCheck'
 
-// This used to run alongside a parallel @zos/ble/TransferFile receive path
-// (global `transferFile`), removed after it was decided its FileObject - only
-// exposing metadata, never the actual bytes - never did anything beyond
-// silently filling up phone storage.
 const messageBuilder = new MessageBuilder()
 
 AppSideService({
   onInit() {
-    messageBuilder.listen(() => {
-      console.log('messageBuilder listening')
-    })
+    // Nothing to do once listening: Side Service console output is never visible
+    // on the phone, so the only way to report anything is a reply to the watch.
+    messageBuilder.listen(() => {})
 
     // 'request' is MessageBuilder's request/response channel: the watch sends a
     // request() and waits for the response() sent from here. Everything the
@@ -61,6 +57,9 @@ AppSideService({
     })
   },
 
+  // Lifecycle hooks of the Side Service. There is nothing to start or tear down here:
+  // every request is self-contained and the partial uploads in app-side/uploads.js
+  // are dropped by their own time-to-live.
   onRun() {},
 
   onDestroy() {},

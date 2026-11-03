@@ -10,8 +10,8 @@
 // the SaaS and any user-supplied one - receives a standard file instead of
 // Zepp's private framing. Pure ES2015, no platform APIs: only Uint8Array and
 // plain integer maths, so it runs unchanged in the Side Service and in Node.
-// Verified bit-for-bit against a Python reference and strictly decoded by ffmpeg
-// in the spike (branch spike/side-service-ogg).
+// Checked against an independent Ogg reader written from the RFCs
+// (test/helpers/ogg.mjs), and the output decodes under ffmpeg's strict mode.
 
 const ZEPP_HEADER_SIZE = 8
 const PACKETS_PER_PAGE = 50 // 50 x 20 ms = 1 s of audio per Ogg page

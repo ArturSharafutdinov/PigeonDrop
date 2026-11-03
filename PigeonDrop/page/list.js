@@ -61,8 +61,9 @@ Page({
     // Renders one button per recording, stacked top to bottom. The page
     // scrolls automatically once the buttons no longer fit on screen, so
     // there's no explicit limit on how many can be shown here - the total
-    // count is already capped by MAX_RECORDINGS (config.js) before this
-    // list is ever built.
+    // count is already capped before this list is ever built (at most
+    // MAX_RECORDINGS uploaded plus MAX_PENDING_RECORDINGS waiting, both in
+    // config.js; see utils/uploadQueue.js#pruneRecordings).
     recordings.forEach((item, index) => {
       const y = TOP_MARGIN + index * (ITEM_HEIGHT + ITEM_SPACING)
 

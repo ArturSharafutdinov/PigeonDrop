@@ -87,10 +87,6 @@ function writeIndex(index) {
 // A recording not present in the index is, by definition, still pending - so
 // there's nothing to separately track for "pending", and nothing to clean up
 // beyond forgetUpload() below once a file is actually deleted.
-export function isUploaded(fileName) {
-  return readIndex().uploaded.indexOf(fileName) !== -1
-}
-
 export function markUploaded(fileName) {
   const index = readIndex()
   if (index.uploaded.indexOf(fileName) === -1) {

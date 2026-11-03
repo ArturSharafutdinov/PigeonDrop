@@ -15,8 +15,6 @@ App({
   },
 
   onCreate(options) {
-    console.log('app on create invoke')
-
     const { appId } = getPackageInfo()
     const messageBuilder = new MessageBuilder({ appId, appDevicePort: 20, appSidePort: 0, ble })
 
@@ -34,7 +32,6 @@ App({
   },
 
   onDestroy(options) {
-    console.log('app on destroy invoke')
     // Required by MessageBuilder - skipping this leaks the BLE connection.
     this.globalData.messageBuilder && this.globalData.messageBuilder.disConnect()
     ble.removeListener()
