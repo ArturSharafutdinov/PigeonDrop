@@ -14,9 +14,11 @@ const fireTimeouts = (ms) => { const due = timeouts.filter((t) => t.ms === ms); 
 Date.now = () => now
 const S = stubPath('main-page.mjs')
 const LINK = generate('utils/linkProblem.js', {})   // the real texts: what the screen says is what is tested
+const SCREEN = generate('utils/screen.js', { '@zos/display': S })   // the real hold logic on top of the stubbed display
 const PAGE = generate('page/index.js', {
-  '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S, '@zos/display': S,
-  '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S, '../utils/linkProblem': LINK, '../config': S,
+  '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S,
+  '../utils/screen': SCREEN, '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S,
+  '../utils/linkProblem': LINK, '../config': S,
 })
 await import(fileUrl(PAGE))
 const mk = () => Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) })

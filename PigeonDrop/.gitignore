@@ -1,12 +1,13 @@
 .DS_Store
 node_modules/**
+# Your own server address: copy config.example.js to config.js
 config.js
+spike.config.js
 dist/*
 npm-debug.log
 yarn-debug.log*
 yarn-error.log*
 yarn.lock
-package-lock.json
 selenium-debug.log
 .idea
 .vscode

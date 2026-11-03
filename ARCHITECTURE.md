@@ -238,7 +238,6 @@ amazfit/
 ├── PigeonDrop/     — сама мини-программа для часов
 ├── backend/        — сервер на Go (набор B из STACK_COMPARISON.md); см. backend/README.md
 ├── .github/        — workflows/ci.yml (проверки и выкладка Go-сервера), scripts/ (вызов Coolify и его тесты)
-├── todo.md         — исходный черновик идеи очереди загрузки (реализована иначе, см. §2.2)
 ├── API_SPEC.md     — контракт HTTP API сервера (актуален независимо от языка реализации)
 ├── REQUIREMENTS_ANALYSIS.md — анализ требований к будущей SaaS-платформе (стек пока не выбран)
 ├── STACK_COMPARISON.md — сравнение стеков и инструментов для неё; выбор за владельцем

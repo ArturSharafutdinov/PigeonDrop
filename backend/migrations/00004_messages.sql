@@ -1,7 +1,7 @@
 -- +goose Up
--- Recordings received from paired watches (the new /v1 API). The files themselves are in the message store
+-- Recordings received from paired watches (the /v1 API). The files themselves are in the message store
 -- (STORAGE_DIR/messages), named after the message id: <id>.opus is the recording as it was received, <id>.wav
--- the converted copy when conversion worked. The older upload table stays for the prototype's contract.
+-- the converted copy when conversion worked. The tables of the earlier Node prototype are dropped in 00009.
 
 CREATE TABLE messages (
     -- Chosen by the server before the files are written, so that it can name them.
