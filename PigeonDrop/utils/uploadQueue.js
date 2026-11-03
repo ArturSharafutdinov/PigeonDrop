@@ -61,10 +61,50 @@ const PING_TIMEOUT_MS = 10 * 1000
 const PING_RETRIES = 1
 const RETRY_PACING_MS = 300 // pause between two recordings in one sweep
 
-let sweepInFlight = false
-let activeRecording = null // file name of the recording still being written, if any
-let stateListener = null
+// A sweep that shows no sign of life for this long is taken to be dead (its page was torn down, say), so that it cannot
+// keep every later sweep out for the rest of the session. It is longer than the slowest single request.
+const SWEEP_LEASE_MS = 2 * 60 * 1000
+
 let sweepAlert = null // the warning worth interrupting the person for, from the answers of the running sweep (null: none)
+
+// What every copy of this module has to agree on:
+//   activeRecording  file name of the recording still being written, if any
+//   stateListener    the page that shows the progress (see onUploadState)
+//   sweepUntil       a sweep is running until this time; every sign of life renews it, the end of the sweep clears it
+//   unreportedAlert  a storage warning that came while nobody listened, kept for the next listener
+//
+// app.js and every page are separate bundles (a .bin each in the built package), and each carries its own copy of this
+// file, so plain module variables would be separate per bundle. A sweep started by the BLE-reconnect trigger in app.js
+// would then not know which recording the main page is still writing (and upload it half-written), would not be kept out
+// by a sweep the page is running, and would report its progress to nobody. The state therefore lives in the app's global
+// data, where the BLE connection also lives. Where there is no app (before App() has run), a private object is used.
+function newShared() {
+  return { activeRecording: null, stateListener: null, sweepUntil: 0, unreportedAlert: null }
+}
+
+const privateShared = newShared()
+
+function shared() {
+  try {
+    const globals = getApp()._options.globalData
+    if (!globals.uploads) globals.uploads = newShared()
+    return globals.uploads
+  } catch (e) {
+    return privateShared
+  }
+}
+
+function sweepRunning() {
+  return Date.now() < shared().sweepUntil
+}
+
+function sweepAlive() {
+  shared().sweepUntil = Date.now() + SWEEP_LEASE_MS
+}
+
+function sweepOver() {
+  shared().sweepUntil = 0
+}
 
 function readIndex() {
   const raw = readFileSync({ path: UPLOADS_INDEX_FILE, options: { encoding: 'utf8' } })
@@ -111,14 +151,15 @@ function forgetUpload(fileName) {
 // marked uploaded while incomplete) nor let pruning delete it. Pass null when
 // the recording has ended.
 export function setActiveRecording(fileName) {
-  activeRecording = fileName
+  shared().activeRecording = fileName
 }
 
 // Recordings still waiting for the server, newest first. Reads the upload index
 // once, not once per file.
 export function pendingRecordings() {
   const uploaded = readIndex().uploaded
-  return listRecordings().filter((item) => item.fileName !== activeRecording && uploaded.indexOf(item.fileName) === -1)
+  const active = shared().activeRecording
+  return listRecordings().filter((item) => item.fileName !== active && uploaded.indexOf(item.fileName) === -1)
 }
 
 // One listener at most (the main page). Receives:
@@ -133,19 +174,40 @@ export function pendingRecordings() {
 //                                                     or absent (anything else: `message` is the reason)
 //   { state: 'unpaired', pending, revoked }           nothing was sent because the watch is not paired;
 //                                                     revoked is true when the server just refused its token
-// Pass null to unsubscribe.
+//   { state: 'alert', alert }                         a storage warning from a sweep that ran while nobody was
+//                                                     listening (no page open); only `alert` is meant
+// `sending`, `done` and `error` may carry an `alert` as well. Pass null to unsubscribe.
 export function onUploadState(callback) {
-  stateListener = callback
+  const state = shared()
+  state.stateListener = callback
+
+  // The warning is only news once (the next sweep sees no change), so one that came with nobody listening is kept and
+  // handed over now. Not inside this call: the page is still being built.
+  if (callback && state.unreportedAlert) {
+    const alert = state.unreportedAlert
+    state.unreportedAlert = null
+    setTimeout(() => emit({ state: 'alert', alert }), 0)
+  }
 }
 
 function emit(state) {
-  if (!stateListener) return
+  const listener = shared().stateListener
+  if (!listener) {
+    if (state.alert) keepAlert(state.alert)
+    return
+  }
   try {
-    stateListener(state)
+    listener(state)
   } catch (e) {
     // A UI problem must never break uploading.
     console.log('upload state listener failed:', e)
   }
+}
+
+// 'full' (old recordings were deleted) outranks 'nearly_full'.
+function keepAlert(alert) {
+  const state = shared()
+  if (state.unreportedAlert !== 'full') state.unreportedAlert = alert
 }
 
 // Two independent caps: MAX_RECORDINGS bounds the already-uploaded history kept
@@ -155,8 +217,13 @@ function emit(state) {
 // while it's still waiting to reach the server, only once that second cap is
 // actually exceeded. A recording still being written is never touched.
 export function pruneRecordings() {
+  // A sweep sends the oldest waiting recordings first, which are the very ones the waiting cap deletes: never under its feet.
+  // The cap is applied by the next call.
+  if (sweepRunning()) return
+
   const uploaded = readIndex().uploaded
-  const recordings = listRecordings().filter((item) => item.fileName !== activeRecording)
+  const active = shared().activeRecording
+  const recordings = listRecordings().filter((item) => item.fileName !== active)
   const done = recordings.filter((item) => uploaded.indexOf(item.fileName) !== -1)
   const waiting = recordings.filter((item) => uploaded.indexOf(item.fileName) === -1)
 
@@ -175,11 +242,12 @@ export function pruneRecordings() {
 // running, because that upload holds one of the files open and would otherwise
 // record a result for a file that no longer exists.
 export function clearAllRecordings() {
-  if (sweepInFlight) return { removed: 0, busy: true }
+  if (sweepRunning()) return { removed: 0, busy: true }
 
   let removed = 0
+  const active = shared().activeRecording
   listRecordings()
-    .filter((item) => item.fileName !== activeRecording)
+    .filter((item) => item.fileName !== active)
     .forEach((item) => {
       try {
         rmSync({ path: RECORDINGS_DIR + '/' + item.fileName })
@@ -251,6 +319,7 @@ function openReader(path, size) {
 // One request to the phone, retried a couple of times on transport errors (timeout, BLE blip). When the retries
 // run out the error says the phone did not answer (`noPhone`): the phone is where the break is, not the server.
 function requestPhone(messageBuilder, message, timeoutMs, retriesLeft) {
+  sweepAlive()
   return messageBuilder.request(message, { timeout: timeoutMs }).catch((err) => {
     if (retriesLeft <= 0) {
       const failure = err instanceof Error ? err : new Error(String(err))
@@ -384,14 +453,14 @@ function shortReason(err) {
 }
 
 // Sends every not-yet-uploaded recording, oldest first, strictly one at a time
-// and one chunk at a time. sweepInFlight stops the three retry triggers (new
+// and one chunk at a time. A running sweep (see sweepRunning) stops the three retry triggers (new
 // recording, BLE reconnect, app open) from starting a second, competing sweep.
 // A transport/server failure stops the sweep: if the phone or server is
 // unreachable, hammering every other pending recording at it would only waste
 // battery - the next trigger tries again. A failure of one file itself (see
 // fileError) only skips that file.
 export function retryPendingUploads() {
-  if (sweepInFlight) return
+  if (sweepRunning()) return
 
   const pending = pendingRecordings().sort((a, b) => a.timestamp - b.timestamp)
   if (pending.length === 0) return
@@ -402,7 +471,7 @@ export function retryPendingUploads() {
     return
   }
 
-  sweepInFlight = true
+  sweepAlive()
   sweepAlert = null
   const unreadable = [] // files this sweep could not read, reported when it ends
   emit({ state: 'connecting', pending: pending.length })
@@ -410,7 +479,7 @@ export function retryPendingUploads() {
   const sendFrom = (i) => {
     if (i >= pending.length) return Promise.resolve()
     const item = pending[i]
-    if (item.fileName === activeRecording) return sendFrom(i + 1)
+    if (item.fileName === shared().activeRecording) return sendFrom(i + 1)
 
     const next = () => delay(RETRY_PACING_MS).then(() => sendFrom(i + 1))
 
@@ -449,7 +518,7 @@ export function retryPendingUploads() {
   phoneCheck
     .then(() => sendFrom(0))
     .then(() => {
-      sweepInFlight = false
+      sweepOver()
       if (unreadable.length > 0) {
         emit({ state: 'error', message: shortReason(unreadable[0]), pending: pendingRecordings().length, alert: sweepAlert })
       } else {
@@ -462,7 +531,7 @@ export function retryPendingUploads() {
       if (pendingRecordings().some((item) => sent.indexOf(item.fileName) === -1)) retryPendingUploads()
     })
     .catch((err) => {
-      sweepInFlight = false
+      sweepOver()
       console.log('retryPendingUploads: sweep stopped:', err)
       if (err && err.unauthorized) {
         clearDevice()
@@ -475,11 +544,11 @@ export function retryPendingUploads() {
         return
       }
       if (err && err.rateLimited) {
-        emit({ state: 'error', message: 'Слишком много загрузок.\nПовторите позже', pending: pendingRecordings().length })
+        emit({ state: 'error', message: 'Слишком много загрузок.\nПовторите позже', pending: pendingRecordings().length, alert: sweepAlert })
         return
       }
       // Which link broke, for the screen (utils/linkProblem.js): `message` stays the technical reason.
       const kind = err && err.noPhone ? 'phone' : err && err.noServer ? 'server' : undefined
-      emit({ state: 'error', kind: kind, message: shortReason(err), pending: pendingRecordings().length })
+      emit({ state: 'error', kind: kind, message: shortReason(err), pending: pendingRecordings().length, alert: sweepAlert })
     })
 }

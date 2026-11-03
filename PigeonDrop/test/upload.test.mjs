@@ -30,7 +30,6 @@ async function world() {
   const Q = await import(fileUrl(QUEUE) + '?t=' + n)
   const U = await import(fileUrl(UPLOADS) + '?t=' + n)
   const w = { Q, U, states: [], requests: [], pings: [], pingFails: new Set(), pingReply: null, posts: [], inflight: 0, maxInflight: 0, failRequests: new Set(), serverReply: null, serverStatus: 200, serverThrows: false, replyFor: null, hooks: {}, now: Date.now() }
-  Q.onUploadState((s) => w.states.push(s))
   const builder = {
     request: async (msg, opts) => {
       w.inflight++; w.maxInflight = Math.max(w.maxInflight, w.inflight)
@@ -48,7 +47,9 @@ async function world() {
       } finally { w.inflight-- }
     },
   }
-  globalThis.getApp = () => ({ _options: { globalData: { messageBuilder: builder } } })
+  w.globalData = { messageBuilder: builder }   // what the app's pages and app.js share (the queue keeps its shared state here too)
+  globalThis.getApp = () => ({ _options: { globalData: w.globalData } })
+  Q.onUploadState((s) => w.states.push(s))     // after getApp: the listener is kept in the global data
   globalThis.fetch = async (o) => {
     const body = JSON.parse(o.body); w.posts.push({ url: o.url, auth: o.headers && o.headers.Authorization, ...body })
     if (w.serverThrows) throw new Error('Network down')

@@ -8,6 +8,7 @@ import { onKey, KEY_SHORTCUT, KEY_EVENT_CLICK, KEY_EVENT_LONG_PRESS } from '@zos
 import { create, id, codec } from '@zos/media'
 import { push } from '@zos/router'
 import { holdScreen, releaseScreen } from '../utils/screen'
+import { playAudio, detachPlayback } from '../utils/player'
 import { newRecordingPath, listRecordings, discardRecording } from '../utils/recordings'
 import {
   pruneRecordings,
@@ -41,7 +42,7 @@ Page({
     recording: false, // true while the Recorder is actively capturing audio
     currentFile: null, // data:// path of the recording currently in progress
     recorder: null, // active Recorder instance, or null when idle
-    player: null, // lazily created Player instance, reused across plays (see getPlayer)
+    playback: null, // this page's callbacks for the shared Player (utils/player.js), created on the first play
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
     settingsButton: null, // "Настройки" and "Список записей" are hidden while recording (see showControls)
     listButton: null,
@@ -187,13 +188,26 @@ Page({
     holdScreen(MAX_RECORDING_SECONDS * 1000)
 
     const filePath = newRecordingPath()
+    const fileName = filePath.split('/').pop()
     // Tell the upload queue this file is still being written, so a retry
     // sweep (e.g. triggered by a BLE reconnect mid-recording) can't upload or
     // prune a half-finished recording.
-    setActiveRecording(filePath.split('/').pop())
-    const recorder = create(id.RECORDER)
-    recorder.setFormat(codec.OPUS, { target_file: filePath })
-    recorder.start()
+    setActiveRecording(fileName)
+    let recorder
+    try {
+      recorder = create(id.RECORDER)
+      recorder.setFormat(codec.OPUS, { target_file: filePath })
+      recorder.start()
+    } catch (e) {
+      // Typically "Permission Denied device:os.mic" or a recorder that is busy. Nothing is being recorded, so nothing
+      // may stay claimed: not the file in the queue, not the screen, and no empty file left behind.
+      console.log('recording could not be started:', e)
+      setActiveRecording(null)
+      releaseScreen()
+      discardRecording(fileName)
+      this.updateStatus('Не удалось начать\nзапись\n\n' + this.idleText())
+      return
+    }
 
     this.state.recorder = recorder
     this.state.currentFile = filePath
@@ -240,10 +254,17 @@ Page({
   // the buttons back to the normal ones.
   endRecording() {
     this.stopStopwatch()
-    this.state.recorder.stop()
+    const recorder = this.state.recorder
+    // The page's state first: a recorder that fails to stop must not leave it believing a recording is still running.
+    // What was written so far is still a recording (the phone trims a cut-off one to its complete packets).
     this.state.recorder = null
     this.state.recording = false
     this.showControls(false)
+    try {
+      recorder.stop()
+    } catch (e) {
+      console.log('recorder.stop failed:', e)
+    }
   },
 
   // "Отмена": the recording in progress is thrown away. The file is deleted (the queue and the list never see
@@ -352,6 +373,7 @@ Page({
   // sent by the app-open retry in build() the next time the app starts.
   onDestroy() {
     onUploadState(null)
+    detachPlayback(this.state.playback)
     this.stopStopwatch()
     if (this.state.recording && this.state.recorder) {
       try {
@@ -423,41 +445,17 @@ Page({
     this.playFile(recordings[0].filePath)
   },
 
-  // Lazily creates a single Player instance and reuses it for every playback
-  // on this page. Creating a new Player per play used to fail with
-  // "cannot read property 'addEventListener' of undefined" on the second
-  // call - the hardware only allows one Player alive at a time, and the
-  // previous one wasn't released yet. Reusing the same instance and just
-  // re-pointing it at a new file (setSource + prepare) avoids that entirely.
-  getPlayer() {
-    if (!this.state.player) {
-      const player = create(id.PLAYER)
-
-      player.addEventListener(player.event.PREPARE, (result) => {
-        if (result) {
-          player.start()
-        } else {
-          this.updateStatus('Ошибка чтения\nзаписи\n\n' + this.idleText())
-        }
-      })
-
-      player.addEventListener(player.event.COMPLETE, () => {
-        player.stop()
-        this.updateStatus(this.idleText())
-      })
-
-      this.state.player = player
-    }
-
-    return this.state.player
-  },
-
-  // Points the shared Player at a given file and starts the prepare/play flow.
+  // Plays a recording on the app's one shared Player (see utils/player.js for why it
+  // is shared with the list page) and keeps the status line in step with it.
   playFile(filePath) {
     this.updateStatus('Воспроизведение...')
-    const player = this.getPlayer()
-    player.setSource(player.source.FILE, { file: filePath })
-    player.prepare()
+    if (!this.state.playback) {
+      this.state.playback = {
+        onError: () => this.updateStatus('Ошибка чтения\nзаписи\n\n' + this.idleText()),
+        onComplete: () => this.updateStatus(this.idleText()),
+      }
+    }
+    playAudio(filePath, this.state.playback)
   },
 
   updateStatus(text) {

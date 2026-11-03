@@ -16,7 +16,15 @@ export const createWidget = (type, opts) => {
 }
 export const onKey = () => {}
 export const push = (o) => log.push('push ' + o.url + ' ' + (o.params || ''))
-export const create = (what) => ({ setFormat: () => log.push('recorder.setFormat'), start: () => log.push('recorder.start'), stop: () => log.push('recorder.stop') })
+export const fault = { on: null }          // 'create' | 'start' | 'stop': the recorder call that throws (a refused microphone permission, say)
+export const create = (what) => {
+  if (fault.on === 'create') throw new Error('Permission Denied device:os.mic')
+  return {
+    setFormat: () => log.push('recorder.setFormat'),
+    start: () => { if (fault.on === 'start') throw new Error('start failed'); log.push('recorder.start') },
+    stop: () => { if (fault.on === 'stop') throw new Error('stop failed'); log.push('recorder.stop') },
+  }
+}
 export const setPageBrightTime = (o) => { log.push('setPageBrightTime ' + o.brightTime); return displayResult }
 export const resetPageBrightTime = () => { log.push('resetPageBrightTime'); return 0 }
 export const pauseDropWristScreenOff = (o) => { log.push('pauseDropWristScreenOff ' + o.duration); return displayResult }
@@ -40,3 +48,7 @@ export const MAX_RECORDING_SECONDS = 5
 export let paired = true
 export const setPaired = (v) => { paired = v }
 export const isPaired = () => paired
+export const playback = []                  // every playAudio() call: { file, callbacks } (not in `log`, which some tests compare exactly)
+export const detached = []                  // the callbacks every detachPlayback() call was given
+export const playAudio = (file, callbacks) => { playback.push({ file, callbacks }) }
+export const detachPlayback = (callbacks) => { detached.push(callbacks) }

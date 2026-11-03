@@ -33,7 +33,9 @@ since (or was misread). `codec.OPUS` is the only supported recorder format.
 
 **Only one live `Player` at a time.** Creating a second `Player` (`create(id.PLAYER)`) throws
 `cannot read property 'addEventListener' of undefined`. Create it lazily once and reuse it with `setSource` / `prepare`.
-The documentation does not mention this limit. *device.*
+The `Player` has no `destroy`, and no way to remove a listener, so add the listeners once. Pages cannot share a module
+variable (see "Every page is its own bundle" below), so with two pages that play audio the one `Player` has to live in
+`getApp()._options.globalData`. The documentation does not mention this limit. *device (the limit) + docs checked.*
 
 ## Screen and power
 
@@ -84,6 +86,19 @@ read the bytes, so it could not carry a watch -> phone upload. `MessageBuilder` 
 Make them distinguishable: ping the phone first (any reply means it is there), and have the Side Service give its own network
 calls a deadline that is always shorter than the device's wait, so that "the phone is there but the server is not" comes back as a
 reply and silence means the phone side. *device (design that worked, values are estimates).*
+
+## App structure
+
+**Every page is its own bundle, so module variables are not shared between pages.** The build (`zeus build`) compiles `app.js`
+and each page to a separate `.bin`, and each one carries its own copy of every module it imports: looking at the bytecode of a
+PigeonDrop build, the upload queue's code (and its variable names) is present in `app.bin`, `page/index.bin` and `page/pair.bin`
+alike. A `let` at the top of a module is therefore one variable per bundle. State that several pages (or `app.js`) must agree
+on, such as "which recording is being written", "is a sweep running" or "who listens", belongs in
+`getApp()._options.globalData`, which `App({ globalData })` creates for exactly this reason (the life-cycle guide says so:
+"Initialize the app global data for use by all pages"). `globalData` lives as long as the app, a page's variables only as long
+as the page: give shared flags an expiry so that a page torn down mid-task cannot leave one set for the rest of the session.
+There is no `onShow`/`onHide` in the device-app `Page` life cycle (`onInit`, `build`, `onDestroy`), and the documentation does
+not say whether `back()` rebuilds the page underneath. *build output inspected, not tested on a watch; docs checked.*
 
 ## Types and tooling
 
