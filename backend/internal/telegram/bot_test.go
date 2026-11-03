@@ -731,3 +731,85 @@ func TestRunStopsWhenItsContextEnds(t *testing.T) {
 	e.api.polls(t, 1)
 	stop()
 }
+
+// --- the same update handed over again
+
+// A restarted server starts the bot from offset 0, and Telegram hands over again every update it was not told to
+// forget: the batch that was being handled when the old process died (see Bot.offset). Handling them a second time
+// must leave things as the first time did.
+func TestUpdatesHandedOverAgainAfterARestartChangeNothing(t *testing.T) {
+	e := newBotEnv(t)
+	user := e.user("ann@example.com", "en")
+	code := e.code(user, 10*time.Minute)
+	press := &CallbackQuery{
+		ID: "q1", From: &User{ID: 100}, Message: &Message{MessageID: 55, Chat: Chat{ID: 100, Type: "private"}}, Data: SeenData(uuid.New()),
+	}
+	batch := []Update{
+		{UpdateID: 1, Message: ptr(privateMessage(100, "/start "+code))},
+		{UpdateID: 2, CallbackQuery: press},
+	}
+
+	e.api.batches = [][]Update{batch}
+	stop := e.run(t)
+	e.api.polls(t, 2)
+	stop()
+	linkedBefore, ok := e.link(user)
+	if !ok {
+		t.Fatal("the chat was not linked the first time")
+	}
+	usedBefore := e.codeState(code).UsedAt
+
+	// The new process: a bot that knows nothing of the first one, given the same batch. The message under the button
+	// was deleted the first time.
+	e.api.deleteError = map[int64]error{55: &Error{Kind: Rejected, Method: "deleteMessage", Code: 400, Description: "Bad Request: message to delete not found"}}
+	again := NewBot(e.api, e.q, db.InTx(e.pool), e.bot.logger, e.bot.settings)
+	again.Now = func() time.Time { return botNow.Add(time.Minute) }
+	again.username = "pigeondrop_bot"
+	e.bot = again
+	e.api.batches = [][]Update{batch}
+	stop = e.run(t)
+	e.api.polls(t, 2)
+	stop()
+
+	if linkedAfter, ok := e.link(user); !ok || !linkedAfter.LinkedAt.Equal(linkedBefore.LinkedAt) {
+		t.Errorf("the link after the repeat: %+v (linked: %v), before: %+v", linkedAfter, ok, linkedBefore)
+	}
+	if usedAfter := e.codeState(code).UsedAt; usedAfter == nil || !usedAfter.Equal(*usedBefore) {
+		t.Errorf("the repeat changed when the code was used: %v -> %v", usedBefore, usedAfter)
+	}
+	var links int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM telegram_links`).Scan(&links); err != nil || links != 1 {
+		t.Errorf("%d links (%v), want 1", links, err)
+	}
+	if replies := e.api.replies(); len(replies) != 2 || replies[0].Text != replies[1].Text || !strings.Contains(replies[1].Text, "Done") {
+		t.Errorf("the person should be told the same thing both times: %+v", replies)
+	}
+	e.api.mu.Lock()
+	defer e.api.mu.Unlock()
+	if len(e.api.answers) != 2 || e.api.answers[1].Text != "" || e.api.answers[1].Alert {
+		t.Errorf("a press of the button handed over again must be answered like the first: %+v", e.api.answers)
+	}
+	if got := e.api.offsets; len(got) < 3 || got[0] != 0 || got[2] != 0 {
+		t.Errorf("offsets = %v: both processes should have started from 0", got)
+	}
+}
+
+// When the supervisor starts Run again after a panic, the bot must not ask for the update that caused it: handing it
+// over again would panic again, for ever.
+func TestARunStartedAgainOnTheSameBotContinuesAfterTheUpdatesItHandled(t *testing.T) {
+	e := newBotEnv(t)
+	e.api.batches = [][]Update{{{UpdateID: 10, Message: ptr(privateMessage(100, "hello"))}, {UpdateID: 11, Message: ptr(privateMessage(100, "hello"))}}}
+
+	stop := e.run(t)
+	e.api.polls(t, 2)
+	stop()
+	stop = e.run(t)
+	e.api.polls(t, 1)
+	stop()
+
+	e.api.mu.Lock()
+	defer e.api.mu.Unlock()
+	if got := e.api.offsets; len(got) != 3 || got[0] != 0 || got[1] != 12 || got[2] != 12 {
+		t.Errorf("offsets = %v, want 0, 12, 12: the second Run must carry on from where the first stopped", got)
+	}
+}

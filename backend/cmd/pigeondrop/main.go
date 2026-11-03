@@ -33,6 +33,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/httpapi"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/storage"
+	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/supervise"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/telegram"
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/transcribe"
 )
@@ -130,7 +131,11 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	queries := dbgen.New(pool)
-	go purgeExpired(ctx, queries, logger)
+	// Every background loop below runs under supervise.Run: a panic in a goroutine of its own is not caught by the
+	// HTTP server's recovery and would end the whole process.
+	go supervise.Run(ctx, logger, "purge of expired entries", supervise.Settings{}, func(ctx context.Context) {
+		purgeExpired(ctx, queries, logger)
+	})
 
 	messages, err := storage.NewDisk(filepath.Join(cfg.StorageDir, "messages"))
 	if err != nil {
@@ -161,6 +166,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			Pinger: pool, DB: queries, Messages: messages, Logger: logger, DefaultServerURL: cfg.DefaultServerURL,
 			Transcription: intake, TranscriptionWake: wake,
 			Telegram: telegramBot, TelegramDelivery: tg.intake, TelegramWake: tg.wake,
+			// AllowedOrigins feeds only the CSRF cross-origin check; the server sends no CORS headers.
 			Tx: db.InTx(pool), CookieSecure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins, TrustProxyHeaders: cfg.TrustProxyHeaders,
 			Storage: httpapi.StorageLimits{
 				MaxAudioBytes: httpapi.DefaultStorageLimits.MaxAudioBytes, AccountBytes: cfg.AccountStorageBytes, WarnPercent: httpapi.DefaultStorageLimits.WarnPercent,
@@ -221,7 +227,7 @@ func startSpeechRecognition(ctx context.Context, cfg config.Config, q dbgen.Quer
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		worker.Run(workerCtx)
+		supervise.Run(workerCtx, logger, "speech recognition worker", supervise.Settings{}, worker.Run)
 	}()
 	logger.Info("speech recognition is on", "service", cfg.SpeechURL, "timeout", cfg.SpeechTimeout, "max_attempts", cfg.SpeechMaxAttempts, "max_audio", cfg.SpeechMaxAudio)
 
@@ -263,11 +269,14 @@ func startTelegram(ctx context.Context, cfg config.Config, q dbgen.Querier, tx t
 
 	botCtx, cancel := context.WithCancel(ctx)
 	var running sync.WaitGroup
-	for _, run := range []func(context.Context){bot.Run, deliverer.Run} {
+	for _, loop := range []struct {
+		name string
+		run  func(context.Context)
+	}{{"telegram bot", bot.Run}, {"telegram delivery worker", deliverer.Run}} {
 		running.Add(1)
 		go func() {
 			defer running.Done()
-			run(botCtx)
+			supervise.Run(botCtx, logger, loop.name, supervise.Settings{}, loop.run)
 		}()
 	}
 	logger.Info("telegram is on", "wait_for_text", cfg.TelegramWait, "timeout", cfg.TelegramTimeout)
