@@ -317,3 +317,37 @@ console.log('--- 12. playback goes through the shared player (utils/player.js) -
   page.onDestroy()
   ok(stubs.detached[stubs.detached.length - 1] === callbacks, '12e: destroying the page detaches them, so a late event cannot touch its widgets')
 }
+
+console.log('--- 13. the recorder cannot be started (e.g. the microphone permission is refused) ---')
+for (const where of ['create', 'start']) {
+  let page = mk(); page.build(); reset(); timeouts.length = 0
+  stubs.fault.on = where
+  const logged = []; const orig = console.log; console.log = (...a) => logged.push(a.join(' '))
+  let threw = false
+  try { page.toggleRecording() } catch (e) { threw = true }
+  console.log = orig; stubs.fault.on = null
+  ok(!threw, '13/' + where + ': the key press does not throw')
+  ok(page.state.recording === false && page.state.recorder === null && page.state.currentFile === null, '13/' + where + ': the page is not recording')
+  ok(stubs.log.includes('setActive null') && stubs.log.indexOf('setActive null') > stubs.log.indexOf('setActive voice_1.opus'), '13/' + where + ': the queue is told no recording is being written -> ' + stubs.log.filter((l) => l.startsWith('setActive')).join(' | '))
+  ok(released() && page.state.uploadHoldTimer === null && holdTimers() === 0, '13/' + where + ': the screen hold is let go')
+  ok(stubs.log.some((l) => l.startsWith('discard ')), '13/' + where + ': the file the recorder may have created is removed')
+  ok(last() === 'Не удалось начать\nзапись\n\n' + page.idleText(), '13/' + where + ': the person is told -> ' + JSON.stringify(last()))
+  ok(logged.some((l) => l.startsWith('recording could not be started')), '13/' + where + ': and it is logged')
+  reset(); page.toggleRecording()
+  ok(page.state.recording === true && stubs.log.includes('recorder.start'), '13/' + where + ': the next press records normally')
+  page.onDestroy()
+}
+
+console.log('--- 14. the recorder fails to stop ---')
+{ const page = mk(); page.build(); page.toggleRecording(); reset()
+  stubs.fault.on = 'stop'
+  const logged = []; const orig = console.log; console.log = (...a) => logged.push(a.join(' '))
+  let threw = false
+  try { page.toggleRecording() } catch (e) { threw = true }
+  console.log = orig; stubs.fault.on = null
+  ok(!threw, '14: stopping does not throw')
+  ok(page.state.recording === false && page.state.recorder === null, '14: the page no longer believes it is recording')
+  ok(cleared >= 1 && page.state.ticker === null, '14: the stopwatch is stopped')
+  ok(stubs.log.includes('setActive null') && stubs.log.includes('pruneRecordings') && stubs.log.includes('retryPendingUploads'), '14: what was written is kept and sent like any recording -> ' + stubs.log.join(' | '))
+  ok(logged.some((l) => l.startsWith('recorder.stop failed')), '14: the failure is logged')
+  ok(page.state.uploadHoldTimer !== null || stubs.log.includes('resetPageBrightTime'), '14: the screen is not left held for a recording that is over') }

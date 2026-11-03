@@ -16,6 +16,7 @@ import { px } from '@zos/utils'
 import { back } from '@zos/router'
 import { getDeviceInfo } from '@zos/device'
 import { saveDevice } from '../utils/device'
+import { clearStorageState } from '../utils/storageState'
 import { retryPendingUploads } from '../utils/uploadQueue'
 import { holdScreen, releaseScreen } from '../utils/screen'
 import { problemText, PHONE, SERVER } from '../utils/linkProblem'
@@ -215,6 +216,13 @@ Page({
 
   paired(reply) {
     saveDevice({ token: reply.deviceToken, deviceId: reply.deviceId })
+    // What the server last said about the storage was about the account this watch was paired with before, which may
+    // be a different one; the first upload for the new account says it afresh.
+    try {
+      clearStorageState()
+    } catch (e) {
+      console.log('could not forget the old storage warning:', e)
+    }
     this.setStatus('Часы привязаны\nЗаписи отправятся\nавтоматически')
     releaseScreen()
     // Recordings made before pairing have been waiting; send them now.

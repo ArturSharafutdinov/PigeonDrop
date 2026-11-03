@@ -14,6 +14,7 @@ export const getDeviceInfo = () => { if (info.throws) throw new Error('no device
 export const saved = []
 export const saveDevice = (d) => { saved.push(d); calls.push('saveDevice') }
 export const retryPendingUploads = () => { calls.push('retryPendingUploads') }
+export const clearStorageState = () => { calls.push('clearStorageState') }
 export const holds = []
 export const holdScreen = (ms) => { holds.push(ms); calls.push('holdScreen') }
 export const releaseScreen = () => { calls.push('releaseScreen') }

@@ -188,13 +188,26 @@ Page({
     holdScreen(MAX_RECORDING_SECONDS * 1000)
 
     const filePath = newRecordingPath()
+    const fileName = filePath.split('/').pop()
     // Tell the upload queue this file is still being written, so a retry
     // sweep (e.g. triggered by a BLE reconnect mid-recording) can't upload or
     // prune a half-finished recording.
-    setActiveRecording(filePath.split('/').pop())
-    const recorder = create(id.RECORDER)
-    recorder.setFormat(codec.OPUS, { target_file: filePath })
-    recorder.start()
+    setActiveRecording(fileName)
+    let recorder
+    try {
+      recorder = create(id.RECORDER)
+      recorder.setFormat(codec.OPUS, { target_file: filePath })
+      recorder.start()
+    } catch (e) {
+      // Typically "Permission Denied device:os.mic" or a recorder that is busy. Nothing is being recorded, so nothing
+      // may stay claimed: not the file in the queue, not the screen, and no empty file left behind.
+      console.log('recording could not be started:', e)
+      setActiveRecording(null)
+      releaseScreen()
+      discardRecording(fileName)
+      this.updateStatus('Не удалось начать\nзапись\n\n' + this.idleText())
+      return
+    }
 
     this.state.recorder = recorder
     this.state.currentFile = filePath
@@ -241,10 +254,17 @@ Page({
   // the buttons back to the normal ones.
   endRecording() {
     this.stopStopwatch()
-    this.state.recorder.stop()
+    const recorder = this.state.recorder
+    // The page's state first: a recorder that fails to stop must not leave it believing a recording is still running.
+    // What was written so far is still a recording (the phone trims a cut-off one to its complete packets).
     this.state.recorder = null
     this.state.recording = false
     this.showControls(false)
+    try {
+      recorder.stop()
+    } catch (e) {
+      console.log('recorder.stop failed:', e)
+    }
   },
 
   // "Отмена": the recording in progress is thrown away. The file is deleted (the queue and the list never see

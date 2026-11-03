@@ -75,7 +75,7 @@ globalThis.clearTimeout = (id) => { timers = timers.filter((t) => t.id !== id) }
 Date.now = () => now
 const S = stubPath('pair-page.mjs')
 const LINK = generate('utils/linkProblem.js', {})   // the real texts: what the screen says is what is tested
-const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': LINK })
+const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/storageState': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': LINK })
 await import(fileUrl(PAGE))
 
 // A scripted phone: each request waits for the test to answer it.
@@ -115,6 +115,7 @@ console.log('4. the happy path: code, QR, polling, approval, token saved')
   ok(stubs.saved.length === 1 && stubs.saved[0].token === 'pdd_secret_token' && stubs.saved[0].deviceId === 'dev-id', 'approved: the token is saved -> ' + JSON.stringify(stubs.saved))
   ok(/привязаны/.test(status()) && !status().includes('pdd_'), 'the screen says so, without showing the token -> ' + JSON.stringify(status()))
   ok(stubs.calls.includes('retryPendingUploads') && stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), 'recordings that were waiting are sent, and the screen is released')
+  ok(stubs.calls.indexOf('saveDevice') < stubs.calls.indexOf('clearStorageState') && stubs.calls.indexOf('clearStorageState') < stubs.calls.indexOf('retryPendingUploads'), 'the storage warning about the previous account is forgotten before the first upload for the new one -> ' + stubs.calls.filter((c) => /Device|Storage|retry/.test(c)).join(' '))
   ok(JSON.stringify(timerDelays()) === '[2500]', 'then, after a moment, it leaves the screen -> ' + JSON.stringify(timerDelays()))
   ok(!stubs.calls.includes('back'), 'it does not leave before that'); await fire(2500)
   ok(stubs.calls.includes('back'), '...and goes back to settings')
