@@ -2,7 +2,7 @@
 
 import fs from 'fs'; import path from 'path'; import { fileURLToPath } from 'url'
 import * as stubs from './stubs/storage-page.mjs'
-import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+import { generate, fileUrl, stubPath, i18nModule } from './helpers/load.mjs'
 
 let failures = 0
 const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failures++ }
@@ -13,7 +13,7 @@ let timers = [], nextId = 1
 globalThis.setTimeout = (fn, ms) => { const id = nextId++; timers.push({ id, fn, ms }); return id }
 globalThis.clearTimeout = (id) => { timers = timers.filter((t) => t.id !== id) }
 const S = stubPath('storage-page.mjs')
-const PAGE = generate('page/storage.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/sensor': S, '../utils/storageState': S, '../utils/screen': S })
+const PAGE = generate('page/storage.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/sensor': S, '../utils/storageState': S, '../utils/screen': S, '../i18n': i18nModule() })
 await import(fileUrl(PAGE))
 
 const open = (params) => {

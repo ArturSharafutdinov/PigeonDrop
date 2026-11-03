@@ -41,6 +41,7 @@ import { RECORDINGS_DIR, listRecordings } from './recordings'
 import { getDeviceToken, isPaired, clearDevice } from './device'
 import { storageStateOf, getStorageState, saveStorageState, clearStorageState } from './storageState'
 import { MAX_RECORDINGS, MAX_PENDING_RECORDINGS } from '../config'
+import { t } from '../i18n'
 
 const UPLOADS_INDEX_FILE = 'uploads.json'
 
@@ -544,7 +545,7 @@ export function retryPendingUploads() {
         return
       }
       if (err && err.rateLimited) {
-        emit({ state: 'error', message: 'Слишком много загрузок.\nПовторите позже', pending: pendingRecordings().length, alert: sweepAlert })
+        emit({ state: 'error', message: t('link.rate_limited'), pending: pendingRecordings().length, alert: sweepAlert })
         return
       }
       // Which link broke, for the screen (utils/linkProblem.js): `message` stays the technical reason.

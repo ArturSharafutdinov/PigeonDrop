@@ -1,4 +1,4 @@
-// Pairing screen: connects this watch to a person's account. Reached from "Привязать часы" on
+// Pairing screen: connects this watch to a person's account. Reached from "Pair the watch" on
 // page/settings.js.
 //
 // It follows RFC 8628 (the device authorization grant), with the phone's Side Service making the
@@ -20,6 +20,7 @@ import { clearStorageState } from '../utils/storageState'
 import { retryPendingUploads } from '../utils/uploadQueue'
 import { holdScreen, releaseScreen } from '../utils/screen'
 import { problemText, PHONE, SERVER } from '../utils/linkProblem'
+import { t } from '../i18n'
 
 const REQUEST_TIMEOUT = 15000
 const DEFAULT_INTERVAL_S = 5
@@ -47,7 +48,7 @@ Page({
       y: px(40),
       w: px(480),
       h: px(70),
-      text: 'Привязка часов',
+      text: t('pair.title'),
       text_size: px(26),
       color: 0xffffff,
       align_h: align.CENTER_H,
@@ -62,7 +63,7 @@ Page({
       y: px(355),
       w: px(480),
       h: px(110),
-      text: 'Связь с телефоном\nи сервером...',
+      text: t('pair.connecting'),
       text_size: px(24),
       color: 0xffffff,
       align_h: align.CENTER_H,
@@ -126,10 +127,10 @@ Page({
   // What to tell the person when no code could be had: the phone not answering and the phone not reaching the
   // server need different things from them (utils/linkProblem.js); anything else the server said has its own words.
   failureText(reply) {
-    if (reply && reply.code === 'too_many_attempts') return 'Слишком много попыток.\nПодождите'
+    if (reply && reply.code === 'too_many_attempts') return t('pair.too_many')
     if (reply && reply.noPhone) return problemText(PHONE)
     if (reply && reply.noServer) return problemText(SERVER)
-    return 'Не удалось получить\nкод привязки'
+    return t('pair.no_code')
   },
 
   onCode(reply) {
@@ -170,7 +171,7 @@ Page({
       bg_h: px(210),
       bg_radius: px(12),
     })
-    this.setStatus('Код: ' + reply.userCode + '\nОтсканируйте QR\nи подтвердите')
+    this.setStatus(t('pair.scan', { code: reply.userCode }))
     this.later(() => this.poll(), this.interval(reply.interval))
   },
 
@@ -223,7 +224,7 @@ Page({
     } catch (e) {
       console.log('could not forget the old storage warning:', e)
     }
-    this.setStatus('Часы привязаны\nЗаписи отправятся\nавтоматически')
+    this.setStatus(t('pair.done'))
     releaseScreen()
     // Recordings made before pairing have been waiting; send them now.
     retryPendingUploads()
@@ -238,7 +239,7 @@ Page({
 
   expired() {
     this.clearTimer()
-    this.setStatus('Код истёк.\nОткройте «Привязать\nчасы» заново')
+    this.setStatus(t('pair.expired'))
     releaseScreen()
   },
 })

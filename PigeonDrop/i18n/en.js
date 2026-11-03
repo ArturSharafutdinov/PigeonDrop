@@ -1,0 +1,69 @@
+// English texts of the watch app: the default language, used for every system language except Russian (and for any
+// key the Russian table lacks). Lines are broken by hand to fit the round 480 px display at the size each text is shown in.
+export default {
+  // Main page (page/index.js)
+  'main.settings': 'Settings',
+  'main.list': 'Recordings',
+  'main.cancel': 'Cancel',
+  'main.idle': 'Click to record\nLong press to play\nthe last one',
+  'main.start_failed': 'Could not start\nrecording',
+  'main.sending_wait': 'Sending...\nQueued: {pending}',
+  'main.saved_unpaired': 'Saved. Watch is not\npaired: Settings\n→ Pair the watch',
+  'main.limit_reached': 'Recording limit\nreached',
+  'main.sent': 'Sent',
+  'main.cancelled': 'Recording cancelled',
+  'main.cancel_failed': 'Could not cancel:\nthe recording is saved\nand will be sent',
+  'main.recording': 'Recording\n{elapsed}\nPress again\nto stop',
+  'main.connecting': 'Connecting to phone...\nQueued: {pending}',
+  'main.sending': 'Sending {index} of {count}\npart {chunk} of {total}',
+  'main.queued': 'Queued: {pending}',
+  'main.send_failed': 'Could not send\n{message}\nQueued: {pending}',
+  'main.pairing_revoked': 'Pairing was revoked',
+  'main.not_paired': 'Watch is not paired',
+  'main.go_pair': 'Settings →\nPair the watch',
+  'main.no_recordings': 'No recordings\nto play',
+  'main.playing': 'Playing...',
+  'main.play_failed': 'Could not read\nthe recording',
+
+  // Settings (page/settings.js)
+  'settings.pair': 'Pair the watch',
+  'settings.check': 'Check connection',
+  'settings.clear': 'Clear memory',
+  'settings.paired': 'Watch is paired\nto an account',
+  'settings.not_paired': 'Watch is not paired\nto an account',
+  'settings.checking': 'Checking...',
+  'settings.check_phone': 'Phone does not answer\nRestart the\nZepp app',
+  'settings.check_unpaired': 'Server is reachable,\nwatch is not paired',
+  'settings.check_ok': 'All good:\nserver is reachable,\nwatch is paired',
+  'settings.check_server_down': 'Server is unreachable\n({why})',
+  'settings.check_revoked': 'Server is reachable,\nbut the pairing\nwas revoked',
+  'settings.check_server_error': 'Server error\n({why})',
+  'settings.no_answer': 'no answer',
+  'settings.confirm_clear': 'Delete {count} recordings?\nPress again',
+  'settings.press_again': 'Press again',
+  'settings.busy': 'Upload in progress.\nWait and try again',
+  'settings.cleared': 'Memory cleared\nRecordings deleted: {removed}',
+
+  // Pairing (page/pair.js)
+  'pair.title': 'Pair the watch',
+  'pair.connecting': 'Connecting to phone\nand server...',
+  'pair.too_many': 'Too many attempts.\nPlease wait',
+  'pair.no_code': 'Could not get\na pairing code',
+  'pair.scan': 'Code: {code}\nScan the QR code\nand confirm',
+  'pair.done': 'Watch paired\nRecordings will be\nsent automatically',
+  'pair.expired': 'Code expired.\nOpen "Pair the watch"\nagain',
+
+  // Storage warning (page/storage.js)
+  'storage.nearly_full.title': 'Storage\nis almost full',
+  'storage.nearly_full.text': 'Clear it on the website or the oldest recordings will start to be deleted',
+  'storage.full.title': 'Storage\nis full',
+  'storage.full.text': 'The oldest recordings are being deleted. To choose what to keep, clear the storage on the website',
+
+  // List of recordings (page/list.js)
+  'list.empty': 'No saved\nrecordings',
+
+  // Problems on the way to the server (utils/linkProblem.js)
+  'link.phone': 'Phone is not reachable\nRestart the\nZepp app',
+  'link.server': 'Server is unreachable\nCheck the internet\non the phone',
+  'link.rate_limited': 'Too many uploads.\nTry again later',
+}

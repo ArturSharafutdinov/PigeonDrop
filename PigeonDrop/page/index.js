@@ -19,6 +19,7 @@ import {
 } from '../utils/uploadQueue'
 import { isPaired } from '../utils/device'
 import { problemText } from '../utils/linkProblem'
+import { t } from '../i18n'
 import { MAX_RECORDING_SECONDS } from '../config'
 
 // How long the screen is kept awake for an upload, so it can be sent to the
@@ -44,9 +45,9 @@ Page({
     recorder: null, // active Recorder instance, or null when idle
     playback: null, // this page's callbacks for the shared Player (utils/player.js), created on the first play
     statusText: null, // reference to the on-screen status TEXT widget, so we can update it later
-    settingsButton: null, // "Настройки" and "Список записей" are hidden while recording (see showControls)
+    settingsButton: null, // the Settings and Recordings buttons are hidden while recording (see showControls)
     listButton: null,
-    cancelButton: null, // "Отмена": shown only while recording, in the place of the two above
+    cancelButton: null, // Cancel: shown only while recording, in the place of the two above
     pendingAlert: null, // a storage warning that arrived during a recording, shown once it ends
     startedAt: null, // Date.now() when the current recording began (drives the stopwatch)
     ticker: null, // setInterval id of the once-a-second stopwatch refresh, or null when idle
@@ -85,7 +86,7 @@ Page({
       radius: px(16),
       normal_color: 0x2f2f2f,
       press_color: 0x4a4a4a,
-      text: 'Настройки',
+      text: t('main.settings'),
       text_size: px(24),
       click_func: () => {
         if (this.state.recording) return
@@ -105,7 +106,7 @@ Page({
       radius: px(16),
       normal_color: 0x2f2f2f,
       press_color: 0x4a4a4a,
-      text: 'Список записей',
+      text: t('main.list'),
       text_size: px(24),
       click_func: () => {
         if (this.state.recording) return
@@ -125,7 +126,7 @@ Page({
       radius: px(16),
       normal_color: 0x5c2a2a,
       press_color: 0x7a3a3a,
-      text: 'Отмена',
+      text: t('main.cancel'),
       text_size: px(24),
       click_func: () => this.cancelRecording(),
     })
@@ -169,7 +170,7 @@ Page({
 
   // Default instructions shown whenever nothing else is going on.
   idleText() {
-    return 'Клик — записать\nДолгое нажатие —\nвоспроизвести последнюю'
+    return t('main.idle')
   },
 
   toggleRecording() {
@@ -205,7 +206,7 @@ Page({
       setActiveRecording(null)
       releaseScreen()
       discardRecording(fileName)
-      this.updateStatus('Не удалось начать\nзапись\n\n' + this.idleText())
+      this.updateStatus(t('main.start_failed') + '\n\n' + this.idleText())
       return
     }
 
@@ -237,12 +238,12 @@ Page({
     const pendingCount = pendingRecordings().length
     if (pendingCount === 0) this.endUploadHold()
     // A watch that is not paired sends nothing: say the recording is safe, and what to do about it.
-    const sending = isPaired() ? 'Отправка...\nВ очереди: ' + pendingCount : 'Записано. Часы не\nпривязаны: Настройки\n→ Привязать часы'
+    const sending = isPaired() ? t('main.sending_wait', { pending: pendingCount }) : t('main.saved_unpaired')
     let status
     if (limitReached) {
-      status = 'Лимит записи\nдостигнут\n\n' + sending
+      status = t('main.limit_reached') + '\n\n' + sending
     } else {
-      status = pendingCount > 0 ? sending : 'Отправлено\n\n' + this.idleText()
+      status = pendingCount > 0 ? sending : t('main.sent') + '\n\n' + this.idleText()
     }
     this.updateStatus(status)
 
@@ -280,7 +281,7 @@ Page({
     if (discardRecording(fileName)) {
       setActiveRecording(null)
       this.endUploadHold()
-      this.updateStatus('Запись отменена\n\n' + this.idleText())
+      this.updateStatus(t('main.cancelled') + '\n\n' + this.idleText())
     } else {
       // The file could not be removed. It stays a recording like any other, and the person is told so rather
       // than left to think it is gone.
@@ -288,7 +289,7 @@ Page({
       setActiveRecording(null)
       pruneRecordings()
       retryPendingUploads()
-      this.updateStatus('Не удалось отменить:\nзапись сохранена и\nбудет отправлена')
+      this.updateStatus(t('main.cancel_failed'))
     }
 
     // A storage warning that came in while this was being recorded.
@@ -364,7 +365,7 @@ Page({
       this.stopRecording(true)
       return
     }
-    this.updateStatus('Идёт запись\n' + formatElapsed(elapsed) + '\nНажмите ещё раз,\nчтобы остановить')
+    this.updateStatus(t('main.recording', { elapsed: formatElapsed(elapsed) }))
   },
 
   // The system can still tear the page down mid-recording - the user pressing
@@ -401,12 +402,12 @@ Page({
     if (state.state === 'connecting') {
       // The phone is being asked whether it is there. A phone that does not answer turns this into the
       // "restart Zepp" error within about 20 seconds, so this text never stays for long.
-      this.updateStatus('Связь с телефоном...\nВ очереди: ' + state.pending)
+      this.updateStatus(t('main.connecting', { pending: state.pending }))
     } else if (state.state === 'sending') {
       this.extendUploadHold()
-      this.updateStatus('Отправка ' + state.index + ' из ' + state.count + '\nчасть ' + state.chunk + ' из ' + state.total)
+      this.updateStatus(t('main.sending', { index: state.index, count: state.count, chunk: state.chunk, total: state.total }))
     } else if (state.state === 'done') {
-      this.updateStatus(state.pending > 0 ? 'В очереди: ' + state.pending : 'Отправлено\n\n' + this.idleText())
+      this.updateStatus(state.pending > 0 ? t('main.queued', { pending: state.pending }) : t('main.sent') + '\n\n' + this.idleText())
 
       // Everything is sent, so the screen no longer has to be held. After an
       // error it deliberately stays on until the hold runs out, so the reason
@@ -420,13 +421,13 @@ Page({
       const reason = String(state.message || '').replace(/^server: /, '').slice(0, 30)
       this.updateStatus(
         problem
-          ? problem + (state.kind === 'server' && reason ? '\n(' + reason + ')' : '') + '\nВ очереди: ' + state.pending
-          : 'Не удалось отправить\n' + state.message + '\nВ очереди: ' + state.pending,
+          ? problem + (state.kind === 'server' && reason ? '\n(' + reason + ')' : '') + '\n' + t('main.queued', { pending: state.pending })
+          : t('main.send_failed', { message: state.message, pending: state.pending }),
       )
     } else if (state.state === 'unpaired') {
       // Nothing was sent. The recordings are kept and go out as soon as the watch is paired.
       this.updateStatus(
-        (state.revoked ? 'Привязка отозвана' : 'Часы не привязаны') + '\nНастройки →\nПривязать часы\nВ очереди: ' + state.pending,
+        t(state.revoked ? 'main.pairing_revoked' : 'main.not_paired') + '\n' + t('main.go_pair') + '\n' + t('main.queued', { pending: state.pending }),
       )
     }
   },
@@ -438,7 +439,7 @@ Page({
 
     const recordings = listRecordings()
     if (recordings.length === 0) {
-      this.updateStatus('Нет записей для\nвоспроизведения')
+      this.updateStatus(t('main.no_recordings'))
       return
     }
 
@@ -448,10 +449,10 @@ Page({
   // Plays a recording on the app's one shared Player (see utils/player.js for why it
   // is shared with the list page) and keeps the status line in step with it.
   playFile(filePath) {
-    this.updateStatus('Воспроизведение...')
+    this.updateStatus(t('main.playing'))
     if (!this.state.playback) {
       this.state.playback = {
-        onError: () => this.updateStatus('Ошибка чтения\nзаписи\n\n' + this.idleText()),
+        onError: () => this.updateStatus(t('main.play_failed') + '\n\n' + this.idleText()),
         onComplete: () => this.updateStatus(this.idleText()),
       }
     }

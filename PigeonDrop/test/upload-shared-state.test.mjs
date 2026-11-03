@@ -8,13 +8,13 @@
 import fs from 'fs'; import os from 'os'; import path from 'path'
 import { ctl, resetFds } from './stubs/fs.mjs'
 import { device } from './stubs/upload-deps.mjs'
-import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+import { generate, fileUrl, stubPath, i18nModule } from './helpers/load.mjs'
 import { framedRecording } from './helpers/ogg.mjs'
 
 const FS = stubPath('fs.mjs'), DEPS = stubPath('upload-deps.mjs')
 const RECORDINGS = generate('utils/recordings.js', { '@zos/fs': FS })
 const STORAGE = generate('utils/storageState.js', { '@zos/fs': FS })
-const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, './storageState': STORAGE, '../config': DEPS })
+const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, './storageState': STORAGE, '../config': DEPS, '../i18n': i18nModule() })
 
 const realSetTimeout = setTimeout
 globalThis.setTimeout = (fn) => realSetTimeout(fn, 0)       // collapse every pacing and retry delay

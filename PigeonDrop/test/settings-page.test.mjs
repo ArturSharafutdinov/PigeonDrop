@@ -1,7 +1,7 @@
 // Settings page (page/settings.js): the "Очистить память" button and its confirmation.
 
 import * as stubs from './stubs/settings-page.mjs'
-import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+import { generate, fileUrl, stubPath, i18nModule } from './helpers/load.mjs'
 let opts, timeouts = [], nid = 1
 globalThis.Page = (o) => { opts = o }
 globalThis.setTimeout = (fn, ms) => { const id = nid++; timeouts.push({ id, fn, ms }); return id }
@@ -9,7 +9,7 @@ globalThis.clearTimeout = (id) => { timeouts = timeouts.filter((t) => t.id !== i
 const S = stubPath('settings-page.mjs')
 const PAGE = generate('page/settings.js', {
   '@zos/ui': S, '@zos/utils': S, '@zos/router': S,
-  '../utils/device': S, '../utils/recordings': S, '../utils/uploadQueue': S,
+  '../utils/device': S, '../utils/recordings': S, '../utils/uploadQueue': S, '../i18n': i18nModule(),
 })
 await import(fileUrl(PAGE))
 const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) process.exitCode = 1 }

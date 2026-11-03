@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,88 +9,97 @@
 </head>
 <body>
 <main>
-  <h1>PigeonDrop</h1>
+  <!-- Every element with data-i18n (its text), data-i18n-label (aria-label) or data-i18n-placeholder is filled in from
+       pair.en.json / pair.ru.json by pair.js. The page is empty without the script, which it needs anyway. -->
+  <div class="top">
+    <h1>PigeonDrop</h1>
+    <nav class="lang" data-i18n-label="lang_label">
+      <button type="button" id="lang-en" lang="en" aria-pressed="false">EN</button>
+      <button type="button" id="lang-ru" lang="ru" aria-pressed="false">RU</button>
+    </nav>
+  </div>
   <p id="notice" role="status" hidden></p>
 
   <!-- Not signed in -->
   <section id="guest" hidden>
-    <nav class="tabs" aria-label="Вход или регистрация">
-      <button type="button" id="tab-login" aria-pressed="true">Вход</button>
-      <button type="button" id="tab-register" aria-pressed="false">Регистрация</button>
+    <nav class="tabs" data-i18n-label="auth_tabs_label">
+      <button type="button" id="tab-login" aria-pressed="true" data-i18n="tab_login"></button>
+      <button type="button" id="tab-register" aria-pressed="false" data-i18n="tab_register"></button>
     </nav>
 
     <form id="login-form">
-      <label>Почта <input name="email" type="email" autocomplete="username" required></label>
-      <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
-      <button type="submit">Войти</button>
+      <label><span data-i18n="email"></span> <input name="email" type="email" autocomplete="username" required></label>
+      <label><span data-i18n="password"></span> <input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" data-i18n="login_submit"></button>
     </form>
 
     <form id="register-form" hidden>
-      <label>Код приглашения <input name="inviteCode" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" required></label>
-      <label>Почта <input name="email" type="email" autocomplete="username" required></label>
-      <label>Пароль <input name="password" type="password" autocomplete="new-password" minlength="12" required>
-        <small>Не короче 12 символов.</small></label>
-      <button type="submit">Зарегистрироваться</button>
+      <label><span data-i18n="invite_code"></span> <input name="inviteCode" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" required></label>
+      <label><span data-i18n="email"></span> <input name="email" type="email" autocomplete="username" required></label>
+      <label><span data-i18n="password"></span> <input name="password" type="password" autocomplete="new-password" minlength="12" required>
+        <small data-i18n="password_hint"></small></label>
+      <button type="submit" data-i18n="register_submit"></button>
     </form>
   </section>
 
   <!-- Signed in -->
   <section id="user" hidden>
-    <p class="who">Вы вошли как <strong id="who"></strong> <button type="button" id="logout" class="link">Выйти</button></p>
+    <p class="who"><span data-i18n="signed_in_as"></span> <strong id="who"></strong> <button type="button" id="logout" class="link" data-i18n="logout"></button></p>
 
     <section id="pairing">
-      <h2>Привязать часы</h2>
+      <h2 data-i18n="pair_title"></h2>
       <form id="lookup-form">
-        <label>Код с экрана часов <input name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" required></label>
-        <button type="submit">Найти</button>
+        <label><span data-i18n="pair_code_label"></span> <input name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" required></label>
+        <button type="submit" data-i18n="pair_find"></button>
       </form>
       <form id="approve-form" hidden>
-        <p>Часы <strong id="pairing-client"></strong> просят доступ.</p>
-        <p>Код на их экране:</p>
+        <p><span data-i18n="pair_watch"></span> <strong id="pairing-client"></strong> <span data-i18n="pair_asks"></span></p>
+        <p data-i18n="pair_their_code"></p>
         <p class="code" id="pairing-code"></p>
-        <p class="warn">Сверьте его с кодом на часах. Если он другой, не привязывайте: ссылку могли подменить.</p>
-        <label>Название в списке <input name="name" type="text" maxlength="64" autocomplete="off"></label>
-        <button type="submit">Привязать эти часы</button>
-        <button type="button" id="approve-cancel" class="link">Отмена</button>
+        <p class="warn" data-i18n="pair_compare"></p>
+        <label><span data-i18n="pair_name"></span> <input name="name" type="text" maxlength="64" autocomplete="off"></label>
+        <button type="submit" data-i18n="pair_approve"></button>
+        <button type="button" id="approve-cancel" class="link" data-i18n="cancel"></button>
       </form>
     </section>
 
     <section id="devices">
-      <h2>Устройства</h2>
+      <h2 data-i18n="devices_title"></h2>
       <ul id="device-list" class="rows"></ul>
-      <p id="device-empty" class="hint" hidden>Ни одних часов пока не привязано.</p>
+      <p id="device-empty" class="hint" data-i18n="devices_empty" hidden></p>
     </section>
 
     <section id="telegram" hidden>
       <h2>Telegram</h2>
       <p id="telegram-state" class="hint"></p>
-      <p id="telegram-blocked" class="warn" hidden>Telegram сообщает, что бот заблокирован в этом чате, и записи туда не уходят. Привяжите чат заново.</p>
+      <p id="telegram-blocked" class="warn" data-i18n="telegram_blocked" hidden></p>
       <div class="row">
-        <button type="button" id="telegram-link">Привязать Telegram</button>
-        <button type="button" id="telegram-unlink" class="link danger" hidden>Отключить</button>
+        <button type="button" id="telegram-link"></button>
+        <button type="button" id="telegram-unlink" class="link danger" data-i18n="telegram_unlink" hidden></button>
       </div>
       <p id="telegram-wait" hidden>
-        <a id="telegram-open" class="button" href="#" target="_blank" rel="noopener noreferrer">Открыть в Telegram</a>
-        <span class="hint">Откройте ссылку и нажмите «Start» (она действует 10 минут). Эта страница сама заметит привязку.</span>
+        <a id="telegram-open" class="button" href="#" target="_blank" rel="noopener noreferrer" data-i18n="telegram_open"></a>
+        <span class="hint" data-i18n="telegram_wait"></span>
       </p>
-      <p class="hint">Голосовое сообщение и его расшифровка отправляются на серверы Telegram. Отключить можно в любой момент.</p>
+      <p class="hint" data-i18n="telegram_privacy"></p>
     </section>
 
     <section id="messages">
       <div class="section-head">
-        <h2>Записи</h2>
-        <a id="download-all" class="button" href="/v1/messages/archive" download hidden>Скачать всё</a>
+        <h2 data-i18n="messages_title"></h2>
+        <a id="download-all" class="button" href="/v1/messages/archive" download data-i18n="download_all" hidden></a>
       </div>
       <p id="storage-line" class="hint"></p>
-      <p id="storage-warning" class="warn" hidden>Хранилище почти заполнено. Когда место кончится, самые старые записи будут удаляться сами, а новые принимаются как раньше. Удалите ненужные записи заранее, если хотите решить сами, что оставить.</p>
-      <p id="transcript-note" class="hint" hidden>Текст под записями делает программа (NVIDIA Parakeet TDT 0.6B v3, лицензия <a href="https://creativecommons.org/licenses/by/4.0/deed.ru" rel="noopener">CC BY 4.0</a>) и может содержать ошибки, особенно при шёпоте, шуме и на именах.</p>
+      <p id="storage-warning" class="warn" data-i18n="storage_warning" hidden></p>
+      <p id="transcript-note" class="hint" hidden><span data-i18n="note_before"></span><a href="https://creativecommons.org/licenses/by/4.0/" rel="noopener">CC BY 4.0</a><span data-i18n="note_after"></span></p>
       <ul id="message-list" class="rows"></ul>
-      <p id="message-empty" class="hint" hidden>Записей пока нет.</p>
-      <button type="button" id="more" hidden>Показать ещё</button>
-      <p><button type="button" id="delete-all" class="link danger" hidden>Удалить все записи</button></p>
+      <p id="message-empty" class="hint" data-i18n="messages_empty" hidden></p>
+      <button type="button" id="more" data-i18n="show_more" hidden></button>
+      <p><button type="button" id="delete-all" class="link danger" data-i18n="delete_all" hidden></button></p>
     </section>
   </section>
 </main>
+<script src="/pair.texts.js"></script>
 <script src="/pair.js"></script>
 </body>
 </html>

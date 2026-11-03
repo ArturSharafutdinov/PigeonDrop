@@ -1,7 +1,7 @@
 // Pairing the watch with an account: the phone's half (app-side/pairing.js) and the watch's screen (page/pair.js).
 
 import * as stubs from './stubs/pair-page.mjs'
-import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+import { generate, fileUrl, stubPath, i18nModule } from './helpers/load.mjs'
 
 let failures = 0
 const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failures++ }
@@ -74,8 +74,9 @@ globalThis.setTimeout = (fn, ms) => { const id = nextId++; timers.push({ id, fn,
 globalThis.clearTimeout = (id) => { timers = timers.filter((t) => t.id !== id) }
 Date.now = () => now
 const S = stubPath('pair-page.mjs')
-const LINK = generate('utils/linkProblem.js', {})   // the real texts: what the screen says is what is tested
-const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/storageState': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': LINK })
+const I18N = i18nModule()
+const LINK = generate('utils/linkProblem.js', { '../i18n': I18N })   // the real texts: what the screen says is what is tested
+const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/storageState': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': LINK, '../i18n': I18N })
 await import(fileUrl(PAGE))
 
 // A scripted phone: each request waits for the test to answer it.

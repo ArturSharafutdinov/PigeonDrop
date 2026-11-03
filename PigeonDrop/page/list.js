@@ -6,6 +6,7 @@ import { createWidget, widget, align, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
 import { playAudio } from '../utils/player'
 import { listRecordings } from '../utils/recordings'
+import { t } from '../i18n'
 
 // Layout constants for the list items. The screen is a 480x480 round
 // display (radius 240, center at 240,240). A rectangle's top corners sit
@@ -28,7 +29,7 @@ Page({
         y: px(0),
         w: px(480),
         h: px(480),
-        text: 'Нет сохранённых\nзаписей',
+        text: t('list.empty'),
         text_size: px(30),
         color: 0xffffff,
         align_h: align.CENTER_H,

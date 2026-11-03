@@ -1,7 +1,7 @@
 // Main page (page/index.js): recording, stopwatch, screen hold while recording and while uploading.
 
 import * as stubs from './stubs/main-page.mjs'
-import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+import { generate, fileUrl, stubPath, i18nModule } from './helpers/load.mjs'
 let opts, tickFn = null, cleared = 0, now = 1_000_000
 globalThis.Page = (o) => { opts = o }
 globalThis.setInterval = (fn) => { tickFn = fn; return 7 }
@@ -13,12 +13,13 @@ globalThis.clearTimeout = (id) => { timeouts = timeouts.filter((t) => t.id !== i
 const fireTimeouts = (ms) => { const due = timeouts.filter((t) => t.ms === ms); timeouts = timeouts.filter((t) => t.ms !== ms); due.forEach((t) => t.fn()) }
 Date.now = () => now
 const S = stubPath('main-page.mjs')
-const LINK = generate('utils/linkProblem.js', {})   // the real texts: what the screen says is what is tested
+const I18N = i18nModule()
+const LINK = generate('utils/linkProblem.js', { '../i18n': I18N })   // the real texts: what the screen says is what is tested
 const SCREEN = generate('utils/screen.js', { '@zos/display': S })   // the real hold logic on top of the stubbed display
 const PAGE = generate('page/index.js', {
   '@zos/ui': S, '@zos/utils': S, '@zos/interaction': S, '@zos/media': S, '@zos/router': S,
   '../utils/screen': SCREEN, '../utils/player': S, '../utils/recordings': S, '../utils/uploadQueue': S, '../utils/device': S,
-  '../utils/linkProblem': LINK, '../config': S,
+  '../utils/linkProblem': LINK, '../i18n': I18N, '../config': S,
 })
 await import(fileUrl(PAGE))
 const mk = () => Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) })
