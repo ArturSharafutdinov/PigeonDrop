@@ -20,6 +20,16 @@ process.on('exit', () => fs.rmSync(OUT_DIR, { recursive: true, force: true }))
 let counter = 0
 
 export const stubPath = (name) => path.join(ROOT, 'test', 'stubs', name)
+
+// The real i18n module (i18n/index.js with both text tables) on top of the stubbed @zos/settings
+// (test/stubs/settings.mjs), which says the watch is set to Russian until a test changes it.
+export function i18nModule() {
+  return generate('i18n/index.js', {
+    '@zos/settings': stubPath('settings.mjs'),
+    './en': generate('i18n/en.js', {}),
+    './ru': generate('i18n/ru.js', {}),
+  })
+}
 export const fileUrl = (file) => pathToFileURL(file).href
 
 // `relPath` is relative to PigeonDrop/. `rewrites` maps an import specifier to

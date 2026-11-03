@@ -4,13 +4,13 @@
 import fs from 'fs'; import os from 'os'; import path from 'path'; import crypto from 'crypto'
 import { ctl, resetFds, fds } from './stubs/fs.mjs'
 import { device } from './stubs/upload-deps.mjs'
-import { generate, fileUrl, stubPath } from './helpers/load.mjs'
+import { generate, fileUrl, stubPath, i18nModule } from './helpers/load.mjs'
 import { framedRecording, readOgg, sameAudio, samePackets, zeppPackets } from './helpers/ogg.mjs'
 // utils/uploadQueue.js and app-side/uploads.js are the real source files; only the platform pieces are stubbed.
 const FS = stubPath('fs.mjs'), DEPS = stubPath('upload-deps.mjs')
 const RECORDINGS = generate('utils/recordings.js', { '@zos/fs': FS })
 const STORAGE = generate('utils/storageState.js', { '@zos/fs': FS })
-const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, './storageState': STORAGE, '../config': DEPS })
+const QUEUE = generate('utils/uploadQueue.js', { '@zos/fs': FS, './recordings': RECORDINGS, './device': DEPS, './storageState': STORAGE, '../config': DEPS, '../i18n': i18nModule() })
 const OGG = generate('utils/oggOpus.js', {})
 const BASE64 = generate('app-side/base64.js', {})
 const TIMEOUT = generate('app-side/timeout.js', {})

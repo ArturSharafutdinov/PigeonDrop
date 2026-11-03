@@ -1,10 +1,10 @@
 // What the screen says when the phone does not answer or cannot reach the server (utils/linkProblem.js).
 
-import { generate, fileUrl } from './helpers/load.mjs'
+import { generate, fileUrl, i18nModule } from './helpers/load.mjs'
 
 let failures = 0
 const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failures++ }
-const L = await import(fileUrl(generate('utils/linkProblem.js', {})))
+const L = await import(fileUrl(generate('utils/linkProblem.js', { '../i18n': i18nModule() })))
 
 console.log('1. each problem has its own words and its own advice')
 const phone = L.problemText(L.PHONE), server = L.problemText(L.SERVER)

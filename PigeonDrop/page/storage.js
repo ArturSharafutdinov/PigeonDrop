@@ -12,19 +12,18 @@ import { back } from '@zos/router'
 import { Vibrator, VIBRATOR_SCENE_DURATION_LONG } from '@zos/sensor'
 import { getStorageState } from '../utils/storageState'
 import { holdScreen } from '../utils/screen'
+import { t } from '../i18n'
 
 const SHOWN_MS = 10 * 1000
 const TITLE_COLOR = 0xffb74d
 
-const WARNINGS = {
-  nearly_full: {
-    title: 'Хранилище\nпочти заполнено',
-    text: 'Очистите его на сайте или старые записи начнут удаляться сами',
-  },
-  full: {
-    title: 'Хранилище\nзаполнено',
-    text: 'Старые записи удаляются сами. Чтобы решить, что оставить, очистите хранилище на сайте',
-  },
+// The text keys (i18n/en.js) of the warning for each state the server can report.
+const WARNING_KEYS = { nearly_full: 'storage.nearly_full', full: 'storage.full' }
+
+function textsFor(state) {
+  if (!Object.prototype.hasOwnProperty.call(WARNING_KEYS, state)) return null
+  const key = WARNING_KEYS[state]
+  return { title: t(key + '.title'), text: t(key + '.text') }
 }
 
 // The page is opened with { state } as its parameter. If that is missing or unreadable, what the upload queue
@@ -36,7 +35,7 @@ function warningFor(params) {
   } catch (e) {
     // no usable parameter
   }
-  return WARNINGS[state] || WARNINGS[getStorageState()] || null
+  return textsFor(state) || textsFor(getStorageState())
 }
 
 Page({

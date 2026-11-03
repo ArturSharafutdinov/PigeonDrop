@@ -11,15 +11,14 @@
 //
 // Each text has lines short enough for the round display at the size used by the status labels.
 
+import { t } from '../i18n'
+
 export const PHONE = 'phone'
 export const SERVER = 'server'
 
-const PHONE_TEXT = 'Нет связи с телефоном\nПерезапустите\nприложение Zepp'
-const SERVER_TEXT = 'Нет связи с сервером\nПроверьте интернет\nна телефоне'
-
 // The text for a kind of problem, or null for anything else (the caller then shows its own reason).
 export function problemText(kind) {
-  if (kind === PHONE) return PHONE_TEXT
-  if (kind === SERVER) return SERVER_TEXT
+  if (kind === PHONE) return t('link.phone')
+  if (kind === SERVER) return t('link.server')
   return null
 }

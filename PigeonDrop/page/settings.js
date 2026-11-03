@@ -1,6 +1,6 @@
 // Settings screen: pairing this watch with an account (page/pair.js, which leaves the device
 // token in utils/device.js) and clearing the watch's memory of recordings. Reached from the
-// "Настройки" button on the main page.
+// Settings button on the main page.
 
 import { createWidget, widget, align, prop, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
@@ -8,18 +8,17 @@ import { push } from '@zos/router'
 import { isPaired, getDeviceToken } from '../utils/device'
 import { listRecordings } from '../utils/recordings'
 import { clearAllRecordings } from '../utils/uploadQueue'
+import { t } from '../i18n'
 
 const CLEAR_CONFIRM_MS = 5000 // how long "press again" stays armed before it falls back
-const CLEAR_LABEL = 'Очистить память'
-const CHECK_LABEL = 'Проверить связь'
 // Longer than the phone's own two steps of 10 s each (app-side/serverCheck.js), so its answer arrives in time.
 const CHECK_TIMEOUT_MS = 25000
 
 Page({
   state: {
     statusText: null, // on-screen status/instructions widget
-    clearButton: null, // the "Очистить память" button, whose label changes while it waits for confirmation
-    checkButton: null, // the "Проверить связь" button
+    clearButton: null, // the "Clear memory" button, whose label changes while it waits for confirmation
+    checkButton: null, // the "Check connection" button
     checking: false, // a check is under way
     destroyed: false, // set in onDestroy, so a late reply touches nothing
     clearTimer: null, // setTimeout id that disarms the confirmation, or null when not armed
@@ -53,7 +52,7 @@ Page({
       radius: px(16),
       normal_color: 0x2f2f2f,
       press_color: 0x4a4a4a,
-      text: 'Привязать часы',
+      text: t('settings.pair'),
       text_size: px(24),
       click_func: () => push({ url: 'page/pair' }),
     })
@@ -67,7 +66,7 @@ Page({
       radius: px(16),
       normal_color: 0x2f2f2f,
       press_color: 0x4a4a4a,
-      text: CHECK_LABEL,
+      text: t('settings.check'),
       text_size: px(22),
       click_func: () => this.onCheck(),
     })
@@ -82,7 +81,7 @@ Page({
       radius: px(16),
       normal_color: 0x2f2f2f,
       press_color: 0x4a4a4a,
-      text: CLEAR_LABEL,
+      text: t('settings.clear'),
       text_size: px(22),
       click_func: () => this.onClear(),
     })
@@ -98,7 +97,7 @@ Page({
   },
 
   idleText() {
-    return isPaired() ? 'Часы привязаны\nк аккаунту' : 'Часы не привязаны\nк аккаунту'
+    return t(isPaired() ? 'settings.paired' : 'settings.not_paired')
   },
 
   updateStatus(text) {
@@ -110,7 +109,7 @@ Page({
   onCheck() {
     if (this.state.checking) return
     this.state.checking = true
-    this.updateStatus('Проверяю связь...')
+    this.updateStatus(t('settings.checking'))
     const { messageBuilder } = getApp()._options.globalData
     messageBuilder
       .request({ type: 'checkServer', deviceToken: getDeviceToken() || '' }, { timeout: CHECK_TIMEOUT_MS })
@@ -128,11 +127,11 @@ Page({
   // The words for a check's result. `error` is the technical reason, cut to fit a line.
   checkText(reply) {
     const why = String((reply && reply.error) || '').replace(/^server: /, '').slice(0, 30)
-    if (!reply || reply.noPhone) return 'Телефон не отвечает\nПерезапустите\nприложение Zepp'
-    if (reply.ok === true) return reply.paired === false ? 'Сервер доступен,\nчасы не привязаны' : 'Связь в порядке:\nсервер доступен,\nчасы привязаны'
-    if (reply.stage === 'server') return 'Сервер недоступен\n(' + why + ')'
-    if (reply.stage === 'token') return 'Сервер доступен, но\nпривязка часов\nотозвана'
-    return 'Ошибка сервера\n(' + (why || 'нет ответа') + ')'
+    if (!reply || reply.noPhone) return t('settings.check_phone')
+    if (reply.ok === true) return t(reply.paired === false ? 'settings.check_unpaired' : 'settings.check_ok')
+    if (reply.stage === 'server') return t('settings.check_server_down', { why })
+    if (reply.stage === 'token') return t('settings.check_revoked')
+    return t('settings.check_server_error', { why: why || t('settings.no_answer') })
   },
 
   // "Очистить память": the first press only asks for confirmation (and shows
@@ -140,8 +139,8 @@ Page({
   // recording and empties the send queue (utils/uploadQueue.js#clearAllRecordings).
   onClear() {
     if (this.state.clearTimer === null) {
-      this.updateStatus('Удалить все записи: ' + listRecordings().length + '\nНажмите ещё раз')
-      this.state.clearButton.setProperty(prop.MORE, { text: 'Нажмите ещё раз' })
+      this.updateStatus(t('settings.confirm_clear', { count: listRecordings().length }))
+      this.state.clearButton.setProperty(prop.MORE, { text: t('settings.press_again') })
       this.state.clearTimer = setTimeout(() => {
         this.cancelClearConfirm()
         this.updateStatus(this.idleText())
@@ -151,7 +150,7 @@ Page({
 
     this.cancelClearConfirm()
     const result = clearAllRecordings()
-    this.updateStatus(result.busy ? 'Идёт отправка.\nПодождите и повторите' : 'Память очищена\nУдалено записей: ' + result.removed)
+    this.updateStatus(result.busy ? t('settings.busy') : t('settings.cleared', { removed: result.removed }))
   },
 
   // Back to the normal label and forget any pending confirmation.
@@ -160,6 +159,6 @@ Page({
       clearTimeout(this.state.clearTimer)
       this.state.clearTimer = null
     }
-    if (this.state.clearButton) this.state.clearButton.setProperty(prop.MORE, { text: CLEAR_LABEL })
+    if (this.state.clearButton) this.state.clearButton.setProperty(prop.MORE, { text: t('settings.clear') })
   },
 })
