@@ -1,0 +1,41 @@
+# Weekly pull requests for every kind of dependency the repository has. Updates of one kind arrive as one pull
+# request. What the pull request's CI says (tests, linters, govulncheck, the image smoke test of stt/) decides.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directories: ["/backend", "/backend/tools"]
+    schedule: { interval: weekly }
+    groups:
+      go-modules: { patterns: ["*"] }
+    ignore:
+      # 1.2.0 and later need Go 1.27; the project is on Go 1.26. Remove this when it moves.
+      - dependency-name: github.com/tphakala/go-opus
+        versions: [">=1.2.0"]
+
+  - package-ecosystem: npm
+    directory: /PigeonDrop
+    schedule: { interval: weekly }
+
+  - package-ecosystem: pip
+    directory: /stt
+    schedule: { interval: weekly }
+    groups:
+      python-packages: { patterns: ["*"] }
+
+  - package-ecosystem: docker
+    directories: ["/backend", "/stt"]
+    schedule: { interval: weekly }
+    ignore:
+      # Digests and patch releases follow automatically. A new Go or Python minor version is a decision (go.mod's
+      # toolchain line, the language features, the dependencies that need it), so it is made by hand.
+      - dependency-name: golang
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: python
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
