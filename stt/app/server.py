@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import signal
+import socket
 import sys
 import threading
 import time
@@ -31,6 +32,13 @@ REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 BUSY_RETRY_AFTER_S = 5
 # A client that stops sending is dropped after this long, so a stuck connection does not hold a thread forever.
 SOCKET_TIMEOUT_S = 30
+# How many connections are served at the same time, each by a thread of its own. The model takes one recording at
+# a time and the only client is the Go server, so this is generous; it keeps anyone who can reach the port from
+# starting threads without end by opening connections and sending nothing.
+MAX_CONNECTIONS = 8
+# A request that is refused before its body is read still gets its answer: the connection is closed only after the
+# client has had this long, and up to the size limit, to finish sending (see Handler._refuse_unread).
+LINGER_S = 2.0
 
 
 class JsonFormatter(logging.Formatter):
@@ -124,6 +132,27 @@ def make_handler(service: Service):
         def _error(self, status: int, code: str, message: str, headers: Optional[dict] = None, **fields) -> None:
             self._answer(status, {"code": code, "message": message}, headers, **fields)
 
+        def _refuse_unread(self, status: int, code: str, message: str, **fields) -> None:
+            """Refuses a request without reading its body, which nobody who has not been let in should be able to make
+            the service do, and still lets the client see why. A server that answers and closes while the client is
+            still sending makes the client see a reset connection instead of the answer, so after the answer is
+            sent the sending side is closed, and what the client goes on sending is read and thrown away, for a
+            short time and up to the size limit. Nothing of it is kept."""
+            self._error(status, code, message, **fields)
+            try:
+                self.wfile.flush()
+                self.connection.shutdown(socket.SHUT_WR)
+                deadline = time.monotonic() + LINGER_S
+                remaining = service.config.max_body_bytes
+                while remaining > 0 and time.monotonic() < deadline:
+                    self.connection.settimeout(max(deadline - time.monotonic(), 0.001))
+                    chunk = self.connection.recv(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except OSError:  # the client went away, or did not finish in time: either way it is done
+                pass
+
         # --- routes
 
         def do_GET(self) -> None:
@@ -140,25 +169,27 @@ def make_handler(service: Service):
                 return self._error(404, "not_found", "no such route")
             config = service.config
 
-            # The body is read before anything else is decided, and always in full when its size is acceptable:
-            # a server that answers and closes with the client still sending makes the client see a reset
-            # connection instead of the answer. The size is bounded, so reading it costs little even when the
-            # request is going to be refused.
-            declared = self.headers.get("Content-Length", "")
-            if not (declared.isascii() and declared.isdigit()):
-                return self._error(411, "length_required", "Content-Length is required")
-            length = int(declared)
-            if length > config.max_body_bytes:
-                return self._error(413, "too_long", f"the body may be at most {config.max_body_bytes} bytes")
-            body = self.rfile.read(length)
-            if len(body) != length:
-                return self._error(400, "bad_audio", "the body ended before its declared length")
-
+            # The token comes first, before a byte of the body is read or any size is looked at: a request from
+            # somebody who has not been let in costs the service nothing but the answer.
             if not config.insecure:
                 supplied = self.headers.get("Authorization", "")
                 expected = "Bearer " + config.token
                 if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
-                    return self._error(401, "unauthorized", "missing or wrong token")
+                    return self._refuse_unread(401, "unauthorized", "missing or wrong token")
+
+            # Then the size, from what the request declares. The body is read in full once its size is acceptable,
+            # also when the request is going to be refused for what is in it (that is the client's own mistake,
+            # and it is told).
+            declared = self.headers.get("Content-Length", "")
+            if not (declared.isascii() and declared.isdigit()):
+                return self._refuse_unread(411, "length_required", "Content-Length is required")
+            length = int(declared)
+            if length > config.max_body_bytes:
+                return self._refuse_unread(413, "too_long", f"the body may be at most {config.max_body_bytes} bytes")
+            body = self.rfile.read(length)
+            if len(body) != length:
+                return self._error(400, "bad_audio", "the body ended before its declared length")
+
             if self.headers.get("Content-Type", "").split(";")[0].strip().lower() not in WAV_TYPES:
                 return self._error(415, "unsupported_media_type", "send the recording as audio/wav")
             if not service.ready.is_set():
@@ -202,9 +233,60 @@ class Server(ThreadingHTTPServer):
     # dropped connection, and the Go server would count that as a failure of the recording.
     daemon_threads = False
 
+    def __init__(self, address, handler, max_connections: int = MAX_CONNECTIONS):
+        super().__init__(address, handler)
+        self.max_connections = max_connections
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self._last_warning = float("-inf")
 
-def make_server(service: Service, host: str, port: int) -> Server:
-    return Server((host, port), make_handler(service))
+    def process_request(self, request, client_address) -> None:
+        # One thread per connection, but no more than there are slots; the next connection is told to come back
+        # later and closed, without a thread, so the number of threads has a ceiling.
+        if not self._slots.acquire(blocking=False):
+            self._turn_away(request, client_address)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:  # the thread could not be started
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def handle_error(self, request, client_address) -> None:
+        """What the base class does is print a traceback on stderr, outside the JSON log. A client that went away
+        while it was being answered is no error of the service's; anything else is logged, as one line."""
+        error = sys.exc_info()[1]
+        if isinstance(error, (ConnectionError, socket.timeout)):
+            log(logging.DEBUG, "the client went away", client=client_address[0], error=f"{type(error).__name__}: {error}")
+        else:
+            log(logging.ERROR, "a request failed unexpectedly", client=client_address[0],
+                error=f"{type(error).__name__}: {error}")
+
+    def _turn_away(self, request, client_address) -> None:
+        # Said once in a while, not for every connection: a flood of them must not become a flood of log lines.
+        # Logged before the answer goes out, like the requests' lines, so it exists by the time the client has it.
+        if time.monotonic() - self._last_warning >= 10:
+            self._last_warning = time.monotonic()
+            log(logging.WARNING, "connections are being refused: the service is already serving as many as it takes at once",
+                client=client_address[0], limit=self.max_connections)
+        body = json.dumps({"code": "busy", "message": "too many connections"}).encode("utf-8")
+        head = (f"HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json; charset=utf-8\r\n"
+                f"Content-Length: {len(body)}\r\nRetry-After: {BUSY_RETRY_AFTER_S}\r\n\r\n").encode("ascii")
+        try:
+            request.settimeout(1.0)  # the answer is a few hundred bytes; a client that cannot take them is let go
+            request.sendall(head + body)
+        except OSError:
+            pass
+        self.shutdown_request(request)
+
+
+def make_server(service: Service, host: str, port: int, max_connections: int = MAX_CONNECTIONS) -> Server:
+    return Server((host, port), make_handler(service), max_connections)
 
 
 def main() -> int:

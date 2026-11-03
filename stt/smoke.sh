@@ -16,7 +16,8 @@ PORT=${PORT:-18000}
 MEMORY=${MEMORY:-3g}
 CPUS=${CPUS:-2}
 NAME=pigeondrop-stt-smoke
-TOKEN=smoke-$RANDOM-$RANDOM
+# At least as long as the service insists on (app/config.py, MIN_TOKEN_LENGTH); $RANDOM alone can be a single digit.
+TOKEN=smoke-$(od -An -N16 -tx1 /dev/urandom | tr -d " \n")
 
 docker image inspect "$IMAGE" > /dev/null 2>&1 || { echo "no image $IMAGE: docker build -f Dockerfile -t $IMAGE ." >&2; exit 1; }
 [ -d "$DIR" ] || { echo "$DIR is not a directory" >&2; exit 1; }

@@ -6,6 +6,8 @@ from app import cpus, wavio
 
 from .helpers import wav
 
+TOKEN = "a-token-of-enough-length"
+
 
 class WavTest(unittest.TestCase):
     def test_reads_the_samples_and_the_length(self):
@@ -36,13 +38,13 @@ class WavTest(unittest.TestCase):
 
 class ConfigTest(unittest.TestCase):
     def test_defaults(self):
-        config = configuration.load({"STT_TOKEN": "t"})
+        config = configuration.load({"STT_TOKEN": TOKEN})
         self.assertEqual((config.port, config.host, config.max_audio_seconds, config.threads, config.log_level),
                          (8000, "0.0.0.0", 65.0, None, "info"))
         self.assertFalse(config.insecure)
 
     def test_the_body_limit_follows_the_audio_limit(self):
-        config = configuration.load({"STT_TOKEN": "t", "MAX_AUDIO_SECONDS": "30"})
+        config = configuration.load({"STT_TOKEN": TOKEN, "MAX_AUDIO_SECONDS": "30"})
         self.assertEqual(config.max_body_bytes, 30 * 32000 + 4096)
 
     def test_every_problem_is_reported_at_once(self):
@@ -58,12 +60,33 @@ class ConfigTest(unittest.TestCase):
             configuration.load({})
         self.assertTrue(configuration.load({"STT_INSECURE": "1"}).insecure)
 
+    def test_a_token_that_is_too_short_stops_the_start(self):
+        for token in ("x", "secret", "a" * (configuration.MIN_TOKEN_LENGTH - 1), "  short  "):
+            with self.subTest(token):
+                with self.assertRaises(configuration.ConfigError) as caught:
+                    configuration.load({"STT_TOKEN": token})
+                self.assertIn("STT_TOKEN must be at least", str(caught.exception))
+        self.assertEqual(configuration.load({"STT_TOKEN": "a" * configuration.MIN_TOKEN_LENGTH}).token,
+                         "a" * configuration.MIN_TOKEN_LENGTH)
+
+    def test_the_length_of_a_token_is_counted_without_the_spaces_around_it(self):
+        with self.assertRaises(configuration.ConfigError):
+            configuration.load({"STT_TOKEN": " " * 10 + "short" + " " * 10})
+
+    def test_a_short_token_is_not_looked_at_when_there_is_no_authentication(self):
+        self.assertTrue(configuration.load({"STT_TOKEN": "x", "STT_INSECURE": "true"}).insecure)
+
+    def test_the_message_never_holds_the_token(self):
+        with self.assertRaises(configuration.ConfigError) as caught:
+            configuration.load({"STT_TOKEN": "hunter2"})
+        self.assertNotIn("hunter2", str(caught.exception))
+
     def test_limits_of_the_numbers(self):
         for name, value in (("PORT", "65536"), ("MAX_AUDIO_SECONDS", "601"), ("MAX_AUDIO_SECONDS", "0.5"),
                             ("STT_THREADS", "65"), ("STT_THREADS", "0")):
             with self.subTest(name + "=" + value):
                 with self.assertRaises(configuration.ConfigError):
-                    configuration.load({"STT_TOKEN": "t", name: value})
+                    configuration.load({"STT_TOKEN": TOKEN, name: value})
 
 
 class CpusTest(unittest.TestCase):
