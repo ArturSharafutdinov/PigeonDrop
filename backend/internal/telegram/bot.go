@@ -317,7 +317,7 @@ func (b *Bot) link(ctx context.Context, m Message, code string, lang language) {
 	}
 
 	var outcome linkOutcome
-	var userLang language = lang
+	userLang := lang
 	err := b.tx(ctx, func(q dbgen.Querier) error {
 		now := b.now()
 		hash := HashLinkCode(code)
