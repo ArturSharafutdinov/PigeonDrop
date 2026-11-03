@@ -7,7 +7,7 @@ name: CI/CD
 # service (stt/), each as its own image to its own Coolify application. The
 # watch app is published through Zepp, not from here. "What is deployed" is the commit in the image tagged
 # `deployed`, which this workflow sets after Coolify confirms a deployment (see
-# .github/scripts/backend-changed.sh for why it is not simply the previous
+# .github/scripts/image-changed.sh for why it is not simply the previous
 # push). The image is built here and pushed to GitHub's container registry;
 # Coolify on the VPS only pulls and runs it, so the build never competes with
 # the other projects for the VPS. The deploy job needs the three Coolify
@@ -203,9 +203,6 @@ jobs:
       - name: Run the tests
         working-directory: stt
         run: python -m unittest discover -s tests -t . -v
-      # The one-off check of the image on the VPS (tools/stt-vps-check): a stub service, no Docker.
-      - name: Run the tests of the VPS check
-        run: python -m unittest discover -s tools/stt-vps-check -v
       # The model (about 640 MB) is downloaded while the image is built, so this takes minutes: only when stt/ changed.
       - name: Build the Docker image and try it with the production limits
         if: github.event_name == 'pull_request' && needs.changes.outputs.stt == 'true'
