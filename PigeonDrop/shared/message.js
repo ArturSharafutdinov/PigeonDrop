@@ -1,9 +1,13 @@
-// Vendored from the official Zepp OS sample repo (zeppos-samples,
-// application/2.0/todo-list/shared/message.js) - not published as an npm
-// package, meant to be copied into a project. Device-side half of
-// MessageBuilder; see shared/message-side.js for the Side Service half.
-// Handles chunking/reassembly for payloads larger than a single BLE packet
-// (see MESSAGE_PAYLOAD below) automatically - callers just use call()/request().
+// Copyright (c) 2021-present Zepp Health. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0; see ./LICENSE and ../../THIRD_PARTY_NOTICES.md.
+// Vendored from the official Zepp OS sample repo (https://github.com/zepp-health/zeppos-samples,
+// application/2.0/todo-list/shared/message.js) - not published as an npm package, meant to be copied
+// into a project. Device-side half of MessageBuilder; see message-side.js for the Side Service half.
+// Handles chunking/reassembly for payloads larger than a single BLE packet (see MESSAGE_PAYLOAD below)
+// automatically - callers just use call()/request().
+//
+// Modified by PigeonDrop (Apache License 2.0, section 4): DEBUG is set to false (see below) and the
+// comments that were written in Chinese are translated into English. Nothing else is changed.
 import { EventBus } from '@zos/utils'
 import { log as Logger } from '@zos/utils'
 import { Deferred, timeout } from './defer'
@@ -88,7 +92,7 @@ export function getDataType(type) {
   }
 }
 
-// 中续，结束
+// continuation, end
 export const MessagePayloadOpCode = {
   Continued: 0x0,
   Finished: 0x1
@@ -444,7 +448,7 @@ export class MessageBuilder extends EventBus {
     }
   }
 
-  // opts 覆盖头部选项
+  // opts override the header options
   buildData(payload, opts = {}) {
     return this.buildBin({
       flag: MessageFlag.App,
@@ -460,7 +464,7 @@ export class MessageBuilder extends EventBus {
   }
 
   sendBin(buf, debug = DEBUG) {
-    // ble 发送消息
+    // send the message over BLE
     debug && logger.warn('[RAW] [S] send size=%d bin=%s', buf.byteLength, bin2hex(buf.buffer))
     const result = this.ble.send(buf.buffer, buf.byteLength)
 
@@ -470,12 +474,12 @@ export class MessageBuilder extends EventBus {
   }
 
   sendBinBySide(buf, debug = DEBUG) {
-    // side 发送消息
+    // send the message to the Side Service
     debug && logger.warn('[RAW] [S] send size=%d bin=%s', buf.byteLength, bin2hex(buf.buffer))
     messaging.peerSocket.send(buf.buffer)
   }
 
-  // 通用获取逻辑
+  // common fetching logic
   getSafeSend() {
     if (this.isDevice) {
       return this.sendBin.bind(this)
@@ -488,7 +492,7 @@ export class MessageBuilder extends EventBus {
     this.sendMsg(buf, false)
   }
 
-  // 大数据的复杂头部分包协议
+  // packet protocol for large data, with a complex header
   sendHmProtocol(
     { requestId, dataBin, type, contentType, dataType },
     { messageType = MessageType.Data } = {}
@@ -567,7 +571,7 @@ export class MessageBuilder extends EventBus {
     }
   }
 
-  // 大数据的简单分包协议
+  // packet protocol for large data, with a simple header
   sendSimpleProtocol({ dataBin }, { messageType = MessageType.Data } = {}) {
     const dataSize = this.chunkSize
     const headerSize = 0
@@ -708,7 +712,7 @@ export class MessageBuilder extends EventBus {
     buf.writeUInt32LE(data.spanId, offset)
     offset += 4
 
-    // seqId // 顺序 id,消息部分顺序序列号
+    // seqId // sequence id: the sequence number of this part of the message
     buf.writeUInt32LE(data.seqId, offset)
     offset += 4
 
@@ -716,7 +720,7 @@ export class MessageBuilder extends EventBus {
     buf.writeUInt32LE(data.totalLength, offset)
     offset += 4
 
-    // payload length 当前
+    // payload length of the current part
     buf.writeUInt32LE(data.payload.byteLength, offset)
     offset += 4
 
@@ -917,7 +921,7 @@ export class MessageBuilder extends EventBus {
     if (!session) {
       session = this.sessionMgr.newSession(payload.traceId, payload.payloadType, this)
 
-      // TODO: 需要考虑缓冲，监听回调要放到启动之前，或者没有增加监听就缓存请求
+      // TODO: buffering has to be considered: listener callbacks must be registered before start, or requests must be cached while no listener has been added
       session.on('data', (fullPayload) => {
         if (fullPayload.opCode === MessagePayloadOpCode.Finished) {
           if (fullPayload.payloadType === MessagePayloadType.Request) {
@@ -953,8 +957,8 @@ export class MessageBuilder extends EventBus {
   }
 
   /**
-   * 发送请求
-   * @param {object buffer arraybuffer arraybuffer like} data 传输的数据
+   * Send a request
+   * @param {object buffer arraybuffer arraybuffer like} data the data to transmit
    * @param {*} opts
    * @returns
    */
@@ -1149,7 +1153,7 @@ export class MessageBuilder extends EventBus {
   }
 
   /**
-   * 相应接口给当前请求
+   * Interface that responds to the current request
    * @param {obj} param0
    */
   response({ requestId, contentType, dataType, data }) {
@@ -1173,7 +1177,7 @@ export class MessageBuilder extends EventBus {
   }
 
   /**
-   * call 模式调用接口到伴生服务
+   * call mode: calls an interface of the companion (Side) service
    * @param {json | buffer} data
    * @returns
    */
