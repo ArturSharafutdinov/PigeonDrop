@@ -1,5 +1,5 @@
 // Package telegram is the server's side of the Telegram bot: a client for the Bot API, and (in the files that
-// follow it in the plan, TELEGRAM_BOT_PLAN.md) the bot that links a chat to an account and the queue that sends
+// follow it in the design, docs/adr/0008-telegram-long-polling-and-delivery-queue.md) the bot that links a chat to an account and the queue that sends
 // the recordings.
 //
 // The client knows nothing about users or recordings. What matters most to its callers is the way a call can fail,

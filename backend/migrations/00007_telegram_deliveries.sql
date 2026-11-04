@@ -3,7 +3,7 @@
 -- transaction that stores the recording (and only for an account that is linked at that moment), so a recording that
 -- was accepted is never lost on its way to the chat, and one that is sent is never sent twice by a restart. The row
 -- goes with its message (a deleted recording, or one the account's storage limit pushed out, takes its place in the
--- queue with it). Design: TELEGRAM_BOT_PLAN.md.
+-- queue with it). Design: docs/adr/0008-telegram-long-polling-and-delivery-queue.md.
 --
 -- States: pending (waiting, from run_after on, and, while the recording's text is still being made, until wait_until),
 -- running (taken by a worker until locked_until), sent, failed (gave up, error_code says why), skipped (not sent,

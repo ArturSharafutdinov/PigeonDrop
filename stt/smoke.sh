@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs the real image with the production limits and sends it recordings through the real protocol.
 #
-#   ./smoke.sh ../bench/stt/data/wav                     # one round
-#   REPEAT=5 COMPARE=../bench/stt/results/parakeet__relaxed__hint.jsonl ./smoke.sh ../bench/stt/data/wav
+#   ./smoke.sh ../docs/research/stt-benchmark/data/wav        # one round
+#   REPEAT=5 COMPARE=../docs/research/stt-benchmark/results/parakeet__relaxed__hint.jsonl \
+#     ./smoke.sh ../docs/research/stt-benchmark/data/wav
 #
 # Needs the image (docker build -f Dockerfile -t pigeondrop-stt .) and Docker. The container has no network access
 # beyond the published local port; the token is made up for this run.

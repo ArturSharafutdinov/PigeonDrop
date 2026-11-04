@@ -111,7 +111,8 @@ console.log('5. pruning never runs under a sweep')
   ok(files().length === 52, 'the oldest waiting recordings (the ones being sent first) were not deleted -> ' + files().length + ' files')
   g.open(); w.gate = null
   await until(() => uploaded().length === 52, 8000)
-  w.app.pruneRecordings()
+  // The last recording is marked uploaded a moment before the sweep itself is over, and pruning waits for that: try until it applies.
+  await until(() => { w.app.pruneRecordings(); return files().length === 20 }, 3000)
   ok(files().length === 20, 'after the sweep the cap applies again (20 uploaded kept) -> ' + files().length) }
 
 console.log('6. a storage warning is not lost when a later recording of the same sweep fails')

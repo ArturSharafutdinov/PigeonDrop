@@ -1,7 +1,7 @@
 -- +goose Up
 -- Linking a person's account to a Telegram chat. The bot (internal/telegram) writes the link when the person opens the
 -- link the page gave them and presses Start; the delivery queue that uses it comes with the next migration.
--- Design: TELEGRAM_BOT_PLAN.md.
+-- Design: docs/adr/0008-telegram-long-polling-and-delivery-queue.md.
 
 -- The chat an account's recordings go to: one chat for an account, one account for a chat, so a new link replaces
 -- the old (a person who links again, or a chat that moves to another account, does not end up with two).
