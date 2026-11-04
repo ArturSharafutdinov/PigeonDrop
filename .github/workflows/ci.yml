@@ -180,6 +180,17 @@ jobs:
       - name: shellcheck
         run: git ls-files -z '*.sh' | xargs -0 shellcheck
 
+  # The language policy: code, comments, documentation and test names are English; Cyrillic and CJK letters are allowed
+  # only in the files scripts/check-language.py lists (the Russian text tables, test fixtures, the benchmark's phrases).
+  language:
+    name: Language policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: English only
+        run: python3 scripts/check-language.py
+
   # Looks for passwords, tokens and keys in the whole history, not only in what the pull request changes. The made-up
   # values the tests use are allowed in .gitleaks.toml.
   secrets:
