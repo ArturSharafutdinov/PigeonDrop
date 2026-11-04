@@ -57,7 +57,7 @@ Page({
 
   build() {
     // Status label in the upper part of the screen. Shrunk from the original
-    // 230px tall to make room for the extra "Настройки" button below - see
+    // 230px tall to make room for the extra "Settings" button below - see
     // the "list" button's placement note for the round-display safe-zone
     // reasoning that governs every button placement on this page.
     this.state.statusText = createWidget(widget.TEXT, {
@@ -74,7 +74,7 @@ Page({
     })
 
     // Navigates to the settings page (pairing the watch, clearing memory - see
-    // page/settings.js). Stacked above "Список записей" rather than beside
+    // page/settings.js). Stacked above "Recordings" rather than beside
     // it - side-by-side placement leaves much tighter margins near the
     // bezel, while stacking lets this reuse the same proven-safe width/x as
     // the button below it.
@@ -117,7 +117,7 @@ Page({
     // Cancels the recording in progress and deletes it: it goes neither to the watch's memory nor to the upload
     // queue. It takes the place of the two buttons above, which are hidden while recording (a third button does
     // not fit the round display), and it is created last so that it lies on top of them. It sits right under
-    // the stopwatch, with the same size and place as "Настройки", so it is inside the same safe zone.
+    // the stopwatch, with the same size and place as "Settings", so it is inside the same safe zone.
     this.state.cancelButton = createWidget(widget.BUTTON, {
       x: px(100),
       y: px(270),
@@ -268,7 +268,7 @@ Page({
     }
   },
 
-  // "Отмена": the recording in progress is thrown away. The file is deleted (the queue and the list never see
+  // "Cancel": the recording in progress is thrown away. The file is deleted (the queue and the list never see
   // it: it is the active file until it is gone), no sweep is started and nothing is pruned, since nothing was
   // added. The screen was held for the recording; it is let go, and an upload that is still running takes the
   // hold again with its next chunk (extendUploadHold).
@@ -296,7 +296,7 @@ Page({
     if (this.state.pendingAlert) this.alertStorage(this.state.pendingAlert)
   },
 
-  // While recording, the screen is the stopwatch and "Отмена"; otherwise the way to settings and the list.
+  // While recording, the screen is the stopwatch and "Cancel"; otherwise the way to settings and the list.
   showControls(recording) {
     this.state.settingsButton.setProperty(prop.VISIBLE, !recording)
     this.state.listButton.setProperty(prop.VISIBLE, !recording)

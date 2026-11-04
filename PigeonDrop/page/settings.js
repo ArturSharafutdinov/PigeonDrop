@@ -104,7 +104,7 @@ Page({
     this.state.statusText.setProperty(prop.MORE, { text })
   },
 
-  // "Проверить связь": the phone checks the server and the device token (app-side/serverCheck.js);
+  // "Check connection": the phone checks the server and the device token (app-side/serverCheck.js);
   // the status line says in a few words where it went wrong, or that all is well.
   onCheck() {
     if (this.state.checking) return
@@ -134,7 +134,7 @@ Page({
     return t('settings.check_server_error', { why: why || t('settings.no_answer') })
   },
 
-  // "Очистить память": the first press only asks for confirmation (and shows
+  // "Clear memory": the first press only asks for confirmation (and shows
   // what would be deleted); a second press within CLEAR_CONFIRM_MS deletes every
   // recording and empties the send queue (utils/uploadQueue.js#clearAllRecordings).
   onClear() {

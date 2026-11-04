@@ -142,7 +142,7 @@ SELECT message_id, state, attempts, run_after, wait_until, locked_until, enqueue
        voice_message_id, with_text, error_code, last_error, text_message_id
 FROM telegram_deliveries WHERE message_id = $1;
 
--- The messages of a recording in the chat, for the "Просмотрено" button, and the language of its account. Only for the
+-- The messages of a recording in the chat, for the "Seen" button, and the language of its account. Only for the
 -- chat the button was pressed in: the ids mean nothing in another one. No row: the recording is gone from the server
 -- (deleted, or pushed out by the storage limit), or was sent to another chat.
 -- name: GetTelegramDeliveryMessages :one

@@ -1,4 +1,4 @@
-// Recordings list screen, opened from the "Список записей" button on the
+// Recordings list screen, opened from the "Recordings" button on the
 // main page. Shows every saved voice message as its own button, newest
 // first, and plays whichever one is tapped.
 
