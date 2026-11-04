@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Sends WAV files to a running service and compares what comes back with the benchmark's texts.
 
-    python3 smoke.py http://127.0.0.1:8000 TOKEN DIR_WITH_WAV [--repeat 3] [--compare ../bench/stt/results/parakeet__strict__hint.jsonl]
+    python3 smoke.py http://127.0.0.1:8000 TOKEN DIR_WITH_WAV [--repeat 3] [--compare ../docs/research/stt-benchmark/results/parakeet__strict__hint.jsonl]
 
-The benchmark (bench/stt) fed the same model the same recordings, from files; this feeds them from memory through the
+The benchmark (docs/research/stt-benchmark) fed the same model the same recordings, from files; this feeds them from memory through the
 service. The texts must be identical, otherwise something between the WAV and the model (the conversion to samples)
 differs from the benchmark. Exits 0 only when every answer was 200 and nothing differed."""
 import argparse
@@ -45,7 +45,7 @@ def main():
     ap.add_argument("token")
     ap.add_argument("directory")
     ap.add_argument("--repeat", type=int, default=1)
-    ap.add_argument("--compare", help="a benchmark result file (bench/stt/results/*.jsonl) to compare the texts with")
+    ap.add_argument("--compare", help="a benchmark result file (docs/research/stt-benchmark/results/*.jsonl) to compare the texts with")
     args = ap.parse_args()
 
     files = sorted(glob.glob(os.path.join(args.directory, "*.wav")))

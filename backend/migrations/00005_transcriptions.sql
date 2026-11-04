@@ -6,7 +6,8 @@
 --
 -- States: pending (waiting, from run_after on), running (taken by a worker until locked_until), done (text is set,
 -- possibly empty: silence), failed (gave up, error_code says why), skipped (never sent to the model, error_code
--- says why). Design and the rules of retrying: STT_SERVICE_PLAN.md.
+-- says why). Design and the rules of retrying: docs/adr/0006-one-recognition-at-a-time.md and
+-- docs/adr/0007-job-queues-in-postgresql.md.
 
 CREATE TABLE transcriptions (
     message_id   uuid        PRIMARY KEY REFERENCES messages (id) ON DELETE CASCADE,
