@@ -158,4 +158,4 @@ NVIDIA's [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-
 
 ## License
 
-[MIT](LICENSE) © 2026 Artur Sharafutdinov. Amazfit, Zepp and Zepp OS are trademarks of their owners; this project is not affiliated with them.
+[MIT](LICENSE) © 2026 Artur Sharafutdinov. The license covers the code and documents written for PigeonDrop; third-party components keep their own licenses, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Amazfit, Zepp and Zepp OS are trademarks of their owners; this project is not affiliated with them.
