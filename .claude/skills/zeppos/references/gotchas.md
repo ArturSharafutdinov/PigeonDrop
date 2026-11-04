@@ -72,9 +72,21 @@ in bytes must be a multiple of 3 so that the pieces concatenate. *device.*
 crawl. Set it to `false` in the copy you vendor. The Side Service also has no global `Logger` in some contexts; the library needs a
 fallback. *docs checked (samples) + device.*
 
-**Nothing the Side Service logs is visible.** `console.log` in the Side Service never shows up anywhere (the watch's "JS App Log"
+**The Side Service's own `console.log` was never seen.** Early tests found no place where it shows up (the watch's "JS App Log"
 shows device-side logs only). The reply channel to the device is the only way to observe what the Side Service did: return
-the result, and put the reason into the error reply. *device.*
+the result, and put the reason into the error reply. The Zepp app's Developer Mode has a log screen for mini programs with a
+*Side Service* tab (`guides/tools/zepp-app.mdx`); it does show the platform's own lines (handshakes, every message received,
+the code the phone loaded). Whether the app's `console.log` lands there too is not verified: the one diagnostic build that
+tried it never ran, see the next entry. *device (log screen) + docs checked.*
+
+**The phone can run an old cached Side Service for the same app id, and installing a new preview does not replace it.** Seen once
+(an iPhone, Side Service runtime 4.3.0): the watch app was the new build, but the phone loaded the Side Service of the very
+first template build of the project. The watch's `ping` arrived (`receiveData`) and was never answered, so the device showed
+"the phone does not answer". Re-scanning the preview QR code, with a higher version number too, did not replace the cached
+code; a full reinstall of the Zepp app did. To tell it from a dead phone, open the *Side Service* log tab, press *Check
+connection* on the watch and read the answer to `getWorkerCode` and the `appName` / `version` / `packageInfo.timeStamp` next to
+it: if they are not your build, it is this. A lighter fix (deleting the mini program in Developer Mode, clearing the cache) was
+not tried. See [`docs/troubleshooting.md`](../../../../docs/troubleshooting.md). *device.*
 
 **The Side Service has no reliable storage or lifecycle** (`onInit` / `onRun` / `onDestroy`, started and stopped by the Zepp App).
 Do not queue work there; keep persistent queues on the watch and make the phone side idempotent. *device.*
