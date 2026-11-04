@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 #
 # Dumps the PigeonDrop database to a plain .sql file that Backrest then snapshots into restic. Runs on the VPS, daily,
-# via systemd (see the .timer beside this). The pattern, and most of the reasoning, is the one the another-project dump uses
-# on the same server.
+# via systemd (see the .timer beside this). The same pattern works for any other project that shares the server.
 #
 # Deliberately DECOUPLED from Backrest: this writes a file, Backrest backs up a directory, and neither knows about
 # the other. Each half can be tested on its own, and Backrest never needs the Docker socket (which would hand anything
