@@ -19,3 +19,6 @@ coverage/
 
 # Throwaway experiments with local tunnel URLs
 PigeonDrop/spike.config.js
+
+# Local copies of the author's recordings used for the speech benchmark; never committed (it is a private voice)
+/bench/

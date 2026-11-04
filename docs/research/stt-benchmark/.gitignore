@@ -1,0 +1,4 @@
+# The author's recordings (a private voice) and the raw results of the measurements stay on the disk only.
+data/
+results/
+__pycache__/
