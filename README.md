@@ -43,6 +43,14 @@ flowchart LR
 - **Telegram bot**: long polling (no public address needed), links a chat to an account, sends each recording with its transcript, "Seen" button deletes it from the chat.
 - **Operations** (`tools/backup`, `.github/`): database dump and restore check, CI, and deployment with Coolify.
 
+## Supported watches
+
+| Watch | Status |
+|---|---|
+| Amazfit Active Round 2 | Supported. The app is developed and tried on this watch (round 480×480 display, Zepp OS 4.0). |
+
+Nothing else has been tried. The package declares a round screen 480 px wide (`platforms` in [`app.json`](PigeonDrop/app.json)) and the layout is made for that display, so another round 480×480 Zepp OS 4.0 watch may accept it, but square or differently sized screens are not supported. If you try another watch, an issue with what happened is welcome.
+
 ## Engineering notes
 
 The parts I would point a reviewer at:
@@ -101,7 +109,7 @@ The phone reaches your server over the internet, so for a real watch the server 
 
 ## Verified and not verified
 
-**Tried on real hardware** (one round 480×480 Zepp OS 4.0 watch, an iPhone, a production server, the real Telegram): recording, queued upload over Bluetooth, pairing by QR code, playback, transcription, and delivery to Telegram.
+**Tried on real hardware** (an Amazfit Active Round 2 with Zepp OS 4.0, an iPhone, a production server, the real Telegram): recording, queued upload over Bluetooth, pairing by QR code, playback, transcription, and delivery to Telegram.
 
 **Not tried, or not measured:**
 - The English interface and the new language handling on a watch (the Russian texts are unchanged; the English lines are fitted by rule, not by eye).

@@ -22,3 +22,6 @@ PigeonDrop/spike.config.js
 
 # Local copies of the author's recordings used for the speech benchmark; never committed (it is a private voice)
 /bench/
+
+# Things that matter to the author but do not belong in the repository: original artwork, notes, private files
+/inner-resources/
