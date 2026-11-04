@@ -119,6 +119,13 @@ The phone reaches your server over the internet, so for a real watch the server 
 - The timeouts of the "no connection" messages are estimates, not measurements of a real Bluetooth link.
 - The automated tests run on stubs, so they do not replace a run on the device.
 
+## Troubleshooting
+
+The problems that cost the most time so far, with what fixed them, are in [docs/troubleshooting.md](docs/troubleshooting.md). Two are worth knowing before you start:
+
+- **The watch says the phone is not reachable although Bluetooth works.** The Zepp app on the phone can keep running an old cached copy of the app's Side Service, and installing a new preview does not replace it. The page shows how to check this in the Zepp app's log screen; a full reinstall of the Zepp app fixed it.
+- **Every deployment fails within seconds.** The registry token on the server has probably expired.
+
 ## Privacy
 
 Recordings and transcripts are personal. They are stored on the server you run and are not sent to any cloud service; the speech model runs in your own container. The one exception is a Telegram chat you link yourself: its voice message and transcript pass through Telegram's servers. See [SECURITY.md](SECURITY.md) for how accounts, tokens and the web page are protected.
@@ -129,7 +136,7 @@ Recordings and transcripts are personal. They are stored on the server you run a
 PigeonDrop/   Zepp OS app: pages, upload queue, Side Service (app-side/), language tables (i18n/), tests
 backend/      Go server: API (api/openapi.yaml), handlers, queues, Telegram bot, migrations, Dockerfile
 stt/          speech recognition service (Python) and its Dockerfile
-docs/         architecture, API, deployment, CI/CD, decision records, research notes
+docs/         architecture, API, deployment, CI/CD, troubleshooting, decision records, research notes
 tools/        backup and restore check for the production data
 .github/      CI workflow and its helper scripts, issue and pull request templates
 .claude/      configuration of the AI assistant this project is built with (see .claude/README.md)
