@@ -47,9 +47,10 @@ flowchart LR
 
 | Watch | Status |
 |---|---|
-| Amazfit Active Round 2 | Supported. The app is developed and tried on this watch (round 480×480 display, Zepp OS 4.0). |
+| Amazfit Active 2 (Round) | Supported. The app is developed and tried on this watch (a round 466×466 display). |
+| Amazfit Active 2 NFC (Round) | Expected to work, not tried. Zepp's device list gives it the same display and API level, and the app does not use the NFC chip. It has its own device identifiers, so choose it as the target when installing with `zeus preview`. |
 
-Nothing else has been tried. The package declares a round screen 480 px wide (`platforms` in [`app.json`](PigeonDrop/app.json)) and the layout is made for that display, so another round 480×480 Zepp OS 4.0 watch may accept it, but square or differently sized screens are not supported. If you try another watch, an issue with what happened is welcome.
+Nothing else has been tried. The package targets round screens with a design width of 480 (`platforms` in [`app.json`](PigeonDrop/app.json)) and needs Zepp OS API level 4.0 or newer. The layout is made for a round display, so another round watch with Zepp OS 4.0 may accept it, but square screens (such as the Amazfit Active 2 Square) are not supported. If you try another watch, an issue with what happened is welcome.
 
 ## Engineering notes
 
@@ -109,7 +110,7 @@ The phone reaches your server over the internet, so for a real watch the server 
 
 ## Verified and not verified
 
-**Tried on real hardware** (an Amazfit Active Round 2 with Zepp OS 4.0, an iPhone, a production server, the real Telegram): recording, queued upload over Bluetooth, pairing by QR code, playback, transcription, and delivery to Telegram.
+**Tried on real hardware** (an Amazfit Active 2 (Round), an iPhone, a production server, the real Telegram): recording, queued upload over Bluetooth, pairing by QR code, playback, transcription, and delivery to Telegram.
 
 **Not tried, or not measured:**
 - The English interface and the new language handling on a watch (the Russian texts are unchanged; the English lines are fitted by rule, not by eye).

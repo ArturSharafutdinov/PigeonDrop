@@ -2,7 +2,7 @@
 
 How PigeonDrop is put together, and why. The README gives the overview; this document is for someone who wants to change the code and needs the reasons behind it. Where a statement rests on a measurement or on an observation on a real watch, it says so; where it does not, it says that too.
 
-The target device is a round 480×480 watch running Zepp OS 4.0 (developed on an Amazfit Active 2 Round). Decisions are recorded one by one in [`docs/adr/`](adr/); the HTTP contract is in [`api.md`](api.md) and `backend/api/openapi.yaml`.
+The target device is a round watch running Zepp OS 4.0 or newer; the manifest declares a design width of 480 (developed on an Amazfit Active 2 (Round), whose display is 466×466; the NFC variant is expected to work, see the README). Decisions are recorded one by one in [`docs/adr/`](adr/); the HTTP contract is in [`api.md`](api.md) and `backend/api/openapi.yaml`.
 
 ## 1. The three nodes and the path of one recording
 
@@ -114,7 +114,7 @@ A missing reply looks the same from the watch whether the Zepp app on the phone 
 
 | File | Role |
 |---|---|
-| `app.json`, `app.js` | Manifest (microphone permission, round 480 px target, pages) and the app entry: one BLE connection (`MessageBuilder`) for the life of the app, plus the reconnect trigger. |
+| `app.json`, `app.js` | Manifest (microphone permission, round target with design width 480, pages) and the app entry: one BLE connection (`MessageBuilder`) for the life of the app, plus the reconnect trigger. |
 | `page/index.js` | Main screen. Click: start/stop. Long press: play the last recording. While recording it shows a stopwatch and a **Cancel** button in place of the two navigation buttons (a third button does not fit the round screen); Cancel stops and deletes the file at once, and the file stays "being written" for the queue until it is gone. |
 | `page/list.js`, `page/settings.js`, `page/storage.js`, `page/pair.js` | Recordings list, settings (pair, check connection, clear memory with a two-step confirmation), the storage warning, and pairing with the QR code. |
 | `utils/uploadQueue.js` | The queue (section 3). |
