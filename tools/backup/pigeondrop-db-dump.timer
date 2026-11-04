@@ -3,7 +3,8 @@ Description=Daily PigeonDrop database dump
 
 [Timer]
 # 03:15 UTC. The Backrest plan that snapshots it runs at 03:20 and the whole-server `vps` plan at 03:30, after
-# Coolify's own dump (02:00) and the another-project dump (03:00) and plan (03:15). The dump takes about a second.
+# Coolify's own dump (02:00) and the dumps and plans of other projects on the same server (03:00 to 03:15). The dump
+# takes about a second.
 #
 # It goes right BEFORE its plan, not hours earlier, because the plan snapshots the recordings volume too and the two
 # must describe the same moment as closely as possible. The order inside the pair matters: the server writes a
