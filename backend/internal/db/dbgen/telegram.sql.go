@@ -335,7 +335,7 @@ type GetTelegramDeliveryMessagesRow struct {
 	UserLanguage   string
 }
 
-// The messages of a recording in the chat, for the "Просмотрено" button, and the language of its account. Only for the
+// The messages of a recording in the chat, for the "Seen" button, and the language of its account. Only for the
 // chat the button was pressed in: the ids mean nothing in another one. No row: the recording is gone from the server
 // (deleted, or pushed out by the storage limit), or was sent to another chat.
 func (q *Queries) GetTelegramDeliveryMessages(ctx context.Context, arg GetTelegramDeliveryMessagesParams) (GetTelegramDeliveryMessagesRow, error) {

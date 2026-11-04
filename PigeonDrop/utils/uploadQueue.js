@@ -237,7 +237,7 @@ export function pruneRecordings() {
     })
 }
 
-// The "Очистить память" action (page/settings.js): deletes every recording on the
+// The "Clear memory" action (page/settings.js): deletes every recording on the
 // watch and forgets the upload history, which also empties the send queue. A
 // recording still being written is left alone. Refuses (busy) while an upload is
 // running, because that upload holds one of the files open and would otherwise

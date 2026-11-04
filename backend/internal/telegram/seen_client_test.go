@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// The calls the "Просмотрено" button needs of the Bot API: buttons under what is sent, and the answers to presses.
+// The calls the "Seen" button needs of the Bot API: buttons under what is sent, and the answers to presses.
 
 const seenKeyboard = `{"inline_keyboard":[[{"callback_data":"seen:abc","text":"Seen"}]]}`
 

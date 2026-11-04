@@ -28,7 +28,7 @@ AppSideService({
     //                 carries the server's result.
     //   pairStart   - page/pair.js asks for the codes of a new pairing (see ./pairing.js).
     //   pairPoll    - page/pair.js asks whether the pairing was approved yet.
-    //   checkServer - the settings page's "Проверить связь": walks the way to the server (./serverCheck.js).
+    //   checkServer - the settings page's "Check connection": walks the way to the server (./serverCheck.js).
     //   ping        - the watch asks whether anybody is here before it starts an upload; any reply will do
     //                 (utils/uploadQueue.js), so that a phone that does not answer is found in seconds.
     messageBuilder.on('request', ({ request, response }) => {

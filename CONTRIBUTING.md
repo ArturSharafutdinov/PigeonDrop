@@ -14,6 +14,8 @@ Code, comments, documentation, commit messages, issues and pull requests are in 
 
 To add a language, add a table next to each of these (tests check that the tables agree on their keys and placeholders). The watch picks its language from the system setting; unknown languages get English.
 
+CI enforces the policy: `python3 scripts/check-language.py` fails on Cyrillic or CJK letters outside the files it lists (the Russian tables, test fixtures, the benchmark's test phrases). If a new file really is data in another language, add it to the list in that script.
+
 ## Set up and check
 
 You need Go 1.26 (the `toolchain` line in `backend/go.mod` pins the patch release), PostgreSQL server binaries for the backend tests, Node.js 22+ for the watch app tests and Docker for the images. Python 3 with nothing installed runs the speech service's tests.
@@ -34,6 +36,9 @@ npm test                    # plain node:test on stubs of the Zepp OS modules, n
 # Speech recognition service (Python)
 cd stt
 python3 -m unittest discover -s tests -t .
+
+# Language policy (from the repository root)
+python3 scripts/check-language.py
 ```
 
 Do not edit generated code (`backend/internal/api/api.gen.go`, `backend/internal/db/dbgen/`): change `api/openapi.yaml` or the SQL in `internal/db/queries` and run `make generate`. CI fails if it is stale.

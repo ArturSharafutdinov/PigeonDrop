@@ -15,7 +15,7 @@ import (
 	"github.com/ArturSharafutdinov/PigeonDrop/backend/internal/db/dbgen"
 )
 
-// The "Просмотрено" button: it is put under every message of a recording, and pressing it deletes them from the chat.
+// The "Seen" button: it is put under every message of a recording, and pressing it deletes them from the chat.
 // The deliveries run on a real database with a Telegram that remembers its calls (deliver_test.go); the presses go to a
 // bot on the same database with a Telegram that remembers what it was asked to delete (bot_test.go).
 

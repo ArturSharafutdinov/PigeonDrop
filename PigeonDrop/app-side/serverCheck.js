@@ -1,4 +1,4 @@
-// "Проверить связь с сервером" (page/settings.js): the phone's half. It walks the way a recording takes and says
+// "Check connection" (page/settings.js): the phone's half. It walks the way a recording takes and says
 // where it stops, as a reply { ok, stage, error }:
 //   stage 'server' - the server could not be reached, or says it is unwell (GET /healthz also checks its database);
 //   stage 'token'  - the server is fine, but it does not accept this watch's device token (no longer paired);

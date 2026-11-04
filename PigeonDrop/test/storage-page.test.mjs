@@ -29,7 +29,7 @@ const params = (state) => JSON.stringify({ state })
 
 console.log('1. nearly full: what is shown, the buzz, the screen, and the way back')
 { const page = open(params('nearly_full'))
-  ok(texts().length === 2 && texts()[0] === 'Хранилище\nпочти заполнено' && /Очистите его на сайте/.test(texts()[1]) && /начнут удаляться/.test(texts()[1]), '1: a title and an explanation -> ' + JSON.stringify(texts()))
+  ok(texts().length === 2 && texts()[0] === 'Storage\nis almost full' && /Clear it on the website/.test(texts()[1]) && /start to be deleted/.test(texts()[1]), '1: a title and an explanation -> ' + JSON.stringify(texts()))
   ok(stubs.vib.instances.length === 1 && JSON.stringify(stubs.vib.instances[0].log) === '["setMode 1000","start"]', '1: one buzz of the 1-second kind (VIBRATOR_SCENE_DURATION_LONG), started when the page opens -> ' + JSON.stringify(stubs.vib.instances[0].log))
   ok(JSON.stringify(stubs.holds) === '[10000]', '1: the screen is held for the 10 seconds the page is up -> ' + JSON.stringify(stubs.holds))
   ok(timers.length === 1 && timers[0].ms === 10000, '1: one timer, 10 s -> ' + JSON.stringify(timers.map((t) => t.ms)))
@@ -38,15 +38,15 @@ console.log('1. nearly full: what is shown, the buzz, the screen, and the way ba
 
 console.log('2. full: its own words')
 { open(params('full'))
-  ok(texts()[0] === 'Хранилище\nзаполнено' && /Старые записи удаляются сами/.test(texts()[1]) && !/почти/.test(texts().join(' ')), '2: ' + JSON.stringify(texts()))
+  ok(texts()[0] === 'Storage\nis full' && /oldest recordings are being deleted/.test(texts()[1]) && !/almost/.test(texts().join(' ')), '2: ' + JSON.stringify(texts()))
   ok(texts()[1] !== (open(params('nearly_full')), texts()[1]), '2: differs from the nearly-full text') }
 
 console.log('3. the state comes with the page, or from what the queue remembered, or there is nothing to say')
 for (const [label, p, stored, want] of [
-  ['an unreadable parameter, a remembered state', 'not json', 'full', 'Хранилище\nзаполнено'],
-  ['no parameter, a remembered state', undefined, 'nearly_full', 'Хранилище\nпочти заполнено'],
-  ['an unknown state in the parameter, a remembered one', params('weird'), 'full', 'Хранилище\nзаполнено'],
-  ['the parameter wins over what is remembered', params('nearly_full'), 'full', 'Хранилище\nпочти заполнено'],
+  ['an unreadable parameter, a remembered state', 'not json', 'full', 'Storage\nis full'],
+  ['no parameter, a remembered state', undefined, 'nearly_full', 'Storage\nis almost full'],
+  ['an unknown state in the parameter, a remembered one', params('weird'), 'full', 'Storage\nis full'],
+  ['the parameter wins over what is remembered', params('nearly_full'), 'full', 'Storage\nis almost full'],
 ]) {
   stubs.store.state = null
   stubs.widgets.length = 0; stubs.calls.length = 0

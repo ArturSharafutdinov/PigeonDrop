@@ -24,9 +24,13 @@ const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); i
 const tick = () => new Promise((r) => realSetTimeout(r, 25))
 const until = async (cond, ms = 4000) => { const t0 = realNow(); while (!cond() && realNow() - t0 < ms) await tick(); return cond() }
 
-let n = 0
+let n = 0, previous = null
 async function world() {
   n++
+  // The tail of the previous world's sweep (marking the last recording, ending the lease) reads its state through
+  // getApp(), which is about to point at the new world: let it finish first, or it would end the new world's sweep.
+  // (clearAllRecordings answers "busy" for as long as a sweep runs.)
+  if (previous) await until(() => !previous.page.clearAllRecordings().busy, 8000)
   device.token = 'pdd_test_token_0123456789'
   ctl.root = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-')); ctl.shortRead = null; ctl.readCalls = 0
   ctl.failOpen = ctl.failStat = ctl.failWhole = ctl.failWrite = null; resetFds()
@@ -46,6 +50,7 @@ async function world() {
   globalThis.getApp = () => ({ _options: { globalData: w.globalData } })
   w.app = await import(fileUrl(QUEUE) + '?app' + n)      // what app.js bundles
   w.page = await import(fileUrl(QUEUE) + '?page' + n)    // what page/index.js bundles
+  previous = w
   return w
 }
 function addRecording(name, bytes = 100) {
