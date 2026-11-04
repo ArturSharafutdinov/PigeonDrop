@@ -8,7 +8,6 @@ Unicode handling or Russian rendering, and the benchmark's Russian test phrases.
     python3 scripts/check-language.py FILE...  # checks the given files
 """
 import fnmatch
-import re
 import subprocess
 import sys
 
@@ -23,12 +22,18 @@ ALLOWED = [
     ("docs/research/stt-benchmark/*", "the benchmark's Russian test phrases and their checks"),
 ]
 
-LETTERS = re.compile(
-    "[Ѐ-ӿ"          # Cyrillic
-    "぀-ヿ"           # Hiragana, Katakana
-    "㐀-䶿一-鿿"  # CJK ideographs
-    "가-힯]"          # Hangul
-)
+# Written as code points, not as letters, so that this file does not contain the characters it looks for.
+RANGES = [
+    (0x0400, 0x04FF),  # Cyrillic
+    (0x3040, 0x30FF),  # Hiragana, Katakana
+    (0x3400, 0x4DBF),  # CJK ideographs, extension A
+    (0x4E00, 0x9FFF),  # CJK ideographs
+    (0xAC00, 0xD7AF),  # Hangul
+]
+
+
+def has_letters(line):
+    return not line.isascii() and any(lo <= ord(char) <= hi for char in line for lo, hi in RANGES)
 
 
 def allowed(path):
@@ -46,7 +51,7 @@ def check(path):
             lines = f.read().split("\n")
     except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
         return []  # binary files and files removed from the working tree
-    return [(n, line.strip()) for n, line in enumerate(lines, 1) if LETTERS.search(line)]
+    return [(n, line.strip()) for n, line in enumerate(lines, 1) if has_letters(line)]
 
 
 def main(argv):
