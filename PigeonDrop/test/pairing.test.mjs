@@ -101,7 +101,7 @@ console.log('4. the happy path: code, QR, polling, approval, token saved')
   ok(stubs.holds.length === 1 && stubs.holds[0] >= 10 * 60 * 1000 && stubs.holds[0] <= 15 * 60 * 1000, 'the screen is held for about the code\'s lifetime, no more -> ' + stubs.holds[0] + ' ms')
   ok(ph.requests.length === 1 && ph.requests[0].type === 'pairStart' && ph.requests[0].clientName === 'Amazfit Test', 'asks the phone for a code, naming the watch -> ' + JSON.stringify(ph.requests[0]))
   ok(ph.timeouts[0] === 15000 && ph.timeouts[0] > 10000, 'the watch waits 15 s for it: longer than the 10 s the phone gives the server, so "no server" always comes back as an answer -> ' + ph.timeouts[0])
-  ok(!qr() && status() === 'Связь с телефоном\nи сервером...', 'before the answer: no QR yet, "connecting" shown')
+  ok(!qr() && status() === 'Connecting to phone\nand server...', 'before the answer: no QR yet, "connecting" shown')
   await ph.reply({ ok: true, ...CODES })
   ok(qr() && qr().opts.content === 'https://s.example/pair?code=BCDF-GHJK', 'QR code points at the address the server gave -> ' + (qr() && qr().opts.content))
   ok(/BCDF-GHJK/.test(status()), 'the code is also shown as text -> ' + JSON.stringify(status()))
@@ -114,7 +114,7 @@ console.log('4. the happy path: code, QR, polling, approval, token saved')
   ok(JSON.stringify(timerDelays()) === '[5000]' && stubs.saved.length === 0, 'still waiting: next poll scheduled, nothing saved')
   await fire(5000); await ph.reply({ ok: true, status: 'approved', deviceToken: 'pdd_secret_token', deviceId: 'dev-id' })
   ok(stubs.saved.length === 1 && stubs.saved[0].token === 'pdd_secret_token' && stubs.saved[0].deviceId === 'dev-id', 'approved: the token is saved -> ' + JSON.stringify(stubs.saved))
-  ok(/привязаны/.test(status()) && !status().includes('pdd_'), 'the screen says so, without showing the token -> ' + JSON.stringify(status()))
+  ok(/paired/.test(status()) && !status().includes('pdd_'), 'the screen says so, without showing the token -> ' + JSON.stringify(status()))
   ok(stubs.calls.includes('retryPendingUploads') && stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), 'recordings that were waiting are sent, and the screen is released')
   ok(stubs.calls.indexOf('saveDevice') < stubs.calls.indexOf('clearStorageState') && stubs.calls.indexOf('clearStorageState') < stubs.calls.indexOf('retryPendingUploads'), 'the storage warning about the previous account is forgotten before the first upload for the new one -> ' + stubs.calls.filter((c) => /Device|Storage|retry/.test(c)).join(' '))
   ok(JSON.stringify(timerDelays()) === '[2500]', 'then, after a moment, it leaves the screen -> ' + JSON.stringify(timerDelays()))
@@ -148,41 +148,41 @@ console.log('7. the code runs out')
 for (const code of ['expired_token', 'invalid_device_code']) {
   const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: true, ...CODES }); await fire(5000)
   const polls = ph.requests.length; await ph.reply({ ok: false, code, error: 'x' })
-  ok(/истёк/.test(status()) && timers.length === 0 && stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), code + ': the screen says the code ran out, polling stops, the screen is released -> ' + JSON.stringify(status()))
+  ok(/expired/.test(status()) && timers.length === 0 && stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), code + ': the screen says the code ran out, polling stops, the screen is released -> ' + JSON.stringify(status()))
   ok(stubs.saved.length === 0 && ph.requests.length === polls, code + ': nothing saved, nothing requested again') }
 { const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: true, ...CODES, expiresIn: 20 }); const polls = ph.requests.length
   now += 25_000; await fire(5000)
-  ok(ph.requests.length === polls && /истёк/.test(status()), 'a code past its own lifetime is not polled at all -> requests ' + ph.requests.length) }
+  ok(ph.requests.length === polls && /expired/.test(status()), 'a code past its own lifetime is not polled at all -> requests ' + ph.requests.length) }
 
 console.log('8. no code to start with')
 { const ph = scenario(); const page = fresh(); page.build()
   await ph.reply({ ok: false, noServer: true, error: 'server: Network down' })
-  ok(/Нет связи/.test(status()) && JSON.stringify(timerDelays()) === '[4000]' && !qr(), 'the first failure is shown and retried after 4 s, with no QR -> ' + JSON.stringify(status()))
+  ok(/unreachable/.test(status()) && JSON.stringify(timerDelays()) === '[4000]' && !qr(), 'the first failure is shown and retried after 4 s, with no QR -> ' + JSON.stringify(status()))
   await fire(4000); ok(ph.requests.length === 2 && ph.requests[1].type === 'pairStart', 'it asks for a code again')
   await ph.fail(new Error('Timed out')); await fire(4000); await ph.reply({ ok: true, ...CODES })
   ok(qr() && /BCDF-GHJK/.test(status()), 'once the phone answers, the code appears') }
 { const ph = scenario(); const page = fresh(); page.build()
   for (let i = 0; i < 6; i++) { await ph.reply({ ok: false, error: 'rejected' }); if (timers.length) await fire(4000) }
-  ok(ph.requests.length === 6 && timers.length === 0 && /Не удалось/.test(status()), 'after 6 failed attempts it gives up with a message instead of retrying forever -> ' + ph.requests.length + ' requests')
+  ok(ph.requests.length === 6 && timers.length === 0 && /Could not get/.test(status()), 'after 6 failed attempts it gives up with a message instead of retrying forever -> ' + ph.requests.length + ' requests')
   ok(stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), 'and releases the screen') }
 { const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: false, code: 'too_many_attempts', error: 'x' })
-  ok(/Слишком много/.test(status()) && timerDelays()[0] === 4000, 'too many attempts is explained, then retried') }
+  ok(/Too many/.test(status()) && timerDelays()[0] === 4000, 'too many attempts is explained, then retried') }
 
 console.log('8b. the two link problems are told apart, with what to do about each')
 { const ph = scenario(); const page = fresh(); page.build(); await ph.fail(new Error('Timed out in 15000ms.'))
-  ok(status() === 'Нет связи с телефоном\nПерезапустите\nприложение Zepp', 'the phone does not answer (the request times out): restart Zepp -> ' + JSON.stringify(status()))
+  ok(status() === 'Phone is not reachable\nRestart the\nZepp app', 'the phone does not answer (the request times out): restart Zepp -> ' + JSON.stringify(status()))
   await fire(4000); await ph.reply({ ok: false, noServer: true, error: 'server: no answer in 10 s' })
-  ok(status() === 'Нет связи с сервером\nПроверьте интернет\nна телефоне', 'the phone answers that it cannot reach the server: check the internet -> ' + JSON.stringify(status()))
+  ok(status() === 'Server is unreachable\nCheck the internet\non the phone', 'the phone answers that it cannot reach the server: check the internet -> ' + JSON.stringify(status()))
   await fire(4000); await ph.reply({ ok: false, code: 'invalid_request', error: 'x' })
-  ok(status() === 'Не удалось получить\nкод привязки', 'any other refusal has neither piece of advice -> ' + JSON.stringify(status()))
+  ok(status() === 'Could not get\na pairing code', 'any other refusal has neither piece of advice -> ' + JSON.stringify(status()))
   await fire(4000); await ph.reply({ ok: true, ...CODES })
   ok(qr() && /BCDF-GHJK/.test(status()), 'and when the phone is back, the code appears') }
 { const ph = scenario(); const page = fresh(); page.build()
   for (let i = 0; i < 6; i++) { await ph.fail(new Error('Timed out in 15000ms.')); if (timers.length) await fire(4000) }
-  ok(ph.requests.length === 6 && timers.length === 0 && status() === 'Нет связи с телефоном\nПерезапустите\nприложение Zepp', 'giving up keeps the reason on the screen, so the person knows what to fix -> ' + JSON.stringify(status())) }
+  ok(ph.requests.length === 6 && timers.length === 0 && status() === 'Phone is not reachable\nRestart the\nZepp app', 'giving up keeps the reason on the screen, so the person knows what to fix -> ' + JSON.stringify(status())) }
 { const ph = scenario(); const page = fresh(); page.build()
   for (let i = 0; i < 6; i++) { await ph.reply({ ok: false, noServer: true, error: 'server: Network down' }); if (timers.length) await fire(4000) }
-  ok(timers.length === 0 && status() === 'Нет связи с сервером\nПроверьте интернет\nна телефоне', 'the same for a server that cannot be reached -> ' + JSON.stringify(status())) }
+  ok(timers.length === 0 && status() === 'Server is unreachable\nCheck the internet\non the phone', 'the same for a server that cannot be reached -> ' + JSON.stringify(status())) }
 
 console.log('9. leaving the screen')
 { const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: true, ...CODES }); page.onDestroy()

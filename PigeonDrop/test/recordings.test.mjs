@@ -1,4 +1,4 @@
-// utils/recordings.js: discardRecording(), what "Отмена" uses to throw a recording away.
+// utils/recordings.js: discardRecording(), what "Cancel" uses to throw a recording away.
 
 import fs from 'node:fs'
 import os from 'node:os'

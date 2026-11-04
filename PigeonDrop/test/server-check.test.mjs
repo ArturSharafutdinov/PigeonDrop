@@ -1,4 +1,4 @@
-// "Проверить связь с сервером", the phone's half (app-side/serverCheck.js).
+// "Check connection" (settings), the phone's half (app-side/serverCheck.js).
 
 import { generate, fileUrl } from './helpers/load.mjs'
 

@@ -188,7 +188,7 @@ console.log('14. a stat that fails never deletes a recording')
   w.Q.retryPendingUploads(); await finished(w)
   ok(files().includes('voice_240.opus') && w.states.at(-1).state === 'error' && /cannot read file size/.test(w.states.at(-1).message), 'stat failure -> file kept, error shown -> ' + w.states.at(-1).message) }
 
-console.log('15. "Очистить память": clearAllRecordings')
+console.log('15. "Clear memory": clearAllRecordings')
 { const w = await world(); addRecording(w, 'voice_250.opus', 100); addRecording(w, 'voice_251.opus', 100); addRecording(w, 'voice_252.opus', 100)
   w.Q.markUploaded('voice_250.opus'); w.Q.setActiveRecording('voice_252.opus')
   const r = w.Q.clearAllRecordings()
@@ -346,7 +346,7 @@ for (const [label, status, reply] of [['429 with the error code', 429, { ok: fal
   w.serverStatus = status; w.serverReply = reply
   w.Q.retryPendingUploads(); await finished(w)
   const last = w.states.at(-1)
-  ok(last.state === 'error' && last.message === 'Слишком много загрузок.\nПовторите позже' && last.pending === 2, label + ' -> ' + JSON.stringify(last))
+  ok(last.state === 'error' && last.message === 'Too many uploads.\nTry again later' && last.pending === 2, label + ' -> ' + JSON.stringify(last))
   ok(w.posts.length === 1 && uploaded().length === 0 && files().length === 2, label + ': the sweep stopped at the first refusal, nothing was marked sent or deleted')
   ok(device.token !== null && device.cleared === 0, label + ': the watch is still paired')
   w.serverStatus = 200; w.serverReply = null

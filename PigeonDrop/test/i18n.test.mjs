@@ -1,5 +1,5 @@
 // The texts of the watch in English and Russian (i18n/): the two tables agree, t() picks the language of the watch,
-// and the screens say the right words in English. (The other tests run the screens in Russian and check those texts.)
+// and the screens say the right words in English and in Russian. (The other tests run the screens in English.)
 
 import fs from 'node:fs'
 import * as settingsStub from './stubs/settings.mjs'
@@ -73,7 +73,15 @@ console.log('3. the main page in English')
   ok(state({ state: 'error', message: 'cannot open file', pending: 1 }) === 'Could not send\ncannot open file\nQueued: 1', 'any other failure shows its reason')
   ok(state({ state: 'unpaired', pending: 2, revoked: false }) === 'Watch is not paired\nSettings →\nPair the watch\nQueued: 2', 'not paired')
   ok(state({ state: 'unpaired', pending: 2, revoked: true }) === 'Pairing was revoked\nSettings →\nPair the watch\nQueued: 2', 'pairing revoked')
+  setLanguage(RUSSIAN)
+  page.build()
+  const ruLabels = mainStubs.created.filter((w) => w.type === 'BUTTON').slice(-3).map((w) => w.text)
+  ok(ruLabels.join() === 'Настройки,Список записей,Отмена', 'the buttons in Russian -> ' + ruLabels.join())
+  ok(page.idleText() === 'Клик — записать\nДолгое нажатие —\nвоспроизвести последнюю', 'idle text in Russian')
+  ok(state({ state: 'sending', index: 2, count: 3, chunk: 4, total: 11 }) === 'Отправка 2 из 3\nчасть 4 из 11', 'sending in Russian')
+  ok(state({ state: 'error', kind: 'phone', message: 'x', pending: 3 }) === 'Нет связи с телефоном\nПерезапустите\nприложение Zepp\nВ очереди: 3', 'the phone does not answer, in Russian')
   setLanguage(GERMAN)
+  mainStubs.texts.length = 0; mainStubs.created.length = 0; page.build()
   ok(state({ state: 'connecting', pending: 1 }) === 'Connecting to phone...\nQueued: 1', 'a watch in German gets English')
   ok(!mainStubs.texts.some((x) => CYRILLIC.test(x)) && !mainStubs.created.some((w) => CYRILLIC.test(w.text || '')), 'nothing on the screen is Russian') }
 
