@@ -53,7 +53,7 @@ if [ ! -f data/stress/max60.wav ]; then
     -filter_complex "[0:a][1:a][2:a]concat=n=3:v=0:a=1" -t 60 -ar 16000 -ac 1 -c:a pcm_s16le data/stress/max60.wav
 fi
 
-paths=(${STRESS_PATHS:-/data/wav /data/stress/max60.wav})
+read -r -a paths <<< "${STRESS_PATHS:-/data/wav /data/stress/max60.wav}"
 if [ -n "${LENGTHS:-}" ]; then
   rm -rf data/varied && mkdir -p data/varied
   for sec in $LENGTHS; do

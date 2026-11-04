@@ -1,0 +1,2 @@
+# check-limits.sh uses `[ test ] && ok || bad` on purpose: ok() never fails, so bad() runs only when the test fails.
+disable=SC2015

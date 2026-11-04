@@ -168,8 +168,7 @@ jobs:
           zeus build < /dev/null
           ls dist
 
-  # Every shell script of the repository (the .shellcheckrc files next to some of them are picked up). The benchmark
-  # scripts in bench/ are cleaned up separately.
+  # Every shell script of the repository (the .shellcheckrc files next to some of them are picked up).
   shell:
     name: Shell scripts
     needs: changes
@@ -179,7 +178,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
-        run: git ls-files -z '*.sh' ':!bench' | xargs -0 shellcheck
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck
 
   # Looks for passwords, tokens and keys in the whole history, not only in what the pull request changes. The made-up
   # values the tests use are allowed in .gitleaks.toml.

@@ -2,7 +2,7 @@
 # Checks that the benchmark's limits really work, and are not only written in the command.
 # Needs the built image stt-parakeet (./build.sh parakeet) and the file data/smoke/ru00.wav (./smoke.sh).
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 fail=0
 ok()  { echo "  ok: $1"; }
 bad() { echo "  FAIL: $1"; fail=1; }

@@ -39,7 +39,6 @@ files=()
 for f in "${wavs[@]}"; do files+=("/data/$(basename "$f")"); done
 
 docker_mem=$(docker info --format '{{.MemTotal}}')
-docker_cpus=$(docker info --format '{{.NCPU}}')
 mkdir -p "$OUT"
 {
   echo "date: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -59,6 +58,7 @@ for profile in $PROFILES; do
   for name in $IMAGES; do
     for mode in $MODES; do
       echo "== $name / $profile / $mode"
+      # shellcheck disable=SC2086  # $flags is several options on purpose
       docker run --rm --network none $flags -v "$PWD/$DATA:/data:ro" "stt-$name" \
         --repeat "$REPEAT" --warmup "$WARMUP" --lang-mode "$mode" "${files[@]}" \
         > "$OUT/${name}__${profile}__${mode}.jsonl" 2> "$OUT/${name}__${profile}__${mode}.log" \
