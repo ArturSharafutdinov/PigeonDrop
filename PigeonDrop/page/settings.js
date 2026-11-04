@@ -42,7 +42,7 @@ Page({
       text_style: text_style.WRAP,
     })
 
-    // Corners stay well within the ~230px round-bezel safe radius (see ARCHITECTURE.md §4):
+    // Corners stay well within the ~230px round-bezel safe radius (see docs/architecture.md, section 6):
     // furthest corner is ~166px from center for the first button, ~152px for the second.
     createWidget(widget.BUTTON, {
       x: px(100),

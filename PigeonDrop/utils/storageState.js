@@ -1,5 +1,5 @@
 // How full the account's storage on the server was the last time the server said so. Every answer to an upload
-// carries it ({ state: 'ok' | 'nearly_full' | 'full', ... }, API_SPEC.md); the main page shows a warning for the
+// carries it ({ state: 'ok' | 'nearly_full' | 'full', ... }, docs/api.md); the main page shows a warning for the
 // last two. The server cannot reach the watch by itself, so this is the only way the person hears about it, and
 // the state is kept in a small file so the warning is still there when the app is opened again, until a later
 // upload says there is room again. Same @zos/fs pattern as utils/device.js.

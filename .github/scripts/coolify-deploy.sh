@@ -2,7 +2,7 @@
 # Asks Coolify to deploy one application and waits until the deployment has finished.
 #
 # Needs COOLIFY_URL, COOLIFY_TOKEN and COOLIFY_APP_UUID in the environment (GitHub secrets, see
-# backend/DEPLOY.md). Without all three it says so and exits 0, so that the workflow is safe to push
+# docs/deployment.md). Without all three it says so and exits 0, so that the workflow is safe to push
 # before Coolify is set up. A deployment that fails, or that Coolify does not acknowledge, fails the job.
 # When Coolify reports the deployment as finished it also writes `deployed=true` to $GITHUB_OUTPUT; no
 # other outcome does, including the exits with a warning.
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 if [ -z "${COOLIFY_URL:-}" ] || [ -z "${COOLIFY_TOKEN:-}" ] || [ -z "${COOLIFY_APP_UUID:-}" ]; then
-  echo "::warning::The Coolify secrets are not set, so nothing was deployed (see backend/DEPLOY.md)"
+  echo "::warning::The Coolify secrets are not set, so nothing was deployed (see docs/deployment.md)"
   exit 0
 fi
 

@@ -8,7 +8,7 @@ info:
     will be generated from it too. Run `make generate` after editing.
 
     Everything is under `/v1` except the health check: the watch app and the people's web
-    client use the same API (API_SPEC.md at the repository root has the prose version). Errors
+    client use the same API (docs/api.md has the prose version). Errors
     carry a machine-readable `code`.
 servers:
   - url: /

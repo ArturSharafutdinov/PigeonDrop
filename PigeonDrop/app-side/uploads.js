@@ -18,7 +18,7 @@
 // The server knows whose recording it is from the device token the watch got when it
 // was paired. The watch sends the token with its chunks; this module keeps none of it
 // (it has no dependable storage) and presents it as `Authorization: Bearer` with the
-// final request, POST /v1/messages { messageId, audio: base64 } (API_SPEC.md). A token
+// final request, POST /v1/messages { messageId, audio: base64 } (docs/api.md). A token
 // the server refuses is reported as `unauthorized` so the watch can forget it. A server that cannot be reached
 // (no internet on the phone, no answer in time, or a gateway error because the server behind the proxy is down) is
 // reported as `noServer`, so the watch can say that, and not "no answer from the phone". Other answers the watch

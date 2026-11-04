@@ -11,7 +11,7 @@ name: CI/CD
 # push). The image is built here and pushed to GitHub's container registry;
 # Coolify on the VPS only pulls and runs it, so the build never competes with
 # the other projects for the VPS. The deploy job needs the three Coolify
-# secrets described in backend/DEPLOY.md; without them it still pushes the
+# secrets described in docs/deployment.md; without them it still pushes the
 # image, says that it did not deploy, and finishes, so this workflow is safe to
 # push before Coolify is set up.
 #
@@ -318,7 +318,7 @@ jobs:
   # Coolify application (the secret COOLIFY_STT_APP_UUID) and its own `deployed` tag, so that a change of one never
   # rebuilds or restarts the other. The image holds the model (about 1.6 GB); before it is pushed it is started with
   # the production limits and asked to recognise something, so that an image that does not even answer never becomes
-  # `latest`. Its Coolify application is created by hand once (backend/DEPLOY.md); until the secret is set, the
+  # `latest`. Its Coolify application is created by hand once (docs/deployment.md); until the secret is set, the
   # image is still built and pushed and the deploy step only warns.
   deploy-stt:
     name: Deploy the speech recognition service to Coolify
