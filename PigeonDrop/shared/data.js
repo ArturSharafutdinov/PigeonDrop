@@ -1,3 +1,7 @@
+// Copyright (c) 2021-present Zepp Health. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0; see ./LICENSE and ../../THIRD_PARTY_NOTICES.md.
+// Vendored unmodified from https://github.com/zepp-health/zeppos-samples (application/2.0/todo-list/shared/data.js).
+
 export function json2buf(json) {
   return str2buf(json2str(json))
 }
