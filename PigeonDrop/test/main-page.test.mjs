@@ -188,7 +188,7 @@ console.log('--- 9. a watch that is not paired ---')
 stubs.setPaired(false)
 page = mk(); page.build(); reset(); timeouts.length = 0; now = 11_000_000
 page.toggleRecording(); reset(); page.toggleRecording()
-ok(last() === 'Saved. Watch is not\npaired: Settings\n→ Pair the watch', '9a: after stop -> ' + JSON.stringify(last()))
+ok(last() === 'Saved. Watch is not\npaired: Settings\n→ Connection', '9a: after stop -> ' + JSON.stringify(last()))
 ok(stubs.log.includes('retryPendingUploads'), '9a: the queue is still kicked (it reports "unpaired" by itself)')
 // 9b. the limit message is kept in front of it
 page = mk(); page.build(); page.toggleRecording(); reset()
@@ -196,9 +196,19 @@ for (let i = 1; i <= 5; i++) { now += 1000; tickFn() }
 ok(last().startsWith('Recording limit\nreached') && last().includes('not\npaired'), '9b: limit + unpaired -> ' + JSON.stringify(last()))
 // 9c. what the upload queue reports
 reset(); stubs.listener({ state: 'unpaired', pending: 2, revoked: false })
-ok(last() === 'Watch is not paired\nSettings →\nPair the watch\nQueued: 2', '9c: never paired -> ' + JSON.stringify(last()))
+ok(last() === 'Watch is not paired\nSettings →\nConnection\nQueued: 2', '9c: never paired -> ' + JSON.stringify(last()))
 stubs.listener({ state: 'unpaired', pending: 1, revoked: true })
-ok(last() === 'Pairing was revoked\nSettings →\nPair the watch\nQueued: 1', '9c: revoked by the server -> ' + JSON.stringify(last()))
+ok(last() === 'Pairing was revoked\nSettings →\nConnection\nQueued: 1', '9c: revoked by the server -> ' + JSON.stringify(last()))
+// 9c'. a watch set up for a server of the person's own lacks a token, not a pairing: other words, another way to fix it
+reset(); stubs.listener({ state: 'unpaired', pending: 2, revoked: false, custom: true })
+ok(last() === 'No token for the\nPersonal Server\nSettings → Connection\n→ Personal Server\nQueued: 2', "9c': own server, no token -> " + JSON.stringify(last()))
+stubs.listener({ state: 'unpaired', pending: 1, revoked: true, custom: true })
+ok(last() === 'The server refused\nthe token\nSettings → Connection\n→ Personal Server\nQueued: 1', "9c': own server refused the token -> " + JSON.stringify(last()))
+stubs.setPaired(false); stubs.setCustom(true)
+page = mk(); page.build(); reset(); timeouts.length = 0; now = 12_000_000
+page.toggleRecording(); reset(); page.toggleRecording()
+ok(last() === 'Saved. No token for\nthe Personal Server:\nSettings → Connection', "9c': after stop on an own server without a token -> " + JSON.stringify(last()))
+stubs.setCustom(false)
 // 9d. ... and an "unpaired" report never overwrites the stopwatch
 page = mk(); page.build(); page.toggleRecording(); const n9 = stubs.texts.length
 stubs.listener({ state: 'unpaired', pending: 1, revoked: false })

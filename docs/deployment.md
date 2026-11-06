@@ -128,7 +128,7 @@ The command prints the code on the first line and, on the second (stderr), when 
 
 1. In `PigeonDrop/config.js` set `SERVER_URL = 'https://<your-subdomain>'`.
 2. `cd PigeonDrop && zeus preview`.
-3. On the watch: **Settings → Pair the watch**, open the QR code on the phone (HTTPS now), sign in and approve. A pairing made with a test server on your Mac is not valid on the new server: it is a different database, so the watch is paired again.
+3. On the watch: **Settings → Connection → Pair via QR code**, open the QR code on the phone (HTTPS now), sign in and approve. A pairing made with a test server on your Mac is not valid on the new server: it is a different database, so the watch is paired again.
 
 ### 9. Speech recognition: the second application
 

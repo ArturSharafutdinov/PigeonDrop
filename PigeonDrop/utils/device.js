@@ -11,9 +11,7 @@
 // go changes only when the person changes it.
 
 import { readFileSync, writeFileSync, rmSync } from '@zos/fs'
-import { normalizeServerUrl } from './serverUrl'
-
-const MAX_TOKEN_LENGTH = 256
+import { normalizeServerUrl, isUsableToken } from './serverUrl'
 
 const DEVICE_FILE = 'device.json'
 
@@ -83,9 +81,7 @@ export function saveDevice({ token, deviceId }) {
 export function saveCustomServer({ serverUrl, token }) {
   const checked = normalizeServerUrl(serverUrl)
   if (!checked.ok) throw new Error('bad server address')
-  if (typeof token !== 'string' || token.length === 0 || token.length > MAX_TOKEN_LENGTH || /[\s\u0000-\u001f\u007f-\u009f]/.test(token)) {
-    throw new Error('bad token')
-  }
+  if (!isUsableToken(token)) throw new Error('bad token')
   writeFileSync({ path: DEVICE_FILE, data: JSON.stringify({ token, serverUrl: checked.url }), options: { encoding: 'utf8' } })
 }
 

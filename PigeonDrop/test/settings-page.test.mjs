@@ -38,14 +38,23 @@ ok(timeouts.length === 0 && page.state.clearTimer === null, 'onDestroy drops a p
 // Pairing: the other button, and what the status line says about it.
 const fresh = () => { stubs.widgets.length = 0; stubs.pushed.length = 0; const p = mk(); p.build(); return p }
 fresh()
-ok(stubs.widgets.filter((w) => w.type === 'BUTTON').map((w) => w.opts.text).join('|') === 'Pair the watch|Check connection|Clear memory', 'the buttons are pairing, clearing and the connection check (server setup and sync are gone)')
-stubs.widgets.find((w) => w.opts.text === 'Pair the watch').opts.click_func()
-ok(stubs.pushed.length === 1 && stubs.pushed[0].url === 'page/pair', '"Pair the watch" opens the pairing screen -> ' + JSON.stringify(stubs.pushed))
+ok(stubs.widgets.filter((w) => w.type === 'BUTTON').map((w) => w.opts.text).join('|') === 'Connection|Check connection|Clear memory', 'the buttons are the connection, the connection check and clearing')
+stubs.widgets.find((w) => w.opts.text === 'Connection').opts.click_func()
+ok(stubs.pushed.length === 1 && stubs.pushed[0].url === 'page/connection', '"Connection" opens the connection screen -> ' + JSON.stringify(stubs.pushed))
 ok(stubs.widgets[0].text === 'Watch is not paired\nto an account', 'status says the watch is not paired -> ' + JSON.stringify(stubs.widgets[0].text))
 stubs.setPaired(true); fresh()
 ok(stubs.widgets[0].text === 'Watch is paired\nto an account', 'and once paired, that it is -> ' + JSON.stringify(stubs.widgets[0].text))
 { const b = stubs.widgets.find((w) => w.opts.text === 'Clear memory'); b.opts.click_func(); timeouts[0].fn()
   ok(stubs.widgets[0].text === 'Watch is paired\nto an account', 'after the clear confirmation expires, the status line shows the pairing state again') }
+
+// A watch set up for a server of the person's own says so, with the host it sends to.
+stubs.setPaired(true); stubs.setCustom(true, 'https://own.example:8443/drop'); fresh()
+ok(stubs.widgets[0].text === 'Personal Server:\nown.example:8443', 'status line on an own server -> ' + JSON.stringify(stubs.widgets[0].text))
+stubs.setPaired(false); fresh()
+ok(stubs.widgets[0].text === 'Personal Server:\nown.example:8443\nno token', '...and without a token -> ' + JSON.stringify(stubs.widgets[0].text))
+stubs.setCustom(true, null); fresh()
+ok(stubs.widgets[0].text === 'Personal Server:\n?\nno token', '...and with a damaged address -> ' + JSON.stringify(stubs.widgets[0].text))
+stubs.setCustom(false, null); stubs.setPaired(true); fresh()
 
 // Check connection: the phone walks the way to the server and the status line says where it broke.
 {
@@ -64,6 +73,12 @@ ok(stubs.widgets[0].text === 'Watch is paired\nto an account', 'and once paired,
   r = await run({ ok: false, stage: 'token', error: 'HTTP 401' }); ok(r.text.startsWith('Server is reachable,\nbut'), 'token refused -> ' + JSON.stringify(r.text))
   r = await run({ ok: false, stage: 'upload', error: 'HTTP 500' }); ok(r.text === 'Server error\n(HTTP 500)', 'upload route fails -> ' + JSON.stringify(r.text))
   r = await run(() => Promise.reject(new Error('Timed out'))); ok(r.text === 'Phone does not answer\nRestart the\nZepp app', 'no answer from the phone -> ' + JSON.stringify(r.text))
+  stubs.setPaired(true); stubs.setCustom(true, 'https://own.example')
+  r = await run({ ok: true, stage: 'upload', paired: true }); ok(r.text === 'All good:\nthe server accepted\nthe token', 'own server, all fine -> ' + JSON.stringify(r.text))
+  r = await run({ ok: false, stage: 'token', error: 'HTTP 401' }); ok(r.text === 'Server is reachable,\nbut refused\nthe token', 'own server, token refused: no talk of a pairing -> ' + JSON.stringify(r.text))
+  r = await run({ ok: false, stage: 'token', error: 'no token' }); ok(r.text === 'Personal Server:\nno token yet', 'own server, no token -> ' + JSON.stringify(r.text))
+  r = await run({ ok: false, stage: 'upload', error: 'HTTP 404' }); ok(r.text === 'Server error\n(HTTP 404)', 'own server without the upload route -> ' + JSON.stringify(r.text))
+  stubs.setCustom(false, null)
   stubs.setPaired(false)
   r = await run({ ok: true, stage: 'server', paired: false }); ok(sent[0].m.deviceToken === '' && r.text === 'Server is reachable,\nwatch is not paired', 'not paired: only the server is checked -> ' + JSON.stringify(r.text))
   // A watch set up for a server of the person's own is checked against that server, not the PigeonDrop one.

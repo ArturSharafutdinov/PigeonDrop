@@ -66,7 +66,7 @@ Viewing, playing and deleting recordings by a person (`GET/DELETE /v1/messages`,
 
 ## Out of scope
 
-Processing chains beyond speech recognition and Telegram, and a "bring your own server" mode, are further work and not part of this contract.
+Processing chains beyond speech recognition and Telegram are further work and not part of this contract. A server that only receives recordings (a "Personal Server") needs a smaller part of it: see [Personal Server](personal-server.md).
 
 ## Who calls what
 

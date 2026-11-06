@@ -13,6 +13,7 @@
 // The cases are in test/fixtures/server-url-cases.json; the web page that hands an address to the watch must agree with them.
 
 const MAX_LENGTH = 200
+const MAX_TOKEN_LENGTH = 256
 
 function fail(reason) {
   return { ok: false, reason }
@@ -80,6 +81,12 @@ export function normalizeServerUrl(input) {
   }
 
   return { ok: true, url: 'https://' + host + port + path, host: host + port }
+}
+
+// The access token of a server of the person's own: what that server gave, sent as `Authorization: Bearer <token>`.
+// 1-256 characters with no whitespace or control characters (one pasted with a trailing newline must be trimmed first).
+export function isUsableToken(token) {
+  return typeof token === 'string' && token.length > 0 && token.length <= MAX_TOKEN_LENGTH && !/[\s\u0000-\u001f\u007f-\u009f]/.test(token)
 }
 
 // Which server a request from the watch is for. The watch adds `serverUrl` to the message only when the person has a

@@ -1,5 +1,5 @@
-// Pairing screen: connects this watch to a person's account. Reached from "Pair the watch" on
-// page/settings.js.
+// Pairing screen: connects this watch to a person's account. Reached from "Pair via QR code" on
+// page/connection.js. (Pairing ends any setup for a server of the person's own: see saveDevice in utils/device.js.)
 //
 // It follows RFC 8628 (the device authorization grant), with the phone's Side Service making the
 // network calls (app-side/pairing.js): the server gives this watch a short code and an address; the

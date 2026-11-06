@@ -17,7 +17,7 @@ import {
   setActiveRecording,
   onUploadState,
 } from '../utils/uploadQueue'
-import { isPaired } from '../utils/device'
+import { isPaired, isCustomServer } from '../utils/device'
 import { problemText } from '../utils/linkProblem'
 import { t } from '../i18n'
 import { MAX_RECORDING_SECONDS } from '../config'
@@ -238,7 +238,9 @@ Page({
     const pendingCount = pendingRecordings().length
     if (pendingCount === 0) this.endUploadHold()
     // A watch that is not paired sends nothing: say the recording is safe, and what to do about it.
-    const sending = isPaired() ? t('main.sending_wait', { pending: pendingCount }) : t('main.saved_unpaired')
+    const sending = isPaired()
+      ? t('main.sending_wait', { pending: pendingCount })
+      : t(isCustomServer() ? 'main.saved_no_token' : 'main.saved_unpaired')
     let status
     if (limitReached) {
       status = t('main.limit_reached') + '\n\n' + sending
@@ -425,10 +427,10 @@ Page({
           : t('main.send_failed', { message: state.message, pending: state.pending }),
       )
     } else if (state.state === 'unpaired') {
-      // Nothing was sent. The recordings are kept and go out as soon as the watch is paired.
-      this.updateStatus(
-        t(state.revoked ? 'main.pairing_revoked' : 'main.not_paired') + '\n' + t('main.go_pair') + '\n' + t('main.queued', { pending: state.pending }),
-      )
+      // Nothing was sent. The recordings are kept and go out as soon as the watch has a token again.
+      // A watch set up for a server of the person's own lacks a token, not a pairing, and the way to fix it is another one.
+      const what = state.custom ? (state.revoked ? 'main.token_refused' : 'main.no_token') : state.revoked ? 'main.pairing_revoked' : 'main.not_paired'
+      this.updateStatus(t(what) + '\n' + t(state.custom ? 'main.go_connection' : 'main.go_pair') + '\n' + t('main.queued', { pending: state.pending }))
     }
   },
 
