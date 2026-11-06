@@ -66,6 +66,17 @@ ok(stubs.widgets[0].text === 'Watch is paired\nto an account', 'and once paired,
   r = await run(() => Promise.reject(new Error('Timed out'))); ok(r.text === 'Phone does not answer\nRestart the\nZepp app', 'no answer from the phone -> ' + JSON.stringify(r.text))
   stubs.setPaired(false)
   r = await run({ ok: true, stage: 'server', paired: false }); ok(sent[0].m.deviceToken === '' && r.text === 'Server is reachable,\nwatch is not paired', 'not paired: only the server is checked -> ' + JSON.stringify(r.text))
+  // A watch set up for a server of the person's own is checked against that server, not the PigeonDrop one.
+  stubs.setPaired(true); stubs.setCustom(true, 'https://own.example')
+  r = await run({ ok: true, stage: 'upload', paired: true })
+  ok(sent[0].m.serverUrl === 'https://own.example' && sent[0].m.deviceToken === 'tok', 'an own server: its address goes with the request, beside the token -> ' + JSON.stringify(sent[0].m))
+  stubs.setCustom(true, null)
+  r = await run({ ok: false, stage: 'server', error: 'bad server address' })
+  ok(Object.prototype.hasOwnProperty.call(sent[0].m, 'serverUrl') && sent[0].m.serverUrl === null, 'a damaged address is sent as a null address (the phone refuses it), not left out (which would mean PigeonDrop)')
+  stubs.setCustom(false, null)
+  r = await run({ ok: true, stage: 'upload', paired: true })
+  ok(!Object.prototype.hasOwnProperty.call(sent[0].m, 'serverUrl'), 'the PigeonDrop server: no address in the request')
+  stubs.setPaired(false)
   { answer = () => new Promise(() => {}); const p = fresh(); sent.length = 0; const btn2 = stubs.widgets.find((w) => w.opts.text === 'Check connection'); btn2.opts.click_func(); btn2.opts.click_func()
     ok(sent.length === 1, 'a second press while checking sends nothing') }
 }

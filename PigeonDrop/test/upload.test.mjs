@@ -15,6 +15,7 @@ const OGG = generate('utils/oggOpus.js', {})
 const BASE64 = generate('app-side/base64.js', {})
 const TIMEOUT = generate('app-side/timeout.js', {})
 const UPLOADS = generate('app-side/uploads.js', { '../utils/oggOpus': OGG, './base64': BASE64, './timeout': TIMEOUT })
+const { resolveServer } = await import(fileUrl(generate('utils/serverUrl.js', {})))   // what app-side/index.js uses to pick the server
 const realSetTimeout = setTimeout
 const timerRequests = []                                         // how long each timer was asked to wait, before collapsing it
 globalThis.setTimeout = (fn, ms) => { timerRequests.push(ms); return realSetTimeout(fn, 0) }   // collapse every pacing/retry delay
@@ -25,7 +26,7 @@ const until = async (cond, ms = 4000) => { const t0 = Date.now(); while (!cond()
 
 async function world() {
   const n = ++T
-  device.token = 'pdd_test_token_0123456789'; device.cleared = 0
+  device.token = 'pdd_test_token_0123456789'; device.cleared = 0; device.custom = false; device.serverUrl = null; device.tokenDropped = 0
   ctl.root = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-')); ctl.shortRead = null; ctl.readCalls = 0; ctl.failOpen = ctl.failStat = ctl.failWhole = ctl.failWrite = null; resetFds()
   const Q = await import(fileUrl(QUEUE) + '?t=' + n)
   const U = await import(fileUrl(UPLOADS) + '?t=' + n)
@@ -40,10 +41,12 @@ async function world() {
           if (w.pingFails.has(w.pings.length)) throw new Error('Timed out in ' + opts.timeout + 'ms.')
           return w.pingReply || { ok: true }
         }
-        w.requests.push({ file: wire.fileName, index: wire.index, total: wire.total, id: wire.uploadId, bytes: wire.data.length, token: wire.deviceToken, timeout: opts.timeout })
+        w.requests.push({ file: wire.fileName, index: wire.index, total: wire.total, id: wire.uploadId, bytes: wire.data.length, token: wire.deviceToken, serverUrl: wire.serverUrl, hasServerUrl: Object.prototype.hasOwnProperty.call(wire, 'serverUrl'), timeout: opts.timeout })
         if (w.hooks.before) await w.hooks.before(wire, w)
         if (w.failRequests.has(w.requests.length)) throw new Error('Timed out in ' + opts.timeout + 'ms.')
-        return JSON.parse(JSON.stringify(await U.handleUploadChunk(wire, 'https://default.example')))
+        const target = resolveServer(wire, 'https://default.example')         // as app-side/index.js does
+        if (!target.ok) return JSON.parse(JSON.stringify({ ok: false, error: target.error }))
+        return JSON.parse(JSON.stringify(await U.handleUploadChunk(wire, target.url)))
       } finally { w.inflight-- }
     },
   }
@@ -422,6 +425,47 @@ for (const [label, setup] of [
   ok(last.state === 'error' && last.kind === undefined && last.message === 'server: HTTP 500, not JSON', 'a 500 with a page that is not JSON is a plain failure with a readable reason, not a parse error -> ' + JSON.stringify(last)) }
 { const w = await world(); const reply = await w.U.handleUploadChunk({ fileName: 'a.opus', uploadId: '1', index: 0, total: 1, data: 'AAAA', deviceToken: 't' }, 'https://x.example')
   ok(reply.ok === false && reply.fileError === true && !reply.noServer, 'a recording that cannot be packed is the file\'s problem, not the server\'s') }
+
+console.log('31. a watch set up for the person\'s own server: the recordings go there, and nowhere else')
+{ const w = await world(); addRecording(w, 'voice_800.opus', 20000)
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.requests.length > 0 && w.requests.every((r) => r.hasServerUrl === false), 'the PigeonDrop server: no chunk carries a serverUrl (nothing changed for everyone else)')
+  ok(w.posts[0].url === 'https://default.example/v1/messages', 'and the phone posts to the server this build was made for') }
+{ const w = await world(); device.custom = true; device.serverUrl = 'https://own.example:8443/drop'; device.token = 'own_tok_1'
+  const file = addRecording(w, 'voice_801.opus', 40000)
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(w.requests.length === 3 && w.requests.every((r) => r.serverUrl === 'https://own.example:8443/drop' && r.token === 'own_tok_1'), 'every chunk carries the address and the token of the own server')
+  ok(w.posts.length === 1 && w.posts[0].url === 'https://own.example:8443/drop/v1/messages' && w.posts[0].auth === 'Bearer own_tok_1' && sameAudio(w.posts[0].audio, file), 'the phone posts the recording there with that token')
+  ok(w.states.at(-1).state === 'done' && JSON.stringify(uploaded()) === '["voice_801.opus"]', 'and it is marked uploaded') }
+
+console.log('32. the own server refuses the token: the token is forgotten, the address stays, nothing goes to PigeonDrop')
+{ const w = await world(); device.custom = true; device.serverUrl = 'https://own.example'; device.token = 'own_tok_2'; addRecording(w, 'voice_810.opus', 20000); fs.writeFileSync(storageFile(), '{"state":"full"}')
+  w.serverStatus = 401; w.serverReply = '<html>Unauthorized</html>'
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(last.state === 'unpaired' && last.revoked === true && last.custom === true && last.pending === 1, 'the screen is told: token refused, own server -> ' + JSON.stringify(last))
+  ok(device.tokenDropped === 1 && device.cleared === 0 && device.custom === true && device.serverUrl === 'https://own.example' && device.token === null, 'only the token was dropped; the watch is still set up for that server')
+  ok(!fs.existsSync(storageFile()) && files().includes('voice_810.opus') && uploaded().length === 0, 'the storage warning is gone, the recording is kept and not marked uploaded')
+  ok(w.posts.every((p) => p.url.startsWith('https://own.example/')), 'nothing was posted anywhere else')
+  const before = w.requests.length; w.states.length = 0
+  w.Q.retryPendingUploads(); await tick()
+  ok(w.requests.length === before && w.states.at(-1).state === 'unpaired' && w.states.at(-1).custom === true && w.states.at(-1).revoked === false, 'the next sweep sends nothing and says the token is missing (own server)') }
+{ const w = await world(); addRecording(w, 'voice_811.opus', 20000); w.serverStatus = 401; w.serverReply = '<html>Unauthorized</html>'
+  w.Q.retryPendingUploads(); await finished(w)
+  ok(device.cleared === 1 && device.tokenDropped === 0 && w.states.at(-1).custom === false, 'on the PigeonDrop server a refused token is cleared as before') }
+{ const w = await world(); device.token = null; addRecording(w, 'voice_812.opus', 20000)
+  w.Q.retryPendingUploads(); await tick()
+  ok(w.states.at(-1).state === 'unpaired' && w.states.at(-1).custom === false && w.requests.length === 0, 'a watch that is not paired: custom is false') }
+{ const w = await world(); device.custom = true; device.serverUrl = null; device.token = null; addRecording(w, 'voice_813.opus', 20000)
+  w.Q.retryPendingUploads(); await tick()
+  ok(w.states.at(-1).state === 'unpaired' && w.states.at(-1).custom === true && w.requests.length === 0 && w.posts.length === 0, 'an own server with a damaged address: nothing is sent, and not to PigeonDrop either') }
+
+console.log('33. an address the phone cannot use is an error, never the PigeonDrop server')
+for (const bad of ['http://own.example', 'own.example', 'https://u:p@own.example', 'https://own.example?x=1', '']) {
+  const w = await world(); device.custom = true; device.serverUrl = bad; device.token = 'own_tok_3'; addRecording(w, 'voice_820.opus', 20000)
+  w.Q.retryPendingUploads(); await finished(w)
+  const last = w.states.at(-1)
+  ok(last.state === 'error' && /bad server address/.test(last.message) && last.pending === 1 && w.posts.length === 0 && files().includes('voice_820.opus'), JSON.stringify(bad) + ' -> an error; nothing posted; the recording is kept') }
 
 console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'ALL CHECKS PASS'))
 process.exit(failures ? 1 : 0)
