@@ -62,12 +62,12 @@ test('the same address twice gives the same answer', () => {
 test('the rules for a token', () => {
   assert.equal(R.tokenProblem('pdt_test_0123456789abcdef'), null)
   assert.equal(R.tokenProblem('x'.repeat(256)), null)
-  assert.equal(R.tokenProblem('tökén-令牌'), null)
+  assert.equal(R.tokenProblem('t\u00f6k\u00e9n-\u4ee4\u724c'), null)
   assert.equal(R.tokenProblem(''), 'empty')
   assert.equal(R.tokenProblem(undefined), 'empty')
   assert.equal(R.tokenProblem(5), 'empty')
   assert.equal(R.tokenProblem('x'.repeat(257)), 'too_long')
-  for (const bad of ['two words', 'a\tb', 'a\nb', 'a\u0000b', 'a b', ' lead', 'trail ']) assert.equal(R.tokenProblem(bad), 'bad_characters', JSON.stringify(bad))
+  for (const bad of ['two words', 'a\tb', 'a\nb', 'a\u0000b', 'a\u200ab', ' lead', 'trail ']) assert.equal(R.tokenProblem(bad), 'bad_characters', JSON.stringify(bad))
 })
 
 test('the vector: these inputs give exactly this envelope', async () => {
@@ -89,7 +89,7 @@ test('what the page seals, the watch opens', async () => {
     ['https://my.server.example/pigeondrop', 'tok-123'],
     ['https://my.server.example:8443/a/b-c_d.e~f', 'pdt_AbC-123_xyz'],
     ['https://x.example', 'a"b\\c/d\'e'],
-    ['https://x.example', 'tökén-ключ-令牌-😀'],
+    ['https://x.example', 't\u00f6k\u00e9n-\u043a\u043b\u044e\u0447-\u4ee4\u724c-\ud83d\ude00'],
   ]
   for (const [url, token] of cases) {
     const secret = new Uint8Array(randomBytes(16))
@@ -113,7 +113,7 @@ test('the largest address and token still fit the 1024 bytes the server and the 
   const url = 'https://' + 'a'.repeat(63) + '.example.com/' + 'p'.repeat(116)
   assert.equal(R.normalizeServerUrl(url).ok, true)
   assert.equal(url.length, 200)
-  for (const token of ['令'.repeat(256), '"'.repeat(256), 'д'.repeat(256), 'x'.repeat(256)]) {
+  for (const token of ['\u4ee4'.repeat(256), '"'.repeat(256), '\u0434'.repeat(256), 'x'.repeat(256)]) {
     const secret = new Uint8Array(randomBytes(16))
     const env = await R.seal({ secret, userCode: 'BCDF-GHJK', url, token })
     const size = Buffer.from(env.ct, 'base64url').length
@@ -149,7 +149,7 @@ test('the key in the address', () => {
 test('the pairing code', () => {
   assert.equal(R.canonicalUserCode('BCDF-GHJK'), 'BCDFGHJK')
   assert.equal(R.canonicalUserCode('bcdf-ghjk'), 'BCDFGHJK')
-  for (const bad of [undefined, null, 5, '', '-', 'BCDF GHJK', 'BCDF_GHJK', 'B'.repeat(33), 'БCDF-GHJK']) assert.equal(R.canonicalUserCode(bad), null, JSON.stringify(bad))
+  for (const bad of [undefined, null, 5, '', '-', 'BCDF GHJK', 'BCDF_GHJK', 'B'.repeat(33), '\u0411CDF-GHJK']) assert.equal(R.canonicalUserCode(bad), null, JSON.stringify(bad))
 })
 
 test('base64url is strict and round-trips', () => {
