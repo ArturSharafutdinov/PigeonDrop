@@ -1,7 +1,10 @@
 // Pairing the watch with an account: the phone's half (app-side/pairing.js) and the watch's screen (page/pair.js).
 
 import * as stubs from './stubs/pair-page.mjs'
+import * as zc from './stubs/zos-crypto.mjs'
 import { generate, fileUrl, stubPath, i18nModule } from './helpers/load.mjs'
+import { sealWithWebCrypto, sealJson, payload, b64u, newSecretBytes } from './helpers/relay.mjs'
+import { randomBytes } from 'node:crypto'
 
 let failures = 0
 const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failures++ }
@@ -62,6 +65,12 @@ console.log('3. pollPairing')
 for (const code of ['expired_token', 'invalid_device_code']) {
   answer({ ok: false, code, error: 'whatever' }); const r = await P.pollPairing({ deviceCode: 'x' }, 'https://s.example')
   ok(r.ok === false && r.code === code, code + ' keeps its code so the watch can tell it from a network problem') }
+{ const envelope = { v: 1, ct: 'c'.repeat(64), tag: 't'.repeat(43) }
+  answer({ status: 'relayed', envelope: { ...envelope, note: 'not passed on' }, extra: 'nor this' }); const r = await P.pollPairing({ deviceCode: 'dev-secret' }, 'https://s.example')
+  ok(JSON.stringify(r) === JSON.stringify({ ok: true, status: 'relayed', envelope }), 'relayed -> the envelope reaches the watch as it is, and nothing else does -> ' + JSON.stringify(r))
+  for (const [label, bad] of [['no envelope', undefined], ['an envelope that is text', 'abc'], ['a version that is text', { ...envelope, v: '1' }], ['a ct that is not text', { ...envelope, ct: 5 }], ['a tag that is not text', { ...envelope, tag: null }], ['a ct that is far too long', { ...envelope, ct: 'c'.repeat(2001) }], ['a tag that is far too long', { ...envelope, tag: 't'.repeat(201) }]]) {
+    answer({ status: 'relayed', envelope: bad }); const refused = await P.pollPairing({ deviceCode: 'x' }, 'https://s.example')
+    ok(refused.ok === false && refused.status === undefined && !JSON.stringify(refused).includes('ccc'), 'relayed with ' + label + ' is not success, and says nothing of the content -> ' + JSON.stringify(refused)) } }
 { answer(new Error('Timed out')); const r = await P.pollPairing({ deviceCode: 'x' }, 'https://s.example'); ok(r.ok === false && r.code === undefined, 'a network problem has no code') }
 { answer(CODES); fetches.length = 0
   for (const bad of [null, {}, { deviceCode: '' }, { deviceCode: 5 }]) { const r = await P.pollPairing(bad, 'https://s.example'); ok(r.ok === false, 'a poll without a device code is refused: ' + JSON.stringify(bad)) }
@@ -76,7 +85,9 @@ Date.now = () => now
 const S = stubPath('pair-page.mjs')
 const I18N = i18nModule()
 const LINK = generate('utils/linkProblem.js', { '../i18n': I18N })   // the real texts: what the screen says is what is tested
-const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/storageState': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': LINK, '../i18n': I18N })
+const RELAY_FILE = generate('utils/relayCrypto.js', { '@zos/crypto': stubPath('zos-crypto.mjs'), './serverUrl': generate('utils/serverUrl.js', {}) })
+const RELAY = await import(fileUrl(RELAY_FILE))   // the module the page uses: the same file, so the same instance
+const PAGE = generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/storageState': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': LINK, '../utils/relayCrypto': RELAY_FILE, '../i18n': I18N })
 await import(fileUrl(PAGE))
 
 // A scripted phone: each request waits for the test to answer it.
@@ -88,7 +99,8 @@ function scenario() {
   return s
 }
 const flush = () => new Promise((r) => setImmediate(r))
-const fresh = () => { stubs.widgets.length = 0; stubs.calls.length = 0; stubs.saved.length = 0; stubs.holds.length = 0; timers = []; stubs.info.throws = false; stubs.info.value = { deviceName: 'Amazfit Test' }
+const fresh = () => { stubs.widgets.length = 0; stubs.calls.length = 0; stubs.saved.length = 0; stubs.holds.length = 0; stubs.replaced.length = 0; timers = []; stubs.info.throws = false; stubs.info.value = { deviceName: 'Amazfit Test' }
+  Object.assign(zc.behaviour, { generatedKeys: 'random', hmacFails: false, aesFails: false, throws: false, needKeyEncrypt: undefined, keyLength: 16 }); zc.resetKeys(); RELAY.forgetSelfTest()
   const page = Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) }); return page }
 const fire = async (ms) => { const due = timers.filter((t) => t.ms === ms); timers = timers.filter((t) => t.ms !== ms); due.forEach((t) => t.fn()); await flush() }
 const next = async () => { const t = timers.shift(); now = Math.max(now, t.at); t.fn(); await flush(); return t.ms }
@@ -103,7 +115,7 @@ console.log('4. the happy path: code, QR, polling, approval, token saved')
   ok(ph.timeouts[0] === 15000 && ph.timeouts[0] > 10000, 'the watch waits 15 s for it: longer than the 10 s the phone gives the server, so "no server" always comes back as an answer -> ' + ph.timeouts[0])
   ok(!qr() && status() === 'Connecting to phone\nand server...', 'before the answer: no QR yet, "connecting" shown')
   await ph.reply({ ok: true, ...CODES })
-  ok(qr() && qr().opts.content === 'https://s.example/pair?code=BCDF-GHJK', 'QR code points at the address the server gave -> ' + (qr() && qr().opts.content))
+  ok(qr() && /^https:\/\/s\.example\/pair\?code=BCDF-GHJK#k=[A-Za-z0-9_-]{22}$/.test(qr().opts.content), 'QR code points at the address the server gave, with the key for the Personal server tab after the # -> ' + (qr() && qr().opts.content))
   ok(/BCDF-GHJK/.test(status()), 'the code is also shown as text -> ' + JSON.stringify(status()))
   const o = qr().opts, corner = (x, y) => Math.hypot(x - 240, y - 240)
   ok(o.bg_w > 0 && o.bg_h > 0 && Math.max(corner(o.bg_x, o.bg_y), corner(o.bg_x + o.bg_w, o.bg_y + o.bg_h)) < 230, 'the QR\'s background is set and stays inside the round display (' + Math.round(Math.max(corner(o.bg_x, o.bg_y), corner(o.bg_x + o.bg_w, o.bg_y + o.bg_h))) + ' < 230)')
@@ -192,6 +204,76 @@ console.log('9. leaving the screen')
   ok(stubs.saved.length === 0 && timers.length === 0 && JSON.stringify(stubs.widgets.map((w) => w.text)) === JSON.stringify(texts), 'an answer that arrives after the screen is gone changes nothing') }
 { const ph = scenario(); const page = fresh(); page.build(); page.onDestroy(); await ph.reply({ ok: true, ...CODES })
   ok(!qr() && timers.length === 0, 'nor does a code that arrives after the screen is gone') }
+
+console.log('11. Personal server settings arrive through the pairing page')
+const URL_OWN = 'https://my.server.example:8443/drop', TOKEN_OWN = 'own-token-0123456789'
+const fragmentOf = () => qr().opts.content.split('#k=')[1]
+const secretOf = () => Uint8Array.from(Buffer.from(fragmentOf(), 'base64url'))
+const printed = []
+const realLog = console.log
+async function startAndScan() { const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: true, ...CODES }); return { ph, page } }
+{ const { ph, page } = await startAndScan()
+  const secret = secretOf()
+  ok(secret.length === 16 && page.state.secret && Buffer.compare(Buffer.from(page.state.secret), Buffer.from(secret)) === 0, 'the QR fragment is the watch\'s 16-byte secret')
+  await fire(5000)
+  const envelope = await sealWithWebCrypto({ secret, userCode: 'BCDF-GHJK', first: new Uint8Array(randomBytes(16)), json: payload(URL_OWN, TOKEN_OWN) })
+  console.log = (...a) => { printed.push(a.join(' ')); }
+  await ph.reply({ ok: true, status: 'relayed', envelope })
+  console.log = realLog
+  ok(stubs.replaced.length === 1 && stubs.replaced[0].url === 'page/server', 'a good envelope opens the confirmation screen -> ' + JSON.stringify(stubs.replaced.map((r) => r.url)))
+  ok(JSON.stringify(stubs.replaced[0].params) === JSON.stringify({ mode: 'personal', serverUrl: URL_OWN, token: TOKEN_OWN }), 'it gets the address and the token (to be confirmed there, not saved here)')
+  ok(stubs.saved.length === 0 && !stubs.calls.includes('saveDevice') && !stubs.calls.includes('retryPendingUploads') && !stubs.calls.includes('back'), 'nothing is saved, nothing is sent and the screen does not go back by itself')
+  ok(timers.length === 0 && ph.requests.length === 2 && page.state.secret === null, 'polling stops and the secret is forgotten')
+  ok(stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), 'the held screen is released')
+  ok(printed.length === 0, 'nothing was logged on success -> ' + JSON.stringify(printed)) }
+
+for (const [label, make] of [
+  ['an envelope made for another pairing', (secret) => sealWithWebCrypto({ secret, userCode: 'BCDF-GHJL', first: new Uint8Array(16), json: payload(URL_OWN, TOKEN_OWN) })],
+  ['an envelope made with another secret', () => sealWithWebCrypto({ secret: newSecretBytes(), userCode: 'BCDF-GHJK', first: new Uint8Array(16), json: payload(URL_OWN, TOKEN_OWN) })],
+  ['an envelope with a changed tag', async (secret) => { const e = await sealWithWebCrypto({ secret, userCode: 'BCDF-GHJK', first: new Uint8Array(16), json: payload(URL_OWN, TOKEN_OWN) }); const tag = Buffer.from(e.tag, 'base64url'); tag[0] ^= 1; return { ...e, tag: b64u(tag) } }],
+  ['an envelope of another version', async (secret) => ({ ...(await sealWithWebCrypto({ secret, userCode: 'BCDF-GHJK', first: new Uint8Array(16), json: payload(URL_OWN, TOKEN_OWN) })), v: 2 })],
+  ['an envelope with an address that is not https', (secret) => sealJson({ secret, userCode: 'BCDF-GHJK', json: payload('http://my.server.example', TOKEN_OWN) })],
+  ['an envelope with a token that has a space', (secret) => sealJson({ secret, userCode: 'BCDF-GHJK', json: payload(URL_OWN, 'two words') })],
+  ['something that is not an envelope', () => 'hello'],
+  ['nothing', () => undefined],
+]) {
+  const { ph, page } = await startAndScan(); await fire(5000)
+  const envelope = await make(secretOf())
+  printed.length = 0; console.log = (...a) => { printed.push(a.join(' ')) }
+  await ph.reply({ ok: true, status: 'relayed', envelope })
+  console.log = realLog
+  ok(stubs.replaced.length === 0 && stubs.saved.length === 0, label + ': nothing is opened, nothing is saved')
+  ok(status() === 'Could not accept\nthe settings.\nOpen this screen\nand start again' && timers.length === 0 && page.state.secret === null, label + ': the screen says so, polling stops, the secret is forgotten -> ' + JSON.stringify(status()))
+  ok(stubs.calls.lastIndexOf('releaseScreen') > stubs.calls.indexOf('holdScreen'), label + ': the screen is released')
+  ok(printed.length === 1 && /not accepted: [a-z ]+$/.test(printed[0]) && !printed[0].includes(TOKEN_OWN) && !printed[0].includes('my.server') && !printed[0].includes(JSON.stringify(envelope) || 'x'.repeat(40)), label + ': the log says only which check failed -> ' + JSON.stringify(printed)) }
+
+{ // a watch that cannot do the cryptography shows the plain QR code and still pairs the ordinary way
+  const ph = scenario(); const page = fresh(); zc.behaviour.generatedKeys = 'none'; page.build(); await ph.reply({ ok: true, ...CODES })
+  ok(qr() && qr().opts.content === 'https://s.example/pair?code=BCDF-GHJK' && page.state.secret === null, 'without a source of randomness the QR code is the plain one, with no #')
+  await fire(5000); await ph.reply({ ok: true, status: 'approved', deviceToken: 'pdd_t', deviceId: 'i' })
+  ok(stubs.saved.length === 1, '...and pairing with an account works as before') }
+{ // ... and if an envelope comes all the same, there is no secret to open it with
+  const ph = scenario(); const page = fresh(); zc.behaviour.generatedKeys = 'none'; page.build(); await ph.reply({ ok: true, ...CODES }); await fire(5000)
+  const env = await sealWithWebCrypto({ secret: newSecretBytes(), userCode: 'BCDF-GHJK', first: new Uint8Array(16), json: payload(URL_OWN, TOKEN_OWN) })
+  console.log = () => {}; await ph.reply({ ok: true, status: 'relayed', envelope: env }); console.log = realLog
+  ok(stubs.replaced.length === 0 && /Could not accept/.test(status()), 'an envelope for a watch that made no secret is refused') }
+{ const ph = scenario(); const page = fresh(); zc.behaviour.throws = true; page.build(); await ph.reply({ ok: true, ...CODES })
+  ok(qr() && qr().opts.content === 'https://s.example/pair?code=BCDF-GHJK', 'a platform that throws still gets its plain QR code') }
+{ const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: true, ...CODES, verificationUriComplete: 'https://s.example/pair?code=BCDF-GHJK#already' })
+  ok(qr().opts.content === 'https://s.example/pair?code=BCDF-GHJK#already' && page.state.secret === null, 'an address that already has a fragment is left as the server gave it') }
+{ const seen = new Set(); for (let i = 0; i < 5; i++) { const ph = scenario(); const page = fresh(); page.build(); await ph.reply({ ok: true, ...CODES }); seen.add(fragmentOf()) }
+  ok(seen.size === 5, 'every attempt has its own secret (5 attempts, 5 different QR codes)') }
+{ const { ph, page } = await startAndScan(); await fire(5000)
+  const envelope = await sealWithWebCrypto({ secret: secretOf(), userCode: 'BCDF-GHJK', first: new Uint8Array(16), json: payload(URL_OWN, TOKEN_OWN) })
+  page.onDestroy(); ok(page.state.secret === null, 'leaving the screen forgets the secret'); await ph.reply({ ok: true, status: 'relayed', envelope })
+  ok(stubs.replaced.length === 0 && timers.length === 0, 'an envelope that arrives after the screen is gone changes nothing') }
+{ const { ph, page } = await startAndScan(); await fire(5000)
+  ok(page.state.secret !== null, 'the secret is kept while the code lives'); await ph.reply({ ok: false, code: 'expired_token', error: 'x' })
+  ok(page.state.secret === null, 'and forgotten when the code runs out') }
+{ const { ph, page } = await startAndScan(); await fire(5000)
+  const envelope = await sealWithWebCrypto({ secret: secretOf(), userCode: 'bcdf-ghjk', first: new Uint8Array(16), json: payload(URL_OWN, TOKEN_OWN) })
+  await ph.reply({ ok: true, status: 'relayed', envelope })
+  ok(stubs.replaced.length === 1, 'the case and the dash of the user code do not matter (the page may send it either way)') }
 
 console.log('10. the watch\'s name')
 { const ph = scenario(); const page = fresh(); stubs.info.throws = true; page.build()

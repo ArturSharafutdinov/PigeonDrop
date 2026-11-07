@@ -60,7 +60,8 @@ export default {
   'pair.no_code': 'Could not get\na pairing code',
   'pair.scan': 'Code: {code}\nScan the QR code\nand confirm',
   'pair.done': 'Watch paired\nRecordings will be\nsent automatically',
-  'pair.expired': 'Code expired.\nOpen "Pair the watch"\nagain',
+  'pair.expired': 'Code expired.\nOpen "Pair via QR\ncode" again',
+  'pair.relay_failed': 'Could not accept\nthe settings.\nOpen this screen\nand start again',
 
   // Connection (page/connection.js)
   'connection.default_paired': 'Recordings go to\nPigeonDrop',

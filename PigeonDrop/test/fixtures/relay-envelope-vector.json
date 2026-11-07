@@ -1,0 +1,13 @@
+{
+  "comment": "The test vector of the relay envelope v1 (docs/architecture.md). Every input is fixed so that the output is reproducible; in real use the secret and the first block are random. The pairing page must produce exactly this envelope from these inputs, and the watch (utils/relayCrypto.js) must open it.",
+  "secretHex": "000102030405060708090a0b0c0d0e0f",
+  "secretInQrFragment": "AAECAwQFBgcICQoLDA0ODw",
+  "userCode": "BCDF-GHJK",
+  "firstBlockHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+  "plaintextJson": "{\"url\":\"https://example.com/pigeondrop\",\"token\":\"pdt_test_0123456789abcdef\"}",
+  "envelope": {
+    "v": 1,
+    "ct": "IL_xkljjZ373IqfWkbZjC328P8jRq32lFMPq5pZFZDQ-UqD4ot53WwbcwZU6PM87BeY6usCE6PS9f8OBH6hB_vOOa0D-yvOrGjEstMDqypkefhka1V_xX-rcHj0v5AyZ",
+    "tag": "6Qz7houIH8CgMhvCsYYdZV1iALg_KeSLYet7k2OIECY"
+  }
+}

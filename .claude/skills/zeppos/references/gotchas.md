@@ -21,6 +21,22 @@ the codes that the reference pages list.
 `@zeppos/device-types` 4.0.0, so a type-checked project (`checkJs`) sees them as untyped. Do not conclude that an API is missing
 because it is not in the index. *docs checked.*
 
+## Cryptography (`@zos/crypto`)
+
+**Random bytes: `getRandomValues` is API_LEVEL 5.0.** An app with `minVersion` 4.0 cannot rely on it, and what a named import of a
+function the firmware lacks does is not documented (undefined, or a failure when the module loads). The AES-CBC page offers
+another source: `createCrypto(alg.AES_CBC, { key_bit_length: 128 }).createChiper()` (API_LEVEL 3.0) makes a key for the
+instance, and its `private_key` can be used as random bytes. The page does not say the generator is cryptographic. PigeonDrop
+draws two, rejects short, all-zero and repeated keys, and mixes them with local noise (`utils/relayCrypto.js`). *docs checked,
+not tried on a watch.*
+
+**AES-CBC: whole blocks only, no IV, no padding.** `encrypt`/`decrypt` need a length that is a multiple of 16 and the options
+have no IV; the IV the platform uses is unknown, so the first decrypted block of a message made elsewhere is junk. The way
+around it is to put 16 random bytes in front of the message and drop the first block after decrypting; padding is done by
+hand. `key_encrypt` ("encrypt the key again with the hardware key") has no stated default, and the examples set it for keys the
+platform made: for a key you pass in, try leaving it out, then `false`, then `0` (PigeonDrop does, against a test vector).
+HMAC-SHA-256 takes its key as `private_key` and answers `{ md_content: ArrayBuffer, length }`. *docs checked, not tried on a watch.*
+
 ## Audio
 
 **A recording is not a standard Ogg/Opus file.** `Recorder` with `codec.OPUS` writes packets back to back as
