@@ -239,6 +239,11 @@ paths:
         token, **once**: the token is not stored in a form that can be shown again, and a second poll of the same
         pairing is `invalid_device_code`. The watch keeps the token and sends it with every upload.
 
+        If instead the person handed settings for a server of their own to the pairing page (`/v1/device/relay`),
+        the next poll answers `{ "status": "relayed", "envelope": { ... } }`, **once**: the envelope is deleted from
+        the server's memory and the pairing is closed (a second poll is `invalid_device_code`, and nobody can approve
+        the code any more). The envelope is encrypted for the watch; the server cannot read it.
+
         Polling faster than the server allows is answered 429 with `Retry-After`; such a poll counts for nothing.
       requestBody:
         required: true
@@ -248,13 +253,60 @@ paths:
               $ref: '#/components/schemas/PollPairingRequest'
       responses:
         '200':
-          description: Still waiting for approval, or approved (with the token).
+          description: Still waiting, approved (with the token), or settings for a server of the person's own have arrived (with the envelope).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PollPairingResult'
         '400':
           description: The device code is unknown or its token was already collected (`invalid_device_code`), or the pairing ran out of time unapproved (`expired_token`). Either way the watch starts over.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
+  /v1/device/relay:
+    post:
+      operationId: relayDeviceSettings
+      tags: [devices]
+      summary: Hand encrypted settings for a server of the person's own to the watch that shows this code
+      description: |
+        Used by the pairing page's "Personal server" tab. The page encrypts the address and the access token of the
+        person's own server in the browser, with a key that only the watch has (it is in the QR code after the `#`,
+        which a browser never sends), and posts the result here. The server cannot read it: it holds the envelope
+        in its memory only (never in the database, a log or a backup), for at most as long as the pairing lives,
+        and gives it to the watch's next poll of `/v1/device/token`, once. Sending again replaces the envelope
+        that waits there.
+
+        No sign-in: the only thing that ties the envelope to a watch is the user code. The envelope carries a tag
+        that is only valid for that code, and the watch checks it before it trusts anything inside.
+
+        The server checks the shape of the envelope (version, encoding, sizes), not its content. Wrong codes are
+        limited per address (`too_many_attempts`); so is a full store, which only happens under a flood.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelayRequest'
+      responses:
+        '204':
+          description: The envelope is waiting for the watch.
+        '400':
+          description: The body is malformed or the envelope has the wrong shape (`invalid_request`), or its version is not supported (`unsupported_version`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No open pairing has this code (`invalid_user_code`). Unknown, expired and already approved or closed codes look the same.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: The body is larger than 4 KiB (`payload_too_large`).
           content:
             application/json:
               schema:
@@ -847,13 +899,43 @@ components:
         deviceCode:
           type: string
           maxLength: 128
+    RelayEnvelope:
+      type: object
+      description: |
+        Settings for a server of the person's own, encrypted in the browser for the watch (version 1: AES-128-CBC
+        with an HMAC-SHA-256 tag; see docs/architecture.md). The server never opens it.
+      required: [v, ct, tag]
+      properties:
+        v:
+          type: integer
+          description: The format version. Only 1 exists.
+          example: 1
+        ct:
+          type: string
+          description: The ciphertext, base64url without padding. 32 to 1024 bytes, a multiple of 16.
+        tag:
+          type: string
+          description: The authentication tag, base64url without padding. 32 bytes.
+    RelayRequest:
+      type: object
+      required: [userCode, envelope]
+      properties:
+        userCode:
+          type: string
+          maxLength: 32
+          description: The code shown on the watch. Case and the dash do not matter.
+          example: BCDF-GHJK
+        envelope:
+          $ref: '#/components/schemas/RelayEnvelope'
     PollPairingResult:
       type: object
       required: [status]
       properties:
         status:
           type: string
-          enum: [pending, approved]
+          enum: [pending, approved, relayed]
+        envelope:
+          $ref: '#/components/schemas/RelayEnvelope'
         interval:
           type: integer
           description: With `pending`, seconds to wait before the next poll.
@@ -1118,6 +1200,7 @@ components:
         - forbidden_origin
         - invalid_user_code
         - invalid_device_code
+        - unsupported_version
         - expired_token
         - not_found
         - payload_too_large

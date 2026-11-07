@@ -24,9 +24,19 @@ The watch knows nothing about users. To become "somebody's" it is paired; the Si
    - `200 { "status": "pending", "interval": 5 }` while nobody has approved;
    - `200 { "status": "approved", "deviceToken": "pdd_...", "deviceId": "..." }` once approved. The token is handed out **once**; repeating the same poll gets `400 invalid_device_code`;
    - `400 { code: "expired_token" }` (time ran out) or `400 { code: "invalid_device_code" }` (the code is unknown, or the token was already taken): in both cases pairing starts over;
+   - `200 { "status": "relayed", "envelope": { "v": 1, "ct": "...", "tag": "..." } }` when the person handed settings for a server of their own to the pairing page (see below). Handed out **once**, like the token;
+   - `400 { code: "expired_token" }` (time ran out) or `400 { code: "invalid_device_code" }` (the code is unknown, or the token or the envelope was already taken): in both cases pairing starts over;
    - `429 { code: "too_many_attempts" }` for polling faster than every 3 seconds (not counted against the code) or for too many wrong codes: wait for `Retry-After`.
 
 The watch keeps `deviceToken` (`utils/device.js`) and sends it with every upload. The server stores only its hash.
+
+### Handing over the settings of a server of the person's own
+
+**`POST /v1/device/relay`** `{ "userCode": "BCDF-GHJK", "envelope": { "v": 1, "ct": "...", "tag": "..." } }`, called by the pairing page's browser, with no session. The envelope is the address and the access token of the person's own server, encrypted in the browser with a key only the watch has; the server cannot read it and keeps it **in memory only** until the watch's next poll takes it (or the pairing ends, at most 10 minutes). Sending again replaces the envelope that waits.
+
+- `204` the envelope is waiting; `404 invalid_user_code` the code is unknown, expired, approved or closed (one answer for all of them); `400 invalid_request` the body or the envelope has the wrong shape (`ct` and `tag` base64url without padding, `ct` 32 to 1024 bytes in whole 16-byte blocks, `tag` 32 bytes); `400 unsupported_version` `v` is not 1; `413` the body is over 4 KiB; `429 too_many_attempts` for ten wrong codes from one address in 15 minutes, or when the server's memory for envelopes is full (1000).
+- Delivering the envelope closes the pairing: the code can no longer be approved, and a second poll is `invalid_device_code`. An approval that arrives for a code that has an envelope waiting is dropped with the pairing.
+- Nothing about the envelope is written to the database or a log (the pairing row is the same as before it arrived), and it does not survive a restart: the pairing runs out and the person starts again.
 
 ## Uploading a recording
 

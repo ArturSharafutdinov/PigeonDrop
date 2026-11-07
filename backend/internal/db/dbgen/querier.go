@@ -64,6 +64,10 @@ type Querier interface {
 	DeleteMessage(ctx context.Context, arg DeleteMessageParams) (DeleteMessageRow, error)
 	// Used after a password change: every other session of the user ends, the current one stays.
 	DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error
+	// Closes a pairing whose watch was handed settings for a server of its own (see relay.go). The row is simply
+	// removed, so that nothing in the database says an envelope ever passed through; the count is the exactly-once
+	// gate (0 rows: someone else collected it first).
+	DeletePairing(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte) error
 	// Unlinking; no row changed means there was no link (not an error).
 	DeleteTelegramLink(ctx context.Context, userID uuid.UUID) (int64, error)
