@@ -171,6 +171,7 @@ func NewHandler(s *Server) http.Handler {
 	mux.HandleFunc("GET /pair", servePage("text/html; charset=utf-8", pairHTML))
 	mux.HandleFunc("GET /pair.js", servePage("text/javascript; charset=utf-8", pairJS))
 	mux.HandleFunc("GET /pair.texts.js", servePage("text/javascript; charset=utf-8", pairTextsJS))
+	mux.HandleFunc("GET /pair.relay.js", servePage("text/javascript; charset=utf-8", pairRelayJS))
 	mux.HandleFunc("GET /pair.css", servePage("text/css; charset=utf-8", pairCSS))
 	// Anything the generated routes do not claim - unknown path or wrong method alike - is a JSON 404.
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {

@@ -17,6 +17,12 @@ var pairHTML []byte
 //go:embed pair.js
 var pairJS []byte
 
+// The checking and sealing of the "Personal server" tab, apart from the page so that it can be tried on its own
+// (pair.relay.test.mjs).
+//
+//go:embed pair.relay.js
+var pairRelayJS []byte
+
 //go:embed pair.css
 var pairCSS []byte
 

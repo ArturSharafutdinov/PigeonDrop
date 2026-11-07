@@ -44,7 +44,7 @@ The images are built in GitHub Actions and pushed to GHCR (`ghcr.io/<owner>/pige
 
   | Part | Files | What runs |
   |---|---|---|
-  | `backend` | `backend/**` | `backend` |
+  | `backend` | `backend/**`, and `PigeonDrop/test/fixtures/**` (the pairing page's script is tested against the files it shares with the watch) | `backend` |
   | `watch` | `PigeonDrop/**` | `watch` |
   | `scripts` | `.github/scripts/**` | `deploy-script` |
   | `stt` | `stt/**` | in the `stt` job the image build and smoke test are added (the tests on the standard library always run: they take seconds) |

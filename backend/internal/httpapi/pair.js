@@ -6,6 +6,7 @@
 
   // The texts are in pair.en.json and pair.ru.json; the server hands them to the page as window.PAIR_TEXTS (pair.texts.js).
   var TEXTS = window.PAIR_TEXTS
+  var relay = window.PairRelay // checking and sealing for the Personal server tab (pair.relay.js)
   var LANG_KEY = 'pigeondrop.lang'
   var lang = 'en'
   var chosen = false // the person picked a language with the EN / RU buttons (kept in this browser)
@@ -36,6 +37,7 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-i18n-label]'), function (node) { node.setAttribute('aria-label', tr(node.getAttribute('data-i18n-label'))) })
     $('lang-en').setAttribute('aria-pressed', String(lang === 'en'))
     $('lang-ru').setAttribute('aria-pressed', String(lang === 'ru'))
+    showPersonalTexts()
   }
 
   // Switches the page's language. refresh: redraw what was loaded from the server (the lists, the Telegram line), which
@@ -109,23 +111,33 @@
 
   // ---- signed out -------------------------------------------------------------------------------
 
+  // The row of tabs and the panel it shows. view: 'login' | 'register' (not signed in), 'account' (signed in) or 'personal'
+  // (either). A person who is not signed in sees three tabs, a signed-in one two.
+  var shown = { signedIn: false, view: 'login' }
+
+  function showView(view) {
+    shown.view = view
+    $('tabs').hidden = false
+    $('tab-login').hidden = shown.signedIn
+    $('tab-register').hidden = shown.signedIn
+    $('tab-account').hidden = !shown.signedIn
+    ;['login', 'register', 'account', 'personal'].forEach(function (name) { $('tab-' + name).setAttribute('aria-pressed', String(name === view)) })
+    $('guest').hidden = shown.signedIn || view === 'personal'
+    $('user').hidden = !shown.signedIn || view === 'personal'
+    $('personal').hidden = view !== 'personal'
+    $('login-form').hidden = view !== 'login'
+    $('register-form').hidden = view !== 'register'
+  }
+
   function showGuest() {
-    $('user').hidden = true
-    $('guest').hidden = false
+    shown.signedIn = false
+    showView(shown.view === 'personal' || shown.view === 'register' ? shown.view : 'login')
     state.waiting = {}
     state.boxes = {}
     clearTimeout(state.poll)
     state.poll = null
     endTelegramWait()
     $('telegram').hidden = true
-  }
-
-  function showTab(which) {
-    var login = which === 'login'
-    $('login-form').hidden = !login
-    $('register-form').hidden = login
-    $('tab-login').setAttribute('aria-pressed', String(login))
-    $('tab-register').setAttribute('aria-pressed', String(!login))
   }
 
   function submit(form, send, then) {
@@ -149,8 +161,8 @@
   function showUser(user) {
     // Until the person picks a language here, the page speaks the one their account is set to.
     if (!chosen && (user.language === 'en' || user.language === 'ru') && user.language !== lang) setLanguage(user.language, false, false)
-    $('guest').hidden = true
-    $('user').hidden = false
+    shown.signedIn = true
+    showView(shown.view === 'personal' ? 'personal' : 'account')
     $('who').textContent = user.email
     loadDevices()
     loadTelegram()
@@ -400,6 +412,71 @@
     history.replaceState(null, '', location.pathname) // the code is spent; do not keep it in the address bar
   }
 
+  // ---- personal server --------------------------------------------------------------------------
+  // The person gives the address and the access token of a server of their own; they are sealed in this browser with the
+  // key that is in the address of this page after the "#" (the QR code on the watch put it there; a browser never sends
+  // that part to any server) and the sealed envelope is handed to the watch through the server, which cannot read it.
+  // Nothing typed here is stored: not in the browser's storage, not in the address bar, not logged.
+
+  // What the address carries is read once, before anything on the page can change it.
+  var personal = { code: null, secret: null, problem: null, errors: { address: null, token: null }, sent: false }
+
+  function readPersonalAddress() {
+    var code = new URLSearchParams(location.search).get('code')
+    personal.code = relay.canonicalUserCode(code) === null ? null : code
+    personal.secret = relay.keyFromFragment(location.hash)
+    personal.problem = !relay.canEncrypt() ? 'crypto' : personal.code === null || personal.secret === null ? 'key' : null
+  }
+
+  function setFieldError(id, text) {
+    var input = $(id)
+    var error = $(id + '-error')
+    error.textContent = text
+    error.hidden = !text
+    if (text) input.setAttribute('aria-invalid', 'true')
+    else input.removeAttribute('aria-invalid')
+  }
+
+  function showPersonalErrors() {
+    setFieldError('personal-address', personal.errors.address ? tr('address_err.' + personal.errors.address) : '')
+    setFieldError('personal-token', personal.errors.token ? tr('token_err.' + personal.errors.token) : '')
+  }
+
+  function setTokenVisible(visible) {
+    $('personal-token').type = visible ? 'text' : 'password'
+    $('personal-show').setAttribute('aria-pressed', String(visible))
+    $('personal-show').textContent = visible ? tr('personal_hide') : tr('personal_show')
+  }
+
+  // The words that depend on the page's language and are not filled in by applyTexts.
+  function showPersonalTexts() {
+    setTokenVisible($('personal-token').type === 'text')
+    showPersonalErrors()
+    var blocked = $('personal-blocked')
+    blocked.hidden = personal.problem === null || personal.sent
+    if (personal.problem === 'crypto') blocked.textContent = tr('personal_blocked_crypto')
+    else if (personal.problem === 'key') blocked.textContent = tr('personal_blocked_key')
+    $('personal-form').hidden = personal.problem !== null || personal.sent
+    $('personal-done').hidden = !personal.sent
+  }
+
+  // The envelope was accepted: what was typed is cleared from the page, the key and the code are spent, and the person is
+  // shown the address to compare with the watch's screen (the only thing that stays, as text, until they leave).
+  function personalSent(host) {
+    $('personal-form').reset()
+    setTokenVisible(false)
+    personal.errors = { address: null, token: null }
+    if (personal.secret) personal.secret.fill(0)
+    personal.secret = null
+    personal.sent = true
+    history.replaceState(null, '', location.pathname) // the code is spent; do not keep it or the key in the address bar
+    $('personal-host').textContent = host
+    showPersonalTexts()
+    $('personal-done').focus()
+  }
+
+  readPersonalAddress()
+
   // ---- start ------------------------------------------------------------------------------------
 
   var saved = savedLanguage()
@@ -409,8 +486,35 @@
   $('lang-en').addEventListener('click', function () { setLanguage('en', true, true) })
   $('lang-ru').addEventListener('click', function () { setLanguage('ru', true, true) })
 
-  $('tab-login').addEventListener('click', function () { showTab('login') })
-  $('tab-register').addEventListener('click', function () { showTab('register') })
+  ;['login', 'register', 'account', 'personal'].forEach(function (name) {
+    $('tab-' + name).addEventListener('click', function () { notice(''); showView(name) })
+  })
+
+  $('personal-show').addEventListener('click', function () { setTokenVisible($('personal-token').type === 'password') })
+  ;['address', 'token'].forEach(function (name) {
+    $('personal-' + name).addEventListener('input', function () { personal.errors[name] = null; showPersonalErrors() })
+  })
+  $('personal-form').addEventListener('submit', function (ev) {
+    ev.preventDefault()
+    notice('')
+    var form = $('personal-form')
+    var address = relay.normalizeServerUrl($('personal-address').value)
+    var token = $('personal-token').value.trim()
+    var tokenReason = relay.tokenProblem(token)
+    personal.errors = { address: address.ok ? null : address.reason, token: tokenReason }
+    showPersonalErrors()
+    if (!address.ok) { $('personal-address').focus(); return }
+    if (tokenReason) { $('personal-token').focus(); return }
+    busy(form, true)
+    relay.seal({ secret: personal.secret, userCode: personal.code, url: address.url, token: token }).then(function (envelope) {
+      return api('POST', '/v1/device/relay', { userCode: personal.code, envelope: envelope }).then(function (res) {
+        busy(form, false)
+        if (res.status === 204) personalSent(address.host)
+        else if (res.status === 404) notice(tr('personal_err_code'), 'error')
+        else notice(explain(res), 'error')
+      }, function () { busy(form, false); notice(tr('no_connection'), 'error') })
+    }, function () { busy(form, false); notice(tr('personal_err_crypto'), 'error') })
+  })
 
   submit($('login-form'), function (f) {
     return api('POST', '/v1/auth/login', { email: f.get('email'), password: f.get('password') })

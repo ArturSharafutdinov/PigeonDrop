@@ -83,6 +83,7 @@ Processing chains beyond speech recognition and Telegram are further work and no
 | Endpoint | Called by | File |
 |---|---|---|
 | `POST /v1/device/code`, `POST /v1/device/token` | the Side Service, when the watch asks (`pairStart`, `pairPoll`) | `PigeonDrop/app-side/pairing.js` |
+| `POST /v1/device/relay` | the pairing page's browser, from the "Personal server" tab, with no session | `backend/internal/httpapi/pair.js`, `pair.relay.js` |
 | `POST /v1/messages` | the Side Service, after it has all the chunks of a recording from the watch, with the device token | `PigeonDrop/app-side/uploads.js` |
 | `GET /healthz` and an empty `POST /v1/messages` | the Side Service, for the watch's *Check connection* button | `PigeonDrop/app-side/serverCheck.js` |
 | `POST /v1/device/approve`, `GET /v1/device/pairing/{code}`, `GET/DELETE /v1/devices`, `GET/DELETE /v1/messages` (`DELETE` without an id deletes every recording), `GET /v1/storage`, `GET /v1/messages/{id}/audio`, `GET /v1/messages/archive` (a zip of all recordings, uncompressed, the original `.opus` files), `POST /v1/messages/{id}/transcribe`, `/v1/telegram`, `/v1/auth/*`, `/v1/me` | a person, on the `/pair` page (not the watch or the Side Service) | `backend/internal/httpapi/pair.js` |
