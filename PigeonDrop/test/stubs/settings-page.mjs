@@ -8,6 +8,11 @@ export let paired = false
 export const setPaired = (v) => { paired = v }
 export const isPaired = () => paired
 export const getDeviceToken = () => (paired ? 'tok' : null)
+// A watch set up for a server of the person's own (utils/device.js): `on`, with an address or with a damaged one (null).
+export let custom = { on: false, url: null }
+export const setCustom = (on, url) => { custom = { on, url } }
+export const isCustomServer = () => custom.on
+export const getServerUrl = () => (custom.on ? custom.url : null)
 export let recordingCount = 3
 export const setRecordingCount = (n) => { recordingCount = n }
 export const listRecordings = () => Array.from({ length: recordingCount })

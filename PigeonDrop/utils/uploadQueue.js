@@ -38,7 +38,7 @@
 
 import { readFileSync, writeFileSync, rmSync, openSync, readSync, closeSync, statSync, O_RDONLY } from '@zos/fs'
 import { RECORDINGS_DIR, listRecordings } from './recordings'
-import { getDeviceToken, isPaired, clearDevice } from './device'
+import { getDeviceToken, isPaired, clearDevice, getServerUrl, isCustomServer, dropCustomToken } from './device'
 import { storageStateOf, getStorageState, saveStorageState, clearStorageState } from './storageState'
 import { MAX_RECORDINGS, MAX_PENDING_RECORDINGS } from '../config'
 import { t } from '../i18n'
@@ -173,8 +173,11 @@ export function pendingRecordings() {
 //   { state: 'error', message, pending, kind }        the sweep stopped on a failure; kind is 'phone' (the phone did
 //                                                     not answer), 'server' (the phone could not reach the server)
 //                                                     or absent (anything else: `message` is the reason)
-//   { state: 'unpaired', pending, revoked }           nothing was sent because the watch is not paired;
-//                                                     revoked is true when the server just refused its token
+//   { state: 'unpaired', pending, revoked, custom }   nothing was sent because the watch has no token to send;
+//                                                     revoked is true when the server just refused its token;
+//                                                     custom is true when the watch is set up for the person's own
+//                                                     server (utils/device.js): then it is a token that is missing,
+//                                                     and the watch has not gone back to the PigeonDrop server
 //   { state: 'alert', alert }                         a storage warning from a sweep that ran while nobody was
 //                                                     listening (no page open); only `alert` is meant
 // `sending`, `done` and `error` may carry an `alert` as well. Pass null to unsubscribe.
@@ -358,6 +361,7 @@ function sendRecording(item, onChunk) {
     err.unpaired = true
     return Promise.reject(err)
   }
+  const serverUrl = getServerUrl() // null for the PigeonDrop server; a token without an address cannot exist for an own server
 
   let reader
   let size
@@ -381,6 +385,8 @@ function sendRecording(item, onChunk) {
     let message
     try {
       message = { type: 'uploadChunk', fileName: item.fileName, uploadId, index, total, data: reader.read(index), deviceToken }
+      // The phone sends to the PigeonDrop server unless told otherwise; a watch set up for the person's own server tells it.
+      if (serverUrl !== null) message.serverUrl = serverUrl
     } catch (err) {
       return Promise.reject(err)
     }
@@ -468,7 +474,7 @@ export function retryPendingUploads() {
 
   // Nothing can be sent without a device token; say so instead of trying and failing on every chunk.
   if (!isPaired()) {
-    emit({ state: 'unpaired', pending: pending.length, revoked: false })
+    emit({ state: 'unpaired', pending: pending.length, revoked: false, custom: isCustomServer() })
     return
   }
 
@@ -535,13 +541,17 @@ export function retryPendingUploads() {
       sweepOver()
       console.log('retryPendingUploads: sweep stopped:', err)
       if (err && err.unauthorized) {
-        clearDevice()
+        // The person's own server refused the token: forget the token but keep the address. Clearing everything would
+        // turn this watch into one that uses the PigeonDrop server, and the recordings would go where the person did not choose.
+        const custom = isCustomServer()
+        if (custom) dropCustomToken()
+        else clearDevice()
         clearStorageState() // it was about the account this watch was paired with
-        emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: true })
+        emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: true, custom })
         return
       }
       if (err && err.unpaired) {
-        emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: false })
+        emit({ state: 'unpaired', pending: pendingRecordings().length, revoked: false, custom: isCustomServer() })
         return
       }
       if (err && err.rateLimited) {

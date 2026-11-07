@@ -26,4 +26,11 @@ r = await run(200, 401); ok(r.ok === false && r.stage === 'token', 'token refuse
 r = await run(200, 502); ok(r.stage === 'upload' && r.error === 'HTTP 502', 'upload route answers 502 -> stage upload -> ' + JSON.stringify(r))
 r = await run(200, new Error('reset')); ok(r.stage === 'upload' && /reset/.test(r.error), 'upload request fails -> stage upload -> ' + JSON.stringify(r))
 r = await run(200, 400, ''); ok(r.ok === true && r.paired === false && calls.length === 1, 'no token: only the server is checked -> ' + JSON.stringify(r))
+// A watch set up for a server of the person's own: such a server must take uploads, nothing else, so there is no /healthz call.
+const runOwn = async (u, token = 'tok') => { calls.length = 0; health = new Error('/healthz must not be asked'); upload = u; return checkServer({ deviceToken: token, serverUrl: 'https://own.example/drop' }, 'https://own.example/drop') }
+r = await runOwn(400); ok(r.ok === true && r.stage === 'upload' && r.paired === true && calls.length === 1 && calls[0].url === 'https://own.example/drop/v1/messages' && calls[0].headers.Authorization === 'Bearer tok' && calls[0].body === '{}', 'own server, accepted token: one empty upload, no /healthz -> ' + JSON.stringify(r))
+r = await runOwn(401); ok(r.ok === false && r.stage === 'token' && calls.length === 1, 'own server, token refused -> stage token -> ' + JSON.stringify(r))
+r = await runOwn(404); ok(r.ok === false && r.stage === 'upload' && r.error === 'HTTP 404', 'own server without the upload route -> stage upload -> ' + JSON.stringify(r))
+r = await runOwn(new Error('Network down')); ok(r.ok === false && r.stage === 'upload' && /Network down/.test(r.error), 'own server unreachable -> stage upload, with the reason -> ' + JSON.stringify(r))
+r = await runOwn(400, ''); ok(r.ok === false && r.stage === 'token' && calls.length === 0, 'own server, no token: nothing to check, and it is not reported as fine -> ' + JSON.stringify(r))
 process.exit(failures ? 1 : 0)

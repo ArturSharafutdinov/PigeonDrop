@@ -8,6 +8,7 @@ import { SERVER_URL } from '../config'
 import { handleUploadChunk } from './uploads'
 import { startPairing, pollPairing } from './pairing'
 import { checkServer } from './serverCheck'
+import { resolveServer } from '../utils/serverUrl'
 
 const messageBuilder = new MessageBuilder()
 
@@ -29,6 +30,7 @@ AppSideService({
     //   pairStart   - page/pair.js asks for the codes of a new pairing (see ./pairing.js).
     //   pairPoll    - page/pair.js asks whether the pairing was approved yet.
     //   checkServer - the settings page's "Check connection": walks the way to the server (./serverCheck.js).
+    //                 uploadChunk and checkServer may carry the watch's `serverUrl` (a server of the person's own).
     //   ping        - the watch asks whether anybody is here before it starts an upload; any reply will do
     //                 (utils/uploadQueue.js), so that a phone that does not answer is found in seconds.
     messageBuilder.on('request', ({ request, response }) => {
@@ -41,14 +43,19 @@ AppSideService({
           response({ data: { ok: false, error: String(err) } })
         })
 
+      // Recordings and the connection check go to the server the watch names: its own `serverUrl` when the person set
+      // the watch up for a server of their own, the PigeonDrop server of this build otherwise. An address that cannot
+      // be used is an error and never the default: see resolveServer. Pairing is always with the PigeonDrop server.
       if (type === 'uploadChunk') {
-        reply(handleUploadChunk(payload, SERVER_URL))
+        const target = resolveServer(payload, SERVER_URL)
+        reply(target.ok ? handleUploadChunk(payload, target.url) : Promise.resolve({ ok: false, error: target.error }))
       } else if (type === 'pairStart') {
         reply(startPairing(payload, SERVER_URL))
       } else if (type === 'pairPoll') {
         reply(pollPairing(payload, SERVER_URL))
       } else if (type === 'checkServer') {
-        reply(checkServer(payload, SERVER_URL))
+        const target = resolveServer(payload, SERVER_URL)
+        reply(target.ok ? checkServer(payload, target.url) : Promise.resolve({ ok: false, stage: 'server', error: target.error }))
       } else if (type === 'ping') {
         reply(Promise.resolve({ ok: true }))
       } else {

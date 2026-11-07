@@ -5,7 +5,7 @@
 import { createWidget, widget, align, prop, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
 import { push } from '@zos/router'
-import { isPaired, getDeviceToken } from '../utils/device'
+import { isPaired, getDeviceToken, getServerUrl, isCustomServer } from '../utils/device'
 import { listRecordings } from '../utils/recordings'
 import { clearAllRecordings } from '../utils/uploadQueue'
 import { t } from '../i18n'
@@ -111,8 +111,12 @@ Page({
     this.state.checking = true
     this.updateStatus(t('settings.checking'))
     const { messageBuilder } = getApp()._options.globalData
+    const message = { type: 'checkServer', deviceToken: getDeviceToken() || '' }
+    // A watch set up for a server of the person's own is checked against that server. Its address is part of the message
+    // whenever the watch is set up for one, even a damaged one (then null: the phone refuses it, not falls back).
+    if (isCustomServer()) message.serverUrl = getServerUrl()
     messageBuilder
-      .request({ type: 'checkServer', deviceToken: getDeviceToken() || '' }, { timeout: CHECK_TIMEOUT_MS })
+      .request(message, { timeout: CHECK_TIMEOUT_MS })
       .then(
         (reply) => reply,
         () => ({ noPhone: true }),

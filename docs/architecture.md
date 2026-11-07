@@ -48,7 +48,7 @@ sequenceDiagram
 1. **Record.** The hardware shortcut button starts and stops a recording (`page/index.js`); a long press plays the last one. The file is kept on the watch as `voice_messages/voice_<time>.opus`.
 2. **Queue.** The recording joins a persistent queue on the watch (`utils/uploadQueue.js`, section 3). It stays there until the server confirms it.
 3. **Send over Bluetooth.** The watch sends it to the phone through the vendored `MessageBuilder` channel in numbered chunks of 15 KB, **one `request()` at a time, waiting for the reply to each** (section 6 explains why). Every chunk carries the watch's device token.
-4. **Relay.** The phone's Side Service (`app-side/`) collects the chunks in memory. When the last one arrives it wraps the recording into a standard Ogg/Opus file (`utils/oggOpus.js`, packets are not re-encoded) and `fetch()`es it to `SERVER_URL/v1/messages` with `Authorization: Bearer <device token>`. The phone keeps no token and no state of its own.
+4. **Relay.** The phone's Side Service (`app-side/`) collects the chunks in memory. When the last one arrives it wraps the recording into a standard Ogg/Opus file (`utils/oggOpus.js`, packets are not re-encoded) and `fetch()`es it to `SERVER_URL/v1/messages` with `Authorization: Bearer <device token>`. The phone keeps no token and no state of its own. (A watch the person has set up for a server of their own puts that server's `serverUrl` in every chunk, and the phone posts there instead; see "A server of the person's own" below.)
 5. **Store.** The server finds the device by the token's hash, stores the file under the message id for the device's owner, and answers. A repeated upload of the same file name from the same device returns the original result and creates nothing. There are three limits: a recording is at most 512 KiB (a minute of audio is about 140 KiB), a device may upload at most 60 recordings an hour, and an account holds at most 100 MiB; when a new recording does not fit, the oldest ones are deleted and the new one is accepted, and the answer says so.
 6. **Confirm.** The phone returns the server's answer as the reply to the *last chunk*. Only that reply marks the recording as uploaded in the watch's queue, and it carries the account's storage state (section 5).
 7. **Process.** In the same database transaction that stores the message, the server enqueues a transcription and, if the account has a linked Telegram chat, a Telegram delivery (section 8). Workers inside the server process pick them up.
@@ -86,6 +86,17 @@ sequenceDiagram
 - A watch without a token sends nothing. Recordings wait in the queue and the screen says "Watch is not paired".
 - The same server address (`SERVER_URL` in `config.js`) is used for pairing and for uploads.
 
+### A server of the person's own
+
+A person who does not want their recordings on the PigeonDrop server can set the watch up for a server they run themselves (a "Personal Server"). It only receives recordings: speech recognition and Telegram belong to the PigeonDrop service. The watch then keeps that server's address (`serverUrl`) and the token that server gave in the same `device.json`, written together, and puts the address in every `uploadChunk` and in the connection check; the Side Service uses it instead of `SERVER_URL` (`resolveServer` in `utils/serverUrl.js`). Rules that hold whatever else changes:
+
+- Only plain `https://` addresses are taken, with no login, query or fragment (`normalizeServerUrl`).
+- **The watch never goes back to the PigeonDrop server on its own.** An address the phone cannot use is an error and the recordings stay on the watch; a token the own server refuses is dropped but the address stays (`dropCustomToken`); a damaged record sends nothing. Where the recordings go changes only when the person changes it.
+- Pairing (`pairStart`, `pairPoll`) is always with the PigeonDrop server.
+- Recordings that have not been sent stay queued and go to whichever server the watch is set up for when they are sent.
+
+The code can run such a watch; no screen sets one up yet.
+
 ## 3. The upload queue lives on the watch
 
 If the watch is out of Bluetooth range, or the phone has no internet, a recording must not be lost. The queue that guarantees it is on the **watch**, not on the phone, because the phone side cannot be trusted with state: `MessageBuilder` gives no delivery guarantees (a `call()` can fail without a trace when Bluetooth drops, and there is no retry or resend on reconnect), and the Side Service has no documented, stable lifecycle and no timer wake-up (it is purely reactive). The one persistent store that was confirmed there is `settingsStorage`, a small key-value store; the watch has `@zos/fs`. So the Side Service stays a thin stateless relay: receive, try `fetch()`, report back, keep nothing.
@@ -118,7 +129,8 @@ A missing reply looks the same from the watch whether the Zepp app on the phone 
 | `page/index.js` | Main screen. Click: start/stop. Long press: play the last recording. While recording it shows a stopwatch and a **Cancel** button in place of the two navigation buttons (a third button does not fit the round screen); Cancel stops and deletes the file at once, and the file stays "being written" for the queue until it is gone. |
 | `page/list.js`, `page/settings.js`, `page/storage.js`, `page/pair.js` | Recordings list, settings (pair, check connection, clear memory with a two-step confirmation), the storage warning, and pairing with the QR code. |
 | `utils/uploadQueue.js` | The queue (section 3). |
-| `utils/recordings.js`, `utils/device.js`, `utils/storageState.js` | File naming and listing; the device token; the last storage state the server reported. Corrupt files mean "not paired" / "no warning", never a crash. |
+| `utils/recordings.js`, `utils/device.js`, `utils/storageState.js` | File naming and listing; the device token and, for a watch set up for a server of the person's own, that server's address; the last storage state the server reported. Corrupt files mean "not paired" / "no warning", never a crash. |
+| `utils/serverUrl.js` | Which addresses of a person's own server are taken (`https://host[:port][/path]` only) and which server a message from the watch is for. Shared by the watch, the Side Service and, later, the Settings App; the cases are in `PigeonDrop/test/fixtures/server-url-cases.json`. |
 | `utils/player.js`, `utils/screen.js`, `utils/linkProblem.js` | The one shared `Player`; holding the screen on for a bounded time; the texts for the two kinds of lost link. |
 | `i18n/` | English and Russian tables, `t(key, values)`. |
 | `config.js` | Local, not committed (`config.example.js` is the template): `SERVER_URL` and the limits. |
