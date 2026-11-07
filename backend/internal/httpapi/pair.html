@@ -20,13 +20,17 @@
   </div>
   <p id="notice" role="status" hidden></p>
 
+  <!-- One row of tabs for everything on the page: a visitor who is not signed in sees Sign in, Register and Personal
+       server; a signed-in person sees Account and Personal server (pair.js decides which). -->
+  <nav class="tabs" id="tabs" data-i18n-label="tabs_label" hidden>
+    <button type="button" id="tab-login" aria-pressed="true" data-i18n="tab_login"></button>
+    <button type="button" id="tab-register" aria-pressed="false" data-i18n="tab_register"></button>
+    <button type="button" id="tab-account" aria-pressed="false" data-i18n="tab_account" hidden></button>
+    <button type="button" id="tab-personal" aria-pressed="false" data-i18n="tab_personal"></button>
+  </nav>
+
   <!-- Not signed in -->
   <section id="guest" hidden>
-    <nav class="tabs" data-i18n-label="auth_tabs_label">
-      <button type="button" id="tab-login" aria-pressed="true" data-i18n="tab_login"></button>
-      <button type="button" id="tab-register" aria-pressed="false" data-i18n="tab_register"></button>
-    </nav>
-
     <form id="login-form">
       <label><span data-i18n="email"></span> <input name="email" type="email" autocomplete="username" required></label>
       <label><span data-i18n="password"></span> <input name="password" type="password" autocomplete="current-password" required></label>
@@ -40,6 +44,40 @@
         <small data-i18n="password_hint"></small></label>
       <button type="submit" data-i18n="register_submit"></button>
     </form>
+  </section>
+
+  <!-- Personal server: the address and access token of a server the person runs themselves, encrypted here in the
+       browser with a key that only the watch has (it is in the QR code, after the #), for the watch to pick up. -->
+  <section id="personal" hidden>
+    <h2 data-i18n="personal_title"></h2>
+    <p data-i18n="personal_lead"></p>
+    <p id="personal-blocked" class="warn" hidden></p>
+
+    <form id="personal-form" autocomplete="off" novalidate>
+      <label for="personal-address"><span data-i18n="personal_address"></span></label>
+      <input id="personal-address" name="address" type="text" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://example.com/pigeondrop" aria-describedby="personal-address-error">
+      <small id="personal-address-error" class="field-error" hidden></small>
+
+      <label for="personal-token"><span data-i18n="personal_token"></span></label>
+      <input id="personal-token" name="token" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" aria-describedby="personal-token-hint personal-token-error">
+      <small id="personal-token-hint" class="hint" data-i18n="personal_token_hint"></small>
+      <small id="personal-token-error" class="field-error" hidden></small>
+      <p><button type="button" id="personal-show" class="link" aria-pressed="false"></button></p>
+
+      <button type="submit" data-i18n="personal_submit"></button>
+    </form>
+
+    <div id="personal-done" role="status" tabindex="-1" hidden>
+      <h3 data-i18n="personal_done_title"></h3>
+      <p data-i18n="personal_done"></p>
+      <p id="personal-host" class="host"></p>
+    </div>
+
+    <div class="privacy">
+      <p data-i18n="personal_privacy_1"></p>
+      <p class="warn" data-i18n="personal_privacy_2"></p>
+      <p class="hint" data-i18n="personal_privacy_3"></p>
+    </div>
   </section>
 
   <!-- Signed in -->
@@ -100,6 +138,7 @@
   </section>
 </main>
 <script src="/pair.texts.js"></script>
+<script src="/pair.relay.js"></script>
 <script src="/pair.js"></script>
 </body>
 </html>

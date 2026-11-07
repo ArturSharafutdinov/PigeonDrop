@@ -28,8 +28,8 @@ a.button:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; 
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 8px; }
 .section-head h2 { margin: 0; }
 button.danger { color: var(--danger); }
-.tabs { display: flex; gap: 8px; margin-bottom: 8px; }
-.tabs button { flex: 1; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.tabs button { flex: 1; min-width: 7rem; }
 .tabs button[aria-pressed=true] { border-color: var(--accent); font-weight: 700; }
 #notice { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); }
 #notice.error { border-color: var(--danger); color: var(--danger); }
@@ -53,3 +53,13 @@ audio { width: 100%; margin-top: 6px; }
 .lang { display: flex; gap: 4px; }
 .lang button { padding: 4px 10px; font-size: .85rem; }
 .lang button[aria-pressed=true] { border-color: var(--accent); font-weight: 700; }
+h3 { font-size: 1rem; margin: 16px 0 4px; }
+input[aria-invalid=true] { border-color: var(--danger); }
+.field-error { display: block; color: var(--danger); margin: 4px 0 0; }
+#personal label { margin-bottom: 0; }
+#personal small { display: block; margin: 4px 0 0; }
+#personal form > button[type=submit] { margin-top: 8px; }
+.host { font: 700 1.2rem/1.3 ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; text-align: center; margin: 8px 0; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+#personal-done { padding: 4px 0; }
+#personal-done:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+.privacy { margin-top: 24px; }

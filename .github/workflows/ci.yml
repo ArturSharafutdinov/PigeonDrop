@@ -66,7 +66,9 @@ jobs:
           files=$(git diff --name-only HEAD^1 HEAD) || all # cannot tell: run everything
           echo "$files"
           this='\.github/workflows/ci\.yml'
-          for area in "backend:backend/" "watch:PigeonDrop/" "scripts:\.github/scripts/" "stt:stt/" "shell:.*\.sh$"; do
+          # The pairing page's script (backend/) is tested against files the watch app shares with it: the test vector of
+          # the relay envelope and the table of addresses (PigeonDrop/test/fixtures), so a change to those is a change to both.
+          for area in "backend:(backend/|PigeonDrop/test/fixtures/)" "watch:PigeonDrop/" "scripts:\.github/scripts/" "stt:stt/" "shell:.*\.sh$"; do
             if grep -Eq "^(${area#*:}|${this}$)" <<< "$files"; then value=true; else value=false; fi
             echo "${area%%:*}=$value" | tee -a "$GITHUB_OUTPUT"
           done
