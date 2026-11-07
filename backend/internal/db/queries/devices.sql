@@ -36,6 +36,12 @@ SET redeemed_at = sqlc.arg(now)::timestamptz
 WHERE id = $1 AND approved_at IS NOT NULL AND redeemed_at IS NULL
 RETURNING user_id, device_name;
 
+-- Closes a pairing whose watch was handed settings for a server of its own (see relay.go). The row is simply
+-- removed, so that nothing in the database says an envelope ever passed through; the count is the exactly-once
+-- gate (0 rows: someone else collected it first).
+-- name: DeletePairing :execrows
+DELETE FROM device_pairings WHERE id = $1;
+
 -- name: DeleteExpiredPairings :execrows
 DELETE FROM device_pairings WHERE expires_at <= sqlc.arg(now)::timestamptz;
 

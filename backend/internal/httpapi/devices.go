@@ -142,6 +142,25 @@ func (s *Server) PollDevicePairing(ctx context.Context, request api.PollDevicePa
 		return api.PollDevicePairing429JSONResponse{TooManyAttemptsJSONResponse: tooManyAttempts(wait)}, nil
 	}
 
+	// Settings for a server of the person's own wait for this watch (relay.go). They come before an approval: the
+	// envelope can only have been made by someone who held the watch's QR code, an approval by anyone who knew the
+	// short code. Delivering closes the pairing for good, so the same code cannot be approved afterwards. The
+	// delete is the gate that lets exactly one poll through, as redeeming is for a token.
+	if s.relays.has(row.ID) {
+		deleted, err := s.DB.DeletePairing(ctx, row.ID)
+		if err != nil {
+			return nil, fmt.Errorf("close pairing: %w", err)
+		}
+		if deleted == 0 {
+			return api.PollDevicePairing400JSONResponse(coded(api.ErrorCodeInvalidDeviceCode, "this pairing was already completed")), nil
+		}
+		envelope, ok := s.relays.take(row.ID)
+		if !ok {
+			return api.PollDevicePairing400JSONResponse(coded(api.ErrorCodeExpiredToken, "the pairing ran out of time")), nil
+		}
+		return api.PollDevicePairing200JSONResponse{Status: api.PollPairingResultStatusRelayed, Envelope: envelope.toAPI()}, nil
+	}
+
 	if row.ApprovedAt == nil {
 		if err := s.DB.TouchPairingPoll(ctx, dbgen.TouchPairingPollParams{ID: row.ID, Now: now}); err != nil {
 			return nil, fmt.Errorf("record poll: %w", err)

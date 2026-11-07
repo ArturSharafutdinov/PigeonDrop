@@ -35,6 +35,7 @@ const (
 	ErrorCodeTooManyAttempts    ErrorCode = "too_many_attempts"
 	ErrorCodeUnauthorized       ErrorCode = "unauthorized"
 	ErrorCodeUnavailable        ErrorCode = "unavailable"
+	ErrorCodeUnsupportedVersion ErrorCode = "unsupported_version"
 	ErrorCodeWeakPassword       ErrorCode = "weak_password"
 	ErrorCodeWrongPassword      ErrorCode = "wrong_password"
 )
@@ -72,6 +73,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case ErrorCodeUnavailable:
 		return true
+	case ErrorCodeUnsupportedVersion:
+		return true
 	case ErrorCodeWeakPassword:
 		return true
 	case ErrorCodeWrongPassword:
@@ -103,6 +106,7 @@ func (e Language) Valid() bool {
 const (
 	PollPairingResultStatusApproved PollPairingResultStatus = "approved"
 	PollPairingResultStatusPending  PollPairingResultStatus = "pending"
+	PollPairingResultStatusRelayed  PollPairingResultStatus = "relayed"
 )
 
 // Valid indicates whether the value is a known member of the PollPairingResultStatus enum.
@@ -111,6 +115,8 @@ func (e PollPairingResultStatus) Valid() bool {
 	case PollPairingResultStatusApproved:
 		return true
 	case PollPairingResultStatusPending:
+		return true
+	case PollPairingResultStatusRelayed:
 		return true
 	default:
 		return false
@@ -360,6 +366,10 @@ type PollPairingResult struct {
 	// DeviceToken With `approved`, the token to send in the Authorization header, as `Bearer <token>`. Shown this once.
 	DeviceToken *string `json:"deviceToken,omitempty"`
 
+	// Envelope Settings for a server of the person's own, encrypted in the browser for the watch (version 1: AES-128-CBC
+	// with an HMAC-SHA-256 tag; see docs/architecture.md). The server never opens it.
+	Envelope *RelayEnvelope `json:"envelope,omitempty"`
+
 	// Interval With `pending`, seconds to wait before the next poll.
 	Interval *int                    `json:"interval,omitempty"`
 	Status   PollPairingResultStatus `json:"status"`
@@ -382,6 +392,33 @@ type RegisterRequest struct {
 	// Password At least 12 characters, at most 256 bytes (after Unicode NFKC normalisation). A value of more than 1024
 	// bytes as sent is refused before it is normalised.
 	Password string `json:"password"`
+}
+
+// RelayEnvelope Settings for a server of the person's own, encrypted in the browser for the watch (version 1: AES-128-CBC
+// with an HMAC-SHA-256 tag; see docs/architecture.md). The server never opens it.
+type RelayEnvelope struct {
+	// Ct The ciphertext, base64url without padding. 32 to 1024 bytes, a multiple of 16.
+	Ct string `json:"ct"`
+
+	// Tag The authentication tag, base64url without padding. 32 bytes.
+	Tag string `json:"tag"`
+
+	// V The format version. Only 1 exists.
+	//
+	// Example: 1
+	V int `json:"v"`
+}
+
+// RelayRequest defines model for RelayRequest.
+type RelayRequest struct {
+	// Envelope Settings for a server of the person's own, encrypted in the browser for the watch (version 1: AES-128-CBC
+	// with an HMAC-SHA-256 tag; see docs/architecture.md). The server never opens it.
+	Envelope RelayEnvelope `json:"envelope"`
+
+	// UserCode The code shown on the watch. Case and the dash do not matter.
+	//
+	// Example: BCDF-GHJK
+	UserCode string `json:"userCode"`
 }
 
 // StartPairingRequest defines model for StartPairingRequest.
@@ -552,6 +589,9 @@ type ApproveDevicePairingJSONRequestBody = ApprovePairingRequest
 // StartDevicePairingJSONRequestBody defines body for StartDevicePairing for application/json ContentType.
 type StartDevicePairingJSONRequestBody = StartPairingRequest
 
+// RelayDeviceSettingsJSONRequestBody defines body for RelayDeviceSettings for application/json ContentType.
+type RelayDeviceSettingsJSONRequestBody = RelayRequest
+
 // PollDevicePairingJSONRequestBody defines body for PollDevicePairing for application/json ContentType.
 type PollDevicePairingJSONRequestBody = PollPairingRequest
 
@@ -584,6 +624,9 @@ type ServerInterface interface {
 	// GetDevicePairing What a user code is waiting for
 	// (GET /v1/device/pairing/{userCode})
 	GetDevicePairing(w http.ResponseWriter, r *http.Request, userCode string)
+	// RelayDeviceSettings Hand encrypted settings for a server of the person's own to the watch that shows this code
+	// (POST /v1/device/relay)
+	RelayDeviceSettings(w http.ResponseWriter, r *http.Request)
 	// PollDevicePairing The watch asks whether its pairing was approved
 	// (POST /v1/device/token)
 	PollDevicePairing(w http.ResponseWriter, r *http.Request)
@@ -738,6 +781,20 @@ func (siw *ServerInterfaceWrapper) GetDevicePairing(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetDevicePairing(w, r, userCode)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RelayDeviceSettings operation middleware
+func (siw *ServerInterfaceWrapper) RelayDeviceSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RelayDeviceSettings(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1139,6 +1196,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/me/password", wrapper.ChangePassword)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/code", wrapper.StartDevicePairing)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/token", wrapper.PollDevicePairing)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/relay", wrapper.RelayDeviceSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/device/pairing/{userCode}", wrapper.GetDevicePairing)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/device/approve", wrapper.ApproveDevicePairing)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/devices", wrapper.ListDevices)
@@ -1604,6 +1662,81 @@ func (response GetDevicePairing404JSONResponse) VisitGetDevicePairingResponse(w 
 type GetDevicePairing429JSONResponse struct{ TooManyAttemptsJSONResponse }
 
 func (response GetDevicePairing429JSONResponse) VisitGetDevicePairingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.RetryAfter != nil {
+		w.Header().Set("Retry-After", fmt.Sprint(*response.Headers.RetryAfter))
+	}
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RelayDeviceSettingsRequestObject struct {
+	Body *RelayDeviceSettingsJSONRequestBody
+}
+
+type RelayDeviceSettingsResponseObject interface {
+	VisitRelayDeviceSettingsResponse(w http.ResponseWriter) error
+}
+
+type RelayDeviceSettings204Response struct {
+}
+
+func (response RelayDeviceSettings204Response) VisitRelayDeviceSettingsResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RelayDeviceSettings400JSONResponse Error
+
+func (response RelayDeviceSettings400JSONResponse) VisitRelayDeviceSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RelayDeviceSettings404JSONResponse Error
+
+func (response RelayDeviceSettings404JSONResponse) VisitRelayDeviceSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RelayDeviceSettings413JSONResponse Error
+
+func (response RelayDeviceSettings413JSONResponse) VisitRelayDeviceSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RelayDeviceSettings429JSONResponse struct{ TooManyAttemptsJSONResponse }
+
+func (response RelayDeviceSettings429JSONResponse) VisitRelayDeviceSettingsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2322,6 +2455,9 @@ type StrictServerInterface interface {
 	// GetDevicePairing What a user code is waiting for
 	// (GET /v1/device/pairing/{userCode})
 	GetDevicePairing(ctx context.Context, request GetDevicePairingRequestObject) (GetDevicePairingResponseObject, error)
+	// RelayDeviceSettings Hand encrypted settings for a server of the person's own to the watch that shows this code
+	// (POST /v1/device/relay)
+	RelayDeviceSettings(ctx context.Context, request RelayDeviceSettingsRequestObject) (RelayDeviceSettingsResponseObject, error)
 	// PollDevicePairing The watch asks whether its pairing was approved
 	// (POST /v1/device/token)
 	PollDevicePairing(ctx context.Context, request PollDevicePairingRequestObject) (PollDevicePairingResponseObject, error)
@@ -2596,6 +2732,37 @@ func (sh *strictHandler) GetDevicePairing(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetDevicePairingResponseObject); ok {
 		if err := validResponse.VisitGetDevicePairingResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RelayDeviceSettings operation middleware
+func (sh *strictHandler) RelayDeviceSettings(w http.ResponseWriter, r *http.Request) {
+	var request RelayDeviceSettingsRequestObject
+
+	var body RelayDeviceSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RelayDeviceSettings(ctx, request.(RelayDeviceSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RelayDeviceSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RelayDeviceSettingsResponseObject); ok {
+		if err := validResponse.VisitRelayDeviceSettingsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

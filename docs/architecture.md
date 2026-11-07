@@ -97,6 +97,16 @@ A person who does not want their recordings on the PigeonDrop server can set the
 
 The person sets it up in two steps: the address and the token go into the Settings App in the Zepp app (`setting/index.js`, stored in the Zepp app's `settingsStorage`), then **Settings → Connection → Personal Server** on the watch asks the phone for them (`getServerConfig`, answered by `app-side/serverConfig.js`), shows the host and the number of waiting recordings (`page/server.js`) and saves them only after the person confirms. The watch asks and the phone answers, as everywhere else in the app; the phone never pushes. What such a server must implement is in [Personal Server](personal-server.md).
 
+#### Handing the settings over through the pairing page
+
+The server side of a second way to enter the same two values: the pairing page's browser encrypts them with a key that only the watch has and posts the result to `POST /v1/device/relay` (`backend/internal/httpapi/relay.go`); the watch collects it with its next `POST /v1/device/token` poll, which then answers `relayed` with the envelope. The server cannot read the envelope and is built to keep as little of it as possible:
+
+- It lives in a map in the process's memory (`relayStore`), keyed by the id of the pairing row, and nowhere else: not in PostgreSQL (the pairing row is untouched while it waits, and is deleted when it is delivered), not in a log (the type prints as `redacted` in every `fmt` verb and in `slog`), not in a backup. A timer removes it when the pairing's time is up, even if nobody asks.
+- It is delivered once: the poll deletes the pairing row first (`DeletePairing`, whose row count is the exactly-once gate, as `RedeemPairing` is for a token) and only then takes the envelope out of memory. Closing the pairing means the same code cannot be approved afterwards.
+- The server checks the shape (version, encoding, sizes) and nothing else; it has no key to check the tag with. An envelope that was waiting when someone approved the same code wins: it can only have been made by someone who held the watch's QR code, while an approval needs only the short code.
+- The store is bounded (1000 envelopes) and wrong codes are limited per address (`DeviceRelayIP`), so a flood neither fills the memory nor guesses codes.
+- With two containers alive during a deployment a request may land in one and the poll in the other; the pairing then runs out and the person starts again.
+
 ## 3. The upload queue lives on the watch
 
 If the watch is out of Bluetooth range, or the phone has no internet, a recording must not be lost. The queue that guarantees it is on the **watch**, not on the phone, because the phone side cannot be trusted with state: `MessageBuilder` gives no delivery guarantees (a `call()` can fail without a trace when Bluetooth drops, and there is no retry or resend on reconnect), and the Side Service has no documented, stable lifecycle and no timer wake-up (it is purely reactive). The one persistent store that was confirmed there is `settingsStorage`, a small key-value store; the watch has `@zos/fs`. So the Side Service stays a thin stateless relay: receive, try `fetch()`, report back, keep nothing.

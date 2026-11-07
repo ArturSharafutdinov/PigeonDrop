@@ -136,6 +136,7 @@ watch ───────────────────────► P
 - **The code for a person** is 8 consonants out of 20 (as RFC 8628 advises: no vowels, no 0/O or 1/I confusion), 34 bits. That is safe only because it lives 10 minutes and wrong guesses are limited: 10 per user in 15 minutes. Approval gives another 2 minutes to collect the token.
 - **Protection against a swapped link.** The link to the approval can be made to point at someone else's watch; the page shows the code large and asks to compare it with the watch's screen. The watch's name comes from the watch itself and is shown only as text.
 - **Limits:** issuing codes is 10 per address in 10 minutes (each leaves a row in the database), polling with a non-existent code is 30 per address in 15 minutes, polling more often than every 3 seconds is refused (429 and `Retry-After`) and not counted.
+- **Settings for a server of the person's own** (`POST /v1/device/relay`): an encrypted envelope the server cannot read, kept in memory only (never in the database, a log or a backup) until the watch's next poll takes it, once; delivering it closes the pairing. See `internal/httpapi/relay.go` and [docs/api.md](../docs/api.md).
 - **Revoking:** `DELETE /v1/devices/{id}` (from the page). The token stops working at once; the device's recordings stay. Expired pairings are deleted hourly.
 - The token goes in the header `Authorization: Bearer ...` (the `deviceAuth` scheme in `api/openapi.yaml`). A device does not need a person's session, and a device token does not replace a session for a person.
 

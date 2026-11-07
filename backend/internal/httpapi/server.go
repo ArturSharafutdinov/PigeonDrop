@@ -95,6 +95,8 @@ type Server struct {
 	userCodes func() (display, canonical string, err error)
 	// decodeSlots holds a token for every recording being decoded right now (see concurrentDecodes).
 	decodeSlots chan struct{}
+	// relays holds the encrypted settings of personal servers on their way to a watch (see relay.go). Memory only.
+	relays *relayStore
 }
 
 func (s *Server) now() time.Time {
@@ -132,6 +134,7 @@ func NewHandler(s *Server) http.Handler {
 		s.Storage = DefaultStorageLimits
 	}
 	s.decodeSlots = make(chan struct{}, concurrentDecodes)
+	s.relays = newRelayStore(maxRelayEntries, s.now)
 
 	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -195,6 +198,9 @@ func (s *Server) limitBody(next http.Handler) http.Handler {
 		limit := int64(MaxBodyBytes)
 		if r.Method == http.MethodPost && r.URL.Path == "/v1/messages" {
 			limit = s.uploadBodyLimit()
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/device/relay" {
+			limit = relayBodyLimit
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)

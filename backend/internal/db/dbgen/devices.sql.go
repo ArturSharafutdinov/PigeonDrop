@@ -122,6 +122,21 @@ func (q *Queries) DeleteExpiredPairings(ctx context.Context, now time.Time) (int
 	return result.RowsAffected(), nil
 }
 
+const deletePairing = `-- name: DeletePairing :execrows
+DELETE FROM device_pairings WHERE id = $1
+`
+
+// Closes a pairing whose watch was handed settings for a server of its own (see relay.go). The row is simply
+// removed, so that nothing in the database says an envelope ever passed through; the count is the exactly-once
+// gate (0 rows: someone else collected it first).
+func (q *Queries) DeletePairing(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePairing, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDeviceByTokenHash = `-- name: GetDeviceByTokenHash :one
 SELECT id, user_id, name, last_seen_at
 FROM devices
