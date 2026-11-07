@@ -12,7 +12,7 @@ const S = stubPath('app-side-index.mjs')
 let service
 globalThis.AppSideService = (options) => { service = options }
 await import(fileUrl(generate('app-side/index.js', {
-  '../shared/message-side': S, '../config': S, './uploads': S, './pairing': S, './serverCheck': S,
+  '../shared/message-side': S, '../config': S, './uploads': S, './pairing': S, './serverCheck': S, './serverConfig': S,
   '../utils/serverUrl': generate('utils/serverUrl.js', {}),
 })))
 service.onInit()
@@ -50,7 +50,11 @@ console.log('3. pairing is with the PigeonDrop server whatever the message says'
   r = await ask({ type: 'pairPoll', deviceCode: 'x', serverUrl: 'https://own.example' })
   ok(r.calls.join() === 'pairPoll@' + DEFAULT, 'pairPoll') }
 
-console.log('4. other requests')
+console.log('4. the address and token entered on the phone')
+{ const r = await ask({ type: 'getServerConfig' })
+  ok(r.calls.join() === 'getServerConfig@undefined' && r.reply.ok === true && r.reply.configured === false, 'getServerConfig is answered by the Settings App reader') }
+
+console.log('5. other requests')
 { let r = await ask({ type: 'ping' })
   ok(r.reply.ok === true && r.calls.length === 0, 'ping')
   r = await ask({ type: 'nonsense' })

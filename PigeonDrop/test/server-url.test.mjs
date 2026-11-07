@@ -8,7 +8,7 @@ import { generate, fileUrl } from './helpers/load.mjs'
 
 let failures = 0
 const ok = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failures++ }
-const { normalizeServerUrl, resolveServer } = await import(fileUrl(generate('utils/serverUrl.js', {})))
+const { normalizeServerUrl, resolveServer, isUsableToken } = await import(fileUrl(generate('utils/serverUrl.js', {})))
 const CASES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'server-url-cases.json'), 'utf8'))
 
 console.log('1. the table of cases (' + CASES.length + ')')
@@ -49,5 +49,9 @@ console.log('3. which server a request is for')
   r = resolveServer(Object.assign(Object.create(null), { serverUrl: undefined }), DEFAULT)
   ok(r.ok === false, 'the field present but undefined counts as set')
 }
+
+console.log('4. the access token')
+{ ok(['a', 'pdt_0123456789abcdef', 'A.b-c_d~e+f/g=', 'x'.repeat(256)].every(isUsableToken), 'ordinary tokens and one of 256 characters are fine')
+  ok(['', ' ', 'to ken', 'tok\n', 'tok\t', 'tok\u0000', 'tok\u200a', 'x'.repeat(257), null, undefined, 5, {}, []].every((t) => !isUsableToken(t)), 'empty, with whitespace or control characters, too long, or not text: refused') }
 
 process.exit(failures ? 1 : 0)

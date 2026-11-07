@@ -8,6 +8,7 @@ import { SERVER_URL } from '../config'
 import { handleUploadChunk } from './uploads'
 import { startPairing, pollPairing } from './pairing'
 import { checkServer } from './serverCheck'
+import { getServerConfig } from './serverConfig'
 import { resolveServer } from '../utils/serverUrl'
 
 const messageBuilder = new MessageBuilder()
@@ -31,6 +32,7 @@ AppSideService({
     //   pairPoll    - page/pair.js asks whether the pairing was approved yet.
     //   checkServer - the settings page's "Check connection": walks the way to the server (./serverCheck.js).
     //                 uploadChunk and checkServer may carry the watch's `serverUrl` (a server of the person's own).
+    //   getServerConfig - page/connection.js asks for the address and token the person entered in the Settings App (./serverConfig.js).
     //   ping        - the watch asks whether anybody is here before it starts an upload; any reply will do
     //                 (utils/uploadQueue.js), so that a phone that does not answer is found in seconds.
     messageBuilder.on('request', ({ request, response }) => {
@@ -56,6 +58,8 @@ AppSideService({
       } else if (type === 'checkServer') {
         const target = resolveServer(payload, SERVER_URL)
         reply(target.ok ? checkServer(payload, target.url) : Promise.resolve({ ok: false, stage: 'server', error: target.error }))
+      } else if (type === 'getServerConfig') {
+        reply(Promise.resolve(getServerConfig()))
       } else if (type === 'ping') {
         reply(Promise.resolve({ ok: true }))
       } else {

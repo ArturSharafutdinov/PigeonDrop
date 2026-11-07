@@ -13,6 +13,7 @@ export let custom = { on: false, url: null }
 export const setCustom = (on, url) => { custom = { on, url } }
 export const isCustomServer = () => custom.on
 export const getServerUrl = () => (custom.on ? custom.url : null)
+export const serverLabel = () => (custom.on && custom.url ? custom.url.replace(/^https:\/\//, '').split('/')[0] : null)
 export let recordingCount = 3
 export const setRecordingCount = (n) => { recordingCount = n }
 export const listRecordings = () => Array.from({ length: recordingCount })

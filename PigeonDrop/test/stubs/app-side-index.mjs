@@ -12,3 +12,4 @@ export const handleUploadChunk = call('uploadChunk')
 export const startPairing = call('pairStart')
 export const pollPairing = call('pairPoll')
 export const checkServer = call('checkServer')
+export const getServerConfig = () => { log.push({ fn: 'getServerConfig' }); return { ok: true, configured: false } }

@@ -95,7 +95,7 @@ A person who does not want their recordings on the PigeonDrop server can set the
 - Pairing (`pairStart`, `pairPoll`) is always with the PigeonDrop server.
 - Recordings that have not been sent stay queued and go to whichever server the watch is set up for when they are sent.
 
-The code can run such a watch; no screen sets one up yet.
+The person sets it up in two steps: the address and the token go into the Settings App in the Zepp app (`setting/index.js`, stored in the Zepp app's `settingsStorage`), then **Settings → Connection → Personal Server** on the watch asks the phone for them (`getServerConfig`, answered by `app-side/serverConfig.js`), shows the host and the number of waiting recordings (`page/server.js`) and saves them only after the person confirms. The watch asks and the phone answers, as everywhere else in the app; the phone never pushes. What such a server must implement is in [Personal Server](personal-server.md).
 
 ## 3. The upload queue lives on the watch
 
@@ -127,17 +127,19 @@ A missing reply looks the same from the watch whether the Zepp app on the phone 
 |---|---|
 | `app.json`, `app.js` | Manifest (microphone permission, round target with design width 480, pages) and the app entry: one BLE connection (`MessageBuilder`) for the life of the app, plus the reconnect trigger. |
 | `page/index.js` | Main screen. Click: start/stop. Long press: play the last recording. While recording it shows a stopwatch and a **Cancel** button in place of the two navigation buttons (a third button does not fit the round screen); Cancel stops and deletes the file at once, and the file stays "being written" for the queue until it is gone. |
-| `page/list.js`, `page/settings.js`, `page/storage.js`, `page/pair.js` | Recordings list, settings (pair, check connection, clear memory with a two-step confirmation), the storage warning, and pairing with the QR code. |
+| `page/list.js`, `page/settings.js`, `page/storage.js`, `page/pair.js` | Recordings list, settings (connection, check connection, clear memory with a two-step confirmation), the storage warning, and pairing with the QR code. |
+| `page/connection.js`, `page/server.js` | Where the recordings go: the menu (pair via QR code, take a Personal Server from the phone, go back to PigeonDrop) and the confirmation that shows the host and the number of waiting recordings before anything is saved. The menu leaves by `replace`, so the page the person comes back to is built afresh. |
+| `setting/` | The Settings App: the form in the Zepp app for the address and token of a Personal Server (`index.js`, built from the Zepp app's own widgets; `problems.js`, the checks of what was typed, tested outside the app). English only. |
 | `utils/uploadQueue.js` | The queue (section 3). |
 | `utils/recordings.js`, `utils/device.js`, `utils/storageState.js` | File naming and listing; the device token and, for a watch set up for a server of the person's own, that server's address; the last storage state the server reported. Corrupt files mean "not paired" / "no warning", never a crash. |
-| `utils/serverUrl.js` | Which addresses of a person's own server are taken (`https://host[:port][/path]` only) and which server a message from the watch is for. Shared by the watch, the Side Service and, later, the Settings App; the cases are in `PigeonDrop/test/fixtures/server-url-cases.json`. |
+| `utils/serverUrl.js` | Which addresses of a person's own server are taken (`https://host[:port][/path]` only) and which server a message from the watch is for. Shared by the watch, the Side Service and the Settings App; the cases are in `PigeonDrop/test/fixtures/server-url-cases.json`. |
 | `utils/player.js`, `utils/screen.js`, `utils/linkProblem.js` | The one shared `Player`; holding the screen on for a bounded time; the texts for the two kinds of lost link. |
 | `i18n/` | English and Russian tables, `t(key, values)`. |
 | `config.js` | Local, not committed (`config.example.js` is the template): `SERVER_URL` and the limits. |
 
 ### Phone (`PigeonDrop/app-side/`)
 
-The Side Service has no screen. `index.js` dispatches requests from the watch by `type` (`uploadChunk`, `pairStart`, `pairPoll`, `checkServer`, `ping`); `uploads.js` collects chunks in memory (an incomplete upload lives at most 10 minutes; if the Side Service restarts mid-upload the watch starts that recording again) and sends the finished file; `pairing.js` and `serverCheck.js` are the phone's halves of pairing and of the connection check; `base64.js` converts with `Buffer` if the phone's runtime has it and plain JavaScript if not. A failure is always returned to the watch as `{ ok: false, ... }`, never thrown.
+The Side Service has no screen. `index.js` dispatches requests from the watch by `type` (`uploadChunk`, `pairStart`, `pairPoll`, `checkServer`, `getServerConfig`, `ping`); `uploads.js` collects chunks in memory (an incomplete upload lives at most 10 minutes; if the Side Service restarts mid-upload the watch starts that recording again) and sends the finished file; `pairing.js` and `serverCheck.js` are the phone's halves of pairing and of the connection check; `serverConfig.js` reads what the person entered in the Settings App; `base64.js` converts with `Buffer` if the phone's runtime has it and plain JavaScript if not. A failure is always returned to the watch as `{ ok: false, ... }`, never thrown.
 
 ### Vendored library (`PigeonDrop/shared/`)
 

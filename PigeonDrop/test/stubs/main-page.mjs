@@ -48,6 +48,9 @@ export const MAX_RECORDING_SECONDS = 5
 export let paired = true
 export const setPaired = (v) => { paired = v }
 export const isPaired = () => paired
+export let custom = false
+export const setCustom = (v) => { custom = v }
+export const isCustomServer = () => custom   // a watch set up for a server of the person's own (utils/device.js)
 export const playback = []                  // every playAudio() call: { file, callbacks } (not in `log`, which some tests compare exactly)
 export const detached = []                  // the callbacks every detachPlayback() call was given
 export const playAudio = (file, callbacks) => { playback.push({ file, callbacks }) }

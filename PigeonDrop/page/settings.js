@@ -1,11 +1,12 @@
-// Settings screen: pairing this watch with an account (page/pair.js, which leaves the device
-// token in utils/device.js) and clearing the watch's memory of recordings. Reached from the
-// Settings button on the main page.
+// Settings screen: where the watch sends its recordings (page/connection.js: pairing with an account,
+// page/pair.js, which leaves the device token in utils/device.js, or a server of the person's own),
+// the connection check, and clearing the watch's memory of recordings. Reached from the Settings button
+// on the main page.
 
 import { createWidget, widget, align, prop, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
 import { push } from '@zos/router'
-import { isPaired, getDeviceToken, getServerUrl, isCustomServer } from '../utils/device'
+import { isPaired, getDeviceToken, getServerUrl, isCustomServer, serverLabel } from '../utils/device'
 import { listRecordings } from '../utils/recordings'
 import { clearAllRecordings } from '../utils/uploadQueue'
 import { t } from '../i18n'
@@ -52,9 +53,9 @@ Page({
       radius: px(16),
       normal_color: 0x2f2f2f,
       press_color: 0x4a4a4a,
-      text: t('settings.pair'),
+      text: t('settings.connection'),
       text_size: px(24),
-      click_func: () => push({ url: 'page/pair' }),
+      click_func: () => push({ url: 'page/connection' }),
     })
 
     // Walks the way to the server through the phone and says where it breaks.
@@ -97,6 +98,7 @@ Page({
   },
 
   idleText() {
+    if (isCustomServer()) return t(isPaired() ? 'settings.custom' : 'settings.custom_no_token', { host: serverLabel() || '?' })
     return t(isPaired() ? 'settings.paired' : 'settings.not_paired')
   },
 
@@ -132,9 +134,10 @@ Page({
   checkText(reply) {
     const why = String((reply && reply.error) || '').replace(/^server: /, '').slice(0, 30)
     if (!reply || reply.noPhone) return t('settings.check_phone')
-    if (reply.ok === true) return t(reply.paired === false ? 'settings.check_unpaired' : 'settings.check_ok')
+    const custom = isCustomServer() // a server of the person's own: there is no "pairing" to be revoked, only a token
+    if (reply.ok === true) return t(custom ? 'settings.check_ok_custom' : reply.paired === false ? 'settings.check_unpaired' : 'settings.check_ok')
     if (reply.stage === 'server') return t('settings.check_server_down', { why })
-    if (reply.stage === 'token') return t('settings.check_revoked')
+    if (reply.stage === 'token') return t(custom ? (reply.error === 'no token' ? 'settings.check_no_token' : 'settings.check_token_refused') : 'settings.check_revoked')
     return t('settings.check_server_error', { why: why || t('settings.no_answer') })
   },
 

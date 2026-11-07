@@ -147,6 +147,7 @@ tools/        backup and restore check for the production data
 
 - [Architecture](docs/architecture.md): the data flow, one module at a time, and why it is built this way
 - [HTTP API](docs/api.md) and [`openapi.yaml`](backend/api/openapi.yaml)
+- [Personal Server](docs/personal-server.md): sending the recordings to a server of your own, and what such a server must do
 - [Deployment](docs/deployment.md) and [CI/CD](docs/ci-cd.md)
 - [Decision records](docs/adr/): the choices behind the design (stack, queues, formats, pairing)
 - [Research](docs/research/): the speech model comparison and its benchmark harness

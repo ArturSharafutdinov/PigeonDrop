@@ -71,8 +71,8 @@ console.log('3. the main page in English')
   ok(state({ state: 'error', kind: 'phone', message: 'x', pending: 3 }) === 'Phone is not reachable\nRestart the\nZepp app\nQueued: 3', 'the phone does not answer')
   ok(state({ state: 'error', kind: 'server', message: 'server: no answer in 30 s', pending: 1 }) === 'Server is unreachable\nCheck the internet\non the phone\n(no answer in 30 s)\nQueued: 1', 'the phone cannot reach the server')
   ok(state({ state: 'error', message: 'cannot open file', pending: 1 }) === 'Could not send\ncannot open file\nQueued: 1', 'any other failure shows its reason')
-  ok(state({ state: 'unpaired', pending: 2, revoked: false }) === 'Watch is not paired\nSettings →\nPair the watch\nQueued: 2', 'not paired')
-  ok(state({ state: 'unpaired', pending: 2, revoked: true }) === 'Pairing was revoked\nSettings →\nPair the watch\nQueued: 2', 'pairing revoked')
+  ok(state({ state: 'unpaired', pending: 2, revoked: false }) === 'Watch is not paired\nSettings →\nConnection\nQueued: 2', 'not paired')
+  ok(state({ state: 'unpaired', pending: 2, revoked: true }) === 'Pairing was revoked\nSettings →\nConnection\nQueued: 2', 'pairing revoked')
   setLanguage(RUSSIAN)
   page.build()
   const ruLabels = mainStubs.created.filter((w) => w.type === 'BUTTON').slice(-3).map((w) => w.text)
@@ -96,7 +96,7 @@ console.log('4. settings and pairing in English')
   settingsPageStubs.widgets.length = 0
   page.build()
   const labels = settingsPageStubs.widgets.filter((w) => w.type === 'BUTTON').map((w) => w.opts.text)
-  ok(labels.join() === 'Pair the watch,Check connection,Clear memory', 'the buttons -> ' + labels.join())
+  ok(labels.join() === 'Connection,Check connection,Clear memory', 'the buttons -> ' + labels.join())
   ok(page.checkText({ noPhone: true }) === 'Phone does not answer\nRestart the\nZepp app', 'check: the phone does not answer')
   ok(page.checkText({ ok: true, paired: true }) === 'All good:\nserver is reachable,\nwatch is paired', 'check: all good')
   ok(page.checkText({ ok: true, paired: false }) === 'Server is reachable,\nwatch is not paired', 'check: not paired')
@@ -136,9 +136,34 @@ console.log('5. the storage warning in English')
     page.onInit(JSON.stringify({ state: bad }))
     ok(page.state.warning === null || page.state.warning.title !== undefined && ['Storage\nis full', 'Storage\nis almost full'].includes(page.state.warning.title), 'an unknown state ' + JSON.stringify(bad) + ' is not a warning of its own') } }
 
+console.log('5b. the connection and confirmation screens, in English and in Russian')
+{
+  const S = stubPath('connection-pages.mjs')
+  const stubs = await import(fileUrl(S))
+  const serverUrl = generate('utils/serverUrl.js', {})
+  let opts
+  globalThis.Page = (o) => { opts = o }
+  globalThis.setTimeout = () => 1; globalThis.clearTimeout = () => {}
+  await import(fileUrl(generate('page/connection.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '../utils/device': S, '../utils/serverUrl': serverUrl, '../i18n': I18N })))
+  const connection = opts
+  await import(fileUrl(generate('page/server.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '../utils/device': S, '../utils/serverUrl': serverUrl, '../utils/storageState': S, '../utils/uploadQueue': S, '../i18n': I18N })))
+  const server = opts
+  const make = (o) => Object.assign(Object.create(o), { state: structuredClone({ ...o.state }) })
+  const texts = (page, params) => { stubs.widgets.length = 0; if (params) page.onInit(JSON.stringify(params)); page.build(); return stubs.widgets.map((w) => w.type === 'BUTTON' ? w.opts.text : w.text) }
+  Object.assign(stubs.state, { paired: true, custom: true, label: 'own.example:8443' }); stubs.setPending(2)
+  setLanguage(ENGLISH)
+  ok(texts(make(connection)).join('|') === 'Recordings go to\nyour Personal Server:\nown.example:8443|Pair via QR code|Personal Server|Back to PigeonDrop', 'the connection screen in English')
+  ok(texts(make(server), { mode: 'personal', serverUrl: 'https://own.example:8443', token: 't' }).join('|') === 'Send recordings to\nown.example:8443\nQueued: 2|Use this server|Cancel', 'the confirmation in English')
+  setLanguage(RUSSIAN)
+  ok(texts(make(connection)).join('|') === 'Записи идут на\nваш сервер:\nown.example:8443|По QR-коду|Свой сервер|Вернуть PigeonDrop', 'the connection screen in Russian')
+  ok(texts(make(server), { mode: 'personal', serverUrl: 'https://own.example:8443', token: 't' }).join('|') === 'Отправлять записи на\nown.example:8443\nВ очереди: 2|Использовать|Отмена', 'the confirmation in Russian')
+  ok(texts(make(server), { mode: 'reset' }).join('|') === 'Вернуться на PigeonDrop?\nВ очереди: 2\nПривяжите часы снова,\nчтобы отправить их|Вернуть|Отмена', 'going back to PigeonDrop, in Russian')
+  setLanguage(ENGLISH)
+  stubs.state.custom = false; stubs.state.label = null }
+
 console.log('6. the source has no text of its own left')
 { // Every string a person reads comes from the tables: no Cyrillic letters in the code of the pages and utilities outside comments.
-  const files = ['page/index.js', 'page/list.js', 'page/pair.js', 'page/settings.js', 'page/storage.js', 'utils/linkProblem.js', 'utils/uploadQueue.js']
+  const files = ['page/index.js', 'page/list.js', 'page/pair.js', 'page/settings.js', 'page/storage.js', 'page/connection.js', 'page/server.js', 'utils/linkProblem.js', 'utils/uploadQueue.js']
   const root = new URL('..', import.meta.url).pathname
   for (const f of files) {
     const code = fs.readFileSync(root + f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, ''))

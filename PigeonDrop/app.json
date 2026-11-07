@@ -30,12 +30,17 @@
             "page/index",
             "page/list",
             "page/settings",
+            "page/connection",
+            "page/server",
             "page/pair",
             "page/storage"
           ]
         },
         "app-side": {
           "path": "app-side/index"
+        },
+        "setting": {
+          "path": "setting/index"
         }
       },
       "platforms": [
