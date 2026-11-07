@@ -7,4 +7,6 @@ description = "Made-up values used by tests"
 regexes = [
   '''123456789:AAH-test_token0123456789abcdefghijk''', # a Telegram token that was never issued
   '''voice_\d{10,}\.opus''',                           # a recording's file name, which looks like a key to the generic rule
+  '''AAECAwQFBgcICQoLDA0ODw''',                        # the bytes 00 01 ... 0f in base64url: the secret of the relay envelope's test vector
+  '''pdt_test_0123456789abcdef''',                     # the access token of that test vector
 ]
