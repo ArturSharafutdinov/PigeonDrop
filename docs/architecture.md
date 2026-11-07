@@ -10,6 +10,7 @@ The target device is a round watch running Zepp OS 4.0 or newer; the manifest de
 flowchart LR
     W["Watch app<br/>(Zepp OS 4.0)"] -- "Bluetooth (BLE),<br/>15 KB chunks, each acknowledged" --> P["Phone: Side Service<br/>(inside the Zepp app)"]
     P -- "HTTPS, Ogg/Opus,<br/>device token" --> S["Go server"]
+    P -. "HTTPS, Ogg/Opus, own token<br/>(watch set up for a Personal Server)" .-> O["A server of the person's own<br/>(audio only)"]
     S --- DB[("PostgreSQL")]
     S --- FS[("recordings on disk")]
     S -- "WAV, one at a time" --> T["Speech recognition<br/>(Parakeet TDT v3)"]

@@ -2,7 +2,7 @@
 
 <h1 align="center">PigeonDrop</h1>
 
-<p align="center"><strong>Voice notes from your wrist.</strong> Press a button on your Amazfit watch, speak, and get the audio and its transcript on a server you run yourself, in Telegram, or on a web page.</p>
+<p align="center"><strong>Voice notes from your wrist.</strong> Press a button on your Amazfit watch, speak, and get the audio and its transcript on a server you run yourself, in Telegram, or on a web page. Or skip all of that and have the watch send the audio straight to a server of your own.</p>
 
 <p align="center">
   <a href="https://github.com/ArturSharafutdinov/PigeonDrop/actions/workflows/ci.yml"><img src="https://github.com/ArturSharafutdinov/PigeonDrop/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
@@ -23,23 +23,50 @@ PigeonDrop is a complete voice-note pipeline, from a smartwatch app to a server 
 ```mermaid
 flowchart LR
     W["Watch app<br/>Zepp OS 4.0"] -- "Bluetooth,<br/>15 KB chunks" --> P["Side Service<br/>(Zepp app on the phone)"]
-    P -- "HTTPS,<br/>Ogg/Opus" --> S["Go server<br/>+ PostgreSQL"]
-    S -- "WAV" --> T["Speech recognition<br/>Parakeet TDT v3"]
-    S -- "voice message<br/>+ transcript" --> G["Telegram bot"]
-    S --- U["Web page /pair<br/>sign in, pair, listen"]
+
+    subgraph SVC ["PigeonDrop server"]
+        S["Go server + PostgreSQL<br/>accounts, recordings"]
+        T["Speech recognition<br/>Parakeet TDT v3"]
+        G["Telegram bot"]
+        U["Web page /pair<br/>sign in, pair, listen"]
+        S -- "WAV" --> T
+        S -- "voice message<br/>+ transcript" --> G
+        S --- U
+    end
+
+    subgraph OWN ["Personal Server"]
+        O["A server you run yourself<br/>audio only: anything that<br/>follows the upload contract"]
+    end
+
+    P -- "paired with an account:<br/>HTTPS, Ogg/Opus, device token" --> S
+    P -. "set up for a Personal Server:<br/>HTTPS, Ogg/Opus, your own token" .-> O
 ```
 
+The audio goes to **one** of the two, whichever the watch is set up for (**Settings → Connection** on the watch). The part inside the first box needs an account on a PigeonDrop server; the second needs nothing but a server of yours that accepts the upload.
+
 1. A press of the watch's shortcut button records a voice note (up to 60 s). The file is kept in a queue on the watch until the server confirms it.
-2. The watch sends it to the phone over Bluetooth in numbered 15 KB chunks, one at a time, each acknowledged; the phone's Side Service wraps the audio into a standard Ogg/Opus file (no re-encoding) and uploads it with the watch's device token.
-3. The server stores the recording under its owner's account, converts it for playback, and queues it for speech recognition and for Telegram.
+2. The watch sends it to the phone over Bluetooth in numbered 15 KB chunks, one at a time, each acknowledged; the phone's Side Service wraps the audio into a standard Ogg/Opus file (no re-encoding) and uploads it: with the watch's device token to the PigeonDrop server, or, if the watch is set up for a Personal Server, with the token you made for it to your own server.
+3. The PigeonDrop server stores the recording under its owner's account, converts it for playback, and queues it for speech recognition and for Telegram.
 4. The recognizer turns it into text, one recording at a time. The bot sends the voice message with its transcript to the linked chat.
 5. On the web page you sign in, pair watches, listen, read transcripts and download everything.
 
+### Where the audio goes
+
+| | PigeonDrop server | Personal Server |
+|---|---|---|
+| What it is | the Go server in this repository (accounts by invitation) | any server of your own that follows the small upload contract |
+| How the watch is set up | pair it with an account: **Pair via QR code** | give it an address and an access token: in the Zepp app, or on the pairing page's **Personal server** tab |
+| What you get | the audio, transcripts, Telegram delivery, the web page | the audio only; what your server does with it is up to your server |
+| Account needed | yes | no |
+
+Recordings that have not been sent yet wait on the watch and go to whichever server it is set up for when they are sent; the watch never switches servers by itself. The steps, the contract a server must follow and what is protected are in [Personal Server](docs/personal-server.md).
+
 ## What is in it
 
-- **Watch app** (`PigeonDrop/`): recording, a persistent upload queue, playback, pairing with a QR code, and messages that say what is wrong ("the phone does not answer", "the server is unreachable", "storage is almost full") instead of failing silently. English and Russian interface.
+- **Watch app** (`PigeonDrop/`): recording, a persistent upload queue, playback, pairing with a QR code, a choice of where the recordings go (the PigeonDrop server or a Personal Server of your own), and messages that say what is wrong ("the phone does not answer", "the server is unreachable", "storage is almost full") instead of failing silently. English and Russian interface.
 - **Go server** (`backend/`): invitation-only accounts, cookie sessions, watch pairing and revocable device tokens, per-account storage limits, an OpenAPI-first `/v1` API, and a small web page.
 - **Speech recognition service** (`stt/`): NVIDIA Parakeet TDT 0.6B v3 (int8) behind a token-protected HTTP API, in its own container with a 3 GB limit.
+- **Personal Server mode** (`docs/personal-server.md`): the watch can send the audio, and only the audio, to a server you run yourself, with no account on a PigeonDrop server. The address and the access token reach the watch either from a form in the Zepp app, or from the pairing page, encrypted in the browser so that the PigeonDrop server only relays something it cannot read.
 - **Telegram bot**: long polling (no public address needed), links a chat to an account, sends each recording with its transcript, "Seen" button deletes it from the chat.
 - **Operations** (`tools/backup`, `.github/`): database dump and restore check, CI, and deployment with Coolify.
 
@@ -58,6 +85,7 @@ The parts I would point a reviewer at:
 
 - **Delivery over an unreliable link.** The queue lives on the watch (the phone's Side Service has no reliable storage). Chunks are acknowledged one by one, the recording is marked sent only when the server's answer arrives, and a repeated upload of the same recording is harmless. A single oversized `call()` once overran the Bluetooth send queue and failed silently; the design comes from that.
 - **A format that is not a standard.** Zepp's recorder writes its own framing around Opus packets. The phone repackages them into Ogg/Opus without re-encoding, checked against an independent reader written from the RFCs and against `ffmpeg`'s strict decoder.
+- **Handing a secret to a watch through someone else's server.** On the pairing page's *Personal server* tab the address and token are encrypted in the browser with a key that only the watch has: the watch makes it for each attempt and puts it in the QR code after the `#`, which a browser never sends anywhere. The server relays the envelope from memory only (never the database, logs or backups), once, and cannot read it; the watch checks the tag before it decrypts anything. The page and the watch are tested against the same test vector, and the watch tests its own cryptography before it shows the QR code, because nothing about it could be tried on a real watch from here. What this cannot protect against, a tampered page, is stated on the page.
 - **Device pairing** follows RFC 8628 (device authorization grant): the watch shows a short code and a QR code, the person approves on the phone, and the watch receives a token that can be revoked.
 - **Job queues in PostgreSQL** (transcription and Telegram delivery) with leases, `SKIP LOCKED`, attempt fencing and workers that restart after a panic, instead of a message broker for a load that does not need one.
 - **Contract first.** The `/v1` API is described in `backend/api/openapi.yaml`; Go types and handlers' interfaces come from `oapi-codegen`, queries from `sqlc`, and CI fails if generated code is stale.
@@ -99,12 +127,14 @@ zeus dev                              # the simulator; `zeus preview` makes a QR
 
 The phone reaches your server over the internet, so for a real watch the server needs a public HTTPS address. Deployment is described in [docs/deployment.md](docs/deployment.md).
 
+**Send the audio to your own server instead** (optional, no PigeonDrop account): on the watch open **Settings → Connection → Personal Server** after entering the address and token in the Zepp app, or scan the pairing QR code and use the **Personal server** tab of the page it opens. A server only has to accept `POST /v1/messages` with a bearer token; the contract is in [Personal Server](docs/personal-server.md).
+
 ## Tests and quality
 
 | What | How |
 |---|---|
-| Backend | `cd backend && make check` (gofmt, vet, tests with the race detector against a real PostgreSQL, generated code up to date), `make lint`, `make vuln` |
-| Watch app | `cd PigeonDrop && npm test` (the real source on stubs of the Zepp OS modules; about 400 checks) |
+| Backend | `cd backend && make check` (gofmt, vet, tests with the race detector against a real PostgreSQL, generated code up to date), `make lint`, `make vuln`; the pairing page's script is tried with Node by the same `go test` |
+| Watch app | `cd PigeonDrop && npm test` (the real source on stubs of the Zepp OS modules; more than 800 checks) |
 | Speech service | `cd stt && python3 -m unittest discover -s tests -t .` (fake model); `stt/smoke-synthetic.sh` tries the real image |
 | CI | every pull request runs the checks of the parts it touches, plus golangci-lint, govulncheck, `npm audit`, shellcheck and gitleaks; a push to `main` deploys |
 
@@ -115,6 +145,7 @@ The phone reaches your server over the internet, so for a real watch the server 
 **Not tried, or not measured:**
 - The English interface and the new language handling on a watch (the Russian texts are unchanged; the English lines are fitted by rule, not by eye).
 - The storage warning page and its vibration on the round display.
+- Personal Server on real devices: the form in the Zepp app, the hand-over through the pairing page (including the watch's cryptography, whether the QR code with the extra key scans from the round display, and whether phone scanners keep the part after the `#`), and the new screens. The page was tried in a browser against a server on a computer, and the encrypted result was opened with a separate implementation of the watch's side; nothing was tried on a watch.
 - Android: the phone side was developed against an iPhone.
 - The time and memory of repackaging a 60 s recording on a phone (a 2 s one was measured).
 - The timeouts of the "no connection" messages are estimates, not measurements of a real Bluetooth link.
@@ -129,7 +160,7 @@ The problems that cost the most time so far, with what fixed them, are in [docs/
 
 ## Privacy
 
-Recordings and transcripts are personal. They are stored on the server you run and are not sent to any cloud service; the speech model runs in your own container. The one exception is a Telegram chat you link yourself: its voice message and transcript pass through Telegram's servers. See [SECURITY.md](SECURITY.md) for how accounts, tokens and the web page are protected.
+Recordings and transcripts are personal. They are stored on the server you run and are not sent to any cloud service; the speech model runs in your own container. The one exception is a Telegram chat you link yourself: its voice message and transcript pass through Telegram's servers. With a Personal Server the recordings go from your phone straight to the server you named and do not touch a PigeonDrop server at all; the address and token of that server stay on your phone and watch if you enter them in the Zepp app, or pass encrypted through the PigeonDrop server (in memory only, for at most 10 minutes) if you use the pairing page. See [SECURITY.md](SECURITY.md) for how accounts, tokens and the web page are protected.
 
 ## Repository layout
 
