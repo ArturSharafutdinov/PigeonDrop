@@ -108,7 +108,7 @@ console.log('4. settings and pairing in English')
   let opts
   globalThis.Page = (o) => { opts = o }
   const link = generate('utils/linkProblem.js', { '../i18n': I18N })
-  await import(fileUrl(generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/storageState': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': link, '../i18n': I18N })))
+  await import(fileUrl(generate('page/pair.js', { '@zos/ui': S, '@zos/utils': S, '@zos/router': S, '@zos/device': S, '../utils/device': S, '../utils/storageState': S, '../utils/uploadQueue': S, '../utils/screen': S, '../utils/linkProblem': link, '../utils/relayCrypto': generate('utils/relayCrypto.js', { '@zos/crypto': stubPath('zos-crypto.mjs'), './serverUrl': generate('utils/serverUrl.js', {}) }), '../i18n': I18N })))
   setLanguage(ENGLISH)
   globalThis.getApp = () => ({ _options: { globalData: { messageBuilder: { request: () => new Promise(() => {}) } } } })   // a phone that never answers
   const page = Object.assign(Object.create(opts), { state: structuredClone({ ...opts.state }) })
@@ -118,7 +118,11 @@ console.log('4. settings and pairing in English')
   ok(page.failureText({ code: 'too_many_attempts' }) === 'Too many attempts.\nPlease wait', 'too many attempts')
   ok(page.failureText({ noPhone: true }).startsWith('Phone is not reachable'), 'the phone does not answer')
   ok(page.failureText({ noServer: true }).startsWith('Server is unreachable'), 'the phone cannot reach the server')
-  ok(page.failureText({}) === 'Could not get\na pairing code', 'anything else') }
+  ok(page.failureText({}) === 'Could not get\na pairing code', 'anything else')
+  ok(t('pair.relay_failed') === 'Could not accept\nthe settings.\nOpen this screen\nand start again' && t('pair.expired') === 'Code expired.\nOpen "Pair via QR\ncode" again', 'the texts of the Personal server settings failing and of the code running out')
+  setLanguage(RUSSIAN)
+  ok(t('pair.relay_failed') === 'Не удалось принять\nнастройки.\nОткройте экран\nи начните заново' && t('pair.expired') === 'Код истёк.\nОткройте «По QR-коду»\nзаново', 'the same in Russian, and the button it names is the one on the Connection screen (' + t('connection.qr') + ')')
+  setLanguage(ENGLISH) }
 
 console.log('5. the storage warning in English')
 {

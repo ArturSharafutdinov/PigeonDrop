@@ -60,7 +60,8 @@ export default {
   'pair.no_code': 'Не удалось получить\nкод привязки',
   'pair.scan': 'Код: {code}\nОтсканируйте QR\nи подтвердите',
   'pair.done': 'Часы привязаны\nЗаписи отправятся\nавтоматически',
-  'pair.expired': 'Код истёк.\nОткройте «Привязать\nчасы» заново',
+  'pair.expired': 'Код истёк.\nОткройте «По QR-коду»\nзаново',
+  'pair.relay_failed': 'Не удалось принять\nнастройки.\nОткройте экран\nи начните заново',
 
   // Connection (page/connection.js)
   'connection.default_paired': 'Записи идут на\nPigeonDrop',

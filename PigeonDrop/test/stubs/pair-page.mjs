@@ -9,6 +9,8 @@ export const createWidget = (type, opts) => {
 }
 export const calls = []
 export const back = () => { calls.push('back') }
+export const replaced = []
+export const replace = (o) => { replaced.push(o); calls.push('replace') }
 export const info = { value: { deviceName: 'Amazfit Test' }, throws: false }
 export const getDeviceInfo = () => { if (info.throws) throw new Error('no device info'); return info.value }
 export const saved = []

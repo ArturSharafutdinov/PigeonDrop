@@ -57,6 +57,12 @@ export function startPairing(message, baseUrl) {
   }, transportFailure)
 }
 
+// An envelope for the watch, as the server relays it (docs/api.md): encrypted for the watch, which opens it. The phone
+// only checks that it has the shape and passes it on; it does not log it or look inside.
+function isEnvelope(e) {
+  return !!e && typeof e === 'object' && typeof e.v === 'number' && typeof e.ct === 'string' && typeof e.tag === 'string' && e.ct.length <= 2000 && e.tag.length <= 200
+}
+
 // message: { deviceCode }
 export function pollPairing(message, baseUrl) {
   if (!message || typeof message.deviceCode !== 'string' || message.deviceCode.length === 0) {
@@ -68,6 +74,9 @@ export function pollPairing(message, baseUrl) {
     }
     if (data && data.status === 'approved' && typeof data.deviceToken === 'string' && data.deviceToken.length > 0) {
       return { ok: true, status: 'approved', deviceToken: data.deviceToken, deviceId: data.deviceId }
+    }
+    if (data && data.status === 'relayed' && isEnvelope(data.envelope)) {
+      return { ok: true, status: 'relayed', envelope: { v: data.envelope.v, ct: data.envelope.ct, tag: data.envelope.tag } }
     }
     return failure(data)
   }, transportFailure)

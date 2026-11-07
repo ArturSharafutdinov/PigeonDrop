@@ -10,16 +10,24 @@
 //
 // The screen is held on while it waits, which has a limit (the code's lifetime), and a code that
 // runs out is not renewed behind the person's back: the screen says so and is opened again.
+//
+// The same QR code also serves the "Personal server" tab of that page: it carries a secret that only this watch has,
+// after the "#" (which a browser never sends anywhere). A person who would rather send their recordings to a server of
+// their own enters its address and token on the page, which encrypts them with that secret; the poll then answers
+// "relayed" instead of "approved", this screen opens the envelope (utils/relayCrypto.js) and hands the address and token
+// to the confirmation screen (page/server.js), which saves nothing until the person agrees. A watch that cannot do the
+// cryptography shows the plain QR code and the page tells the person the watch needs an update.
 
 import { createWidget, widget, align, prop, text_style } from '@zos/ui'
 import { px } from '@zos/utils'
-import { back } from '@zos/router'
+import { back, replace } from '@zos/router'
 import { getDeviceInfo } from '@zos/device'
 import { saveDevice } from '../utils/device'
 import { clearStorageState } from '../utils/storageState'
 import { retryPendingUploads } from '../utils/uploadQueue'
 import { holdScreen, releaseScreen } from '../utils/screen'
 import { problemText, PHONE, SERVER } from '../utils/linkProblem'
+import { startRelay, openEnvelope } from '../utils/relayCrypto'
 import { t } from '../i18n'
 
 const REQUEST_TIMEOUT = 15000
@@ -40,6 +48,8 @@ Page({
     timer: null, // the one pending setTimeout (next poll, retry, or leaving the screen), or null
     destroyed: false, // set in onDestroy, so a late reply from the phone touches nothing
     failures: 0, // consecutive failed attempts to get a code
+    secret: null, // the key in the QR code for the "Personal server" tab (Uint8Array), kept only while the code lives
+    userCode: null, // the short code of this pairing, which an envelope is bound to
   },
 
   build() {
@@ -77,6 +87,7 @@ Page({
 
   onDestroy() {
     this.state.destroyed = true
+    this.state.secret = null
     this.clearTimer()
     releaseScreen()
   },
@@ -153,11 +164,24 @@ Page({
     this.state.failures = 0
     this.state.deviceCode = reply.deviceCode
     this.state.expiresAt = Date.now() + (reply.expiresIn > 0 ? reply.expiresIn * 1000 : HOLD_MS)
+    this.state.userCode = reply.userCode
+
+    // The key for the "Personal server" tab goes in the fragment of the address; the account pairing ignores it.
+    let content = reply.verificationUriComplete
+    try {
+      const relay = reply.verificationUriComplete.indexOf('#') === -1 ? startRelay() : null
+      if (relay) {
+        this.state.secret = relay.secret
+        content += '#' + relay.fragment
+      }
+    } catch (e) {
+      console.log('no key for the Personal server tab:', e && e.message)
+    }
 
     // Centered QR, sized so its background quiet zone stays within the round display's safe
     // radius (~230px from the 240,240 center) - see docs/architecture.md (round display) for the clipping math.
     this.state.qr = createWidget(widget.QRCODE, {
-      content: reply.verificationUriComplete,
+      content,
       x: px(150),
       y: px(150),
       w: px(180),
@@ -198,6 +222,11 @@ Page({
   onPoll(reply) {
     if (this.state.destroyed) return
 
+    if (reply && reply.ok === true && reply.status === 'relayed') {
+      this.relayed(reply.envelope)
+      return
+    }
+
     if (reply && reply.ok === true && reply.status === 'approved' && typeof reply.deviceToken === 'string' && reply.deviceToken.length > 0) {
       this.paired(reply)
       return
@@ -237,7 +266,30 @@ Page({
     }, DONE_SHOWN_MS)
   },
 
+  // Settings for a server of the person's own arrived, encrypted for this watch. Nothing is saved here: the confirmation
+  // screen shows where the recordings would go and saves only if the person agrees. Neither the envelope nor what is in
+  // it is logged; a failure says only which check it was.
+  relayed(envelope) {
+    this.clearTimer()
+    const secret = this.state.secret
+    this.state.secret = null
+    const opened = secret ? openEnvelope(secret, this.state.userCode, envelope) : { ok: false, reason: 'no secret' }
+    releaseScreen()
+    if (!opened.ok) {
+      console.log('settings from the page not accepted:', opened.reason)
+      this.setStatus(t('pair.relay_failed'))
+      return
+    }
+    try {
+      replace({ url: 'page/server', params: { mode: 'personal', serverUrl: opened.serverUrl, token: opened.token } })
+    } catch (e) {
+      console.log('could not open the confirmation:', e && e.message)
+      this.setStatus(t('pair.relay_failed'))
+    }
+  },
+
   expired() {
+    this.state.secret = null
     this.clearTimer()
     this.setStatus(t('pair.expired'))
     releaseScreen()

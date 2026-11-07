@@ -107,6 +107,25 @@ The server side of a second way to enter the same two values: the pairing page's
 - The store is bounded (1000 envelopes) and wrong codes are limited per address (`DeviceRelayIP`), so a flood neither fills the memory nor guesses codes.
 - With two containers alive during a deployment a request may land in one and the poll in the other; the pairing then runs out and the person starts again.
 
+**The QR code and the envelope.** For every attempt the watch makes a new 16-byte secret `S` (`PigeonDrop/utils/relayCrypto.js`) and adds it to the QR code's address after the `#`: `https://<server>/pair?code=BCDF-GHJK#k=<22 characters, base64url>`. A browser never sends the part after `#` to anybody, so only the phone's browser, which scanned the code, has it. Pairing with an account ignores it, so one QR code serves every tab of the page. A watch that cannot make a secret (see below) shows the plain address, and the page then tells the person the watch needs an update.
+
+The page builds an envelope `{ "v": 1, "ct": "…", "tag": "…" }` (both base64url without padding) in the browser:
+
+| | |
+|---|---|
+| keys | `K_enc` = the first 16 bytes of HMAC-SHA-256(`S`, `"pigeondrop/relay/v1/enc"`); `K_mac` = HMAC-SHA-256(`S`, `"pigeondrop/relay/v1/mac"`) |
+| plaintext | 16 random bytes, then the JSON `{"url":"<address>","token":"<token>"}` in UTF-8, then PKCS#7 padding |
+| `ct` | AES-128-CBC of the plaintext under `K_enc`, with an IV of 16 zero bytes |
+| `tag` | HMAC-SHA-256(`K_mac`, `"v1"` ‖ 0x00 ‖ USERCODE ‖ 0x00 ‖ `ct`), where USERCODE is the pairing's short code without the dash, in capitals |
+
+The tag ties the envelope to one pairing, so it cannot be replayed to another. The 16 random bytes in front exist because the watch's AES-CBC takes no IV: it decrypts the first block with an IV it chose itself (so that block is junk and is dropped), and every other block depends only on the key and the block before it. The address is at most 200 characters (the rules of `normalizeServerUrl`), the token at most 256, `ct` at most 1024 bytes. [`PigeonDrop/test/fixtures/relay-envelope-vector.json`](../PigeonDrop/test/fixtures/relay-envelope-vector.json) has fixed inputs and the exact envelope they give; the page and the watch are both tested against it.
+
+**What the watch does** (`page/pair.js`, `utils/relayCrypto.js`). The poll answers `relayed` instead of `approved`; the Side Service passes the envelope on without looking inside. The watch checks, in this order: the version is 1; the shape (`ct` in whole blocks, 32 to 1024 bytes, `tag` 32 bytes, canonical base64url); the tag, compared without an early exit and **before anything is decrypted**; only then it decrypts, drops the first block, removes the padding by hand, decodes strict UTF-8, parses the JSON, and checks the address and the token with the same rules as everywhere else (`normalizeServerUrl`, `isUsableToken`). Anything that fails ends the attempt with "Could not accept the settings" and a log line naming only the check; nothing from inside is ever logged. A good result goes to the confirmation screen of the Settings App way (`page/server.js`), which shows the host and the number of waiting recordings and saves nothing until the person agrees.
+
+**Where the secret's randomness comes from.** `getRandomValues` exists from API_LEVEL 5.0 and the app targets 4.0, so it is not used. The strong source is the key AES-CBC generates for itself (`createChiper`, API_LEVEL 3.0): two are drawn, must be at least 16 bytes, not all zeros and different from each other, and are mixed with some local noise (`Math.random`, the clock) through HMAC-SHA-256. The noise can never stand in for them: without the generated keys there is no secret and no relay.
+
+**The watch tests itself.** What `@zos/crypto` does with a key it is given is documented only as signatures. So before the QR code is made, the watch opens the test vector with its own HMAC and AES (trying the spellings of `key_encrypt`, whose default is not documented, until one works) and checks that two secrets differ. If any of that fails, the QR code is the plain one. Encryption protects the values from the PigeonDrop server's memory, logs and database; it cannot protect them from a page that was tampered with, which could read what is typed before it is encrypted, and the page says so.
+
 ## 3. The upload queue lives on the watch
 
 If the watch is out of Bluetooth range, or the phone has no internet, a recording must not be lost. The queue that guarantees it is on the **watch**, not on the phone, because the phone side cannot be trusted with state: `MessageBuilder` gives no delivery guarantees (a `call()` can fail without a trace when Bluetooth drops, and there is no retry or resend on reconnect), and the Side Service has no documented, stable lifecycle and no timer wake-up (it is purely reactive). The one persistent store that was confirmed there is `settingsStorage`, a small key-value store; the watch has `@zos/fs`. So the Side Service stays a thin stateless relay: receive, try `fetch()`, report back, keep nothing.
@@ -142,6 +161,7 @@ A missing reply looks the same from the watch whether the Zepp app on the phone 
 | `setting/` | The Settings App: the form in the Zepp app for the address and token of a Personal Server (`index.js`, built from the Zepp app's own widgets; `problems.js`, the checks of what was typed, tested outside the app). English only. |
 | `utils/uploadQueue.js` | The queue (section 3). |
 | `utils/recordings.js`, `utils/device.js`, `utils/storageState.js` | File naming and listing; the device token and, for a watch set up for a server of the person's own, that server's address; the last storage state the server reported. Corrupt files mean "not paired" / "no warning", never a crash. |
+| `utils/relayCrypto.js` | The watch's half of the pairing page's "Personal server" tab: the secret for the QR code, opening the envelope (tag first), and the watch checking its own crypto. The page's half is not here; the test vector is `PigeonDrop/test/fixtures/relay-envelope-vector.json`. |
 | `utils/serverUrl.js` | Which addresses of a person's own server are taken (`https://host[:port][/path]` only) and which server a message from the watch is for. Shared by the watch, the Side Service and the Settings App; the cases are in `PigeonDrop/test/fixtures/server-url-cases.json`. |
 | `utils/player.js`, `utils/screen.js`, `utils/linkProblem.js` | The one shared `Player`; holding the screen on for a bounded time; the texts for the two kinds of lost link. |
 | `i18n/` | English and Russian tables, `t(key, values)`. |
@@ -149,7 +169,7 @@ A missing reply looks the same from the watch whether the Zepp app on the phone 
 
 ### Phone (`PigeonDrop/app-side/`)
 
-The Side Service has no screen. `index.js` dispatches requests from the watch by `type` (`uploadChunk`, `pairStart`, `pairPoll`, `checkServer`, `getServerConfig`, `ping`); `uploads.js` collects chunks in memory (an incomplete upload lives at most 10 minutes; if the Side Service restarts mid-upload the watch starts that recording again) and sends the finished file; `pairing.js` and `serverCheck.js` are the phone's halves of pairing and of the connection check; `serverConfig.js` reads what the person entered in the Settings App; `base64.js` converts with `Buffer` if the phone's runtime has it and plain JavaScript if not. A failure is always returned to the watch as `{ ok: false, ... }`, never thrown.
+The Side Service has no screen. `index.js` dispatches requests from the watch by `type` (`uploadChunk`, `pairStart`, `pairPoll`, `checkServer`, `getServerConfig`, `ping`); `uploads.js` collects chunks in memory (an incomplete upload lives at most 10 minutes; if the Side Service restarts mid-upload the watch starts that recording again) and sends the finished file; `pairing.js` and `serverCheck.js` are the phone's halves of pairing (which also passes a relayed envelope on without opening it) and of the connection check; `serverConfig.js` reads what the person entered in the Settings App; `base64.js` converts with `Buffer` if the phone's runtime has it and plain JavaScript if not. A failure is always returned to the watch as `{ ok: false, ... }`, never thrown.
 
 ### Vendored library (`PigeonDrop/shared/`)
 
@@ -291,6 +311,8 @@ stateDiagram-v2
 4. The packing on the phone for a 60 s recording (speed, memory), Android, and how Telegram renders such a file (as a voice message with a waveform, or as a plain file) on every client.
 5. The timeouts of the "no connection" messages (10 s ping, 30 s chunk, 60 s last chunk, 30 s server wait) are estimates, not measurements of a real Bluetooth link; how the Side Service behaves when the system "freezes" the Zepp app is not known.
 6. That module variables really are separate per bundle at run time: this was concluded from the build output (the same module's code is inside `app.bin`, `page/index.bin` and `page/pair.bin`) and the documentation, not by running it.
+7. Personal Server by the Settings App: see "Not verified" in [Personal Server](personal-server.md).
+8. Personal Server by the pairing page, on the watch: that `@zos/crypto`'s AES-CBC and HMAC do what the documentation says with a key that is passed in (the watch checks this on the test vector each time the QR code is made, and falls back to the plain code, but that check has not run on a real watch); that the keys `createChiper` generates are random enough to be the source of the secret (documented as "generates a new key", not as a random source); that a QR code with 23 more characters still reads from the round display, and that phone scanners keep the part after the `#`; and the texts on the watch.
 
 The automated tests run on stubs of the Zepp OS modules, so they do not replace a run on the device.
 
