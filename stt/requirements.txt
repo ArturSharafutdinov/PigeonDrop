@@ -3,8 +3,8 @@
 # test of the image (stt/smoke-synthetic.sh, run by CI in pull requests that touch stt/) decide whether to take them.
 onnx-asr[cpu,hub]==0.12.0
 anyio==4.16.0
-click==8.5.0
-filelock==4.2.7
+click==8.5.1
+filelock==4.2.9
 flatbuffers==25.12.19
 fsspec==2026.9.0
 h11==0.16.0
