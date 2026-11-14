@@ -3,7 +3,7 @@
 
 # Tags say what the images are; the digests are what is pulled (Dependabot moves both). The Go version matches
 # `toolchain` in go.mod, so the build never has to download another one.
-FROM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
+FROM golang:1.26.10-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 WORKDIR /src
 # Dependencies first, so this layer is reused until go.mod or go.sum change.
 COPY go.mod go.sum ./
